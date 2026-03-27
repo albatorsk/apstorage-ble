@@ -12,6 +12,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import secrets
 from dataclasses import dataclass
 from typing import Any
@@ -174,6 +175,23 @@ def _to_celsius(value: Any) -> float | None:
     return temp
 
 
+def _to_grid_frequency(value: Any) -> float | None:
+    """Convert raw frequency-like values to Hz when they look valid."""
+    freq = _to_float(value)
+    if freq is None:
+        return None
+
+    # Some payloads encode Hz as tenths/hundredths.
+    if freq > 1000:
+        freq = freq / 100.0
+    elif freq > 100:
+        freq = freq / 10.0
+
+    if 40.0 <= freq <= 70.0:
+        return freq
+    return None
+
+
 def _extract_metrics(parsed: Any) -> SocMetrics:
     """Extract all available metrics from parsed local-data response JSON."""
     metrics = SocMetrics()
@@ -316,11 +334,105 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
             metrics.grid_power = gp
             break
 
+    # Search for grid voltage/current/frequency.
     for root in roots:
-        gf_raw = _deep_find_key(root, {"gf", "grid_frequency", "gridfreq"})
-        gf = _to_float(gf_raw)
+        gv_raw = _deep_find_key(
+            root,
+            {
+                "gv",
+                "grid_voltage",
+                "gridvol",
+                "gridv",
+                "dv1",
+                "uac",
+                "vac",
+                "de0",
+            },
+        )
+        gv = _to_float(gv_raw)
+        if gv is not None:
+            metrics.grid_voltage = gv
+            break
+
+    for root in roots:
+        gc_raw = _deep_find_key(
+            root,
+            {
+                "gc",
+                "grid_current",
+                "gridcur",
+                "grida",
+                "da1",
+                "iac",
+                "de3",
+            },
+        )
+        gc = _to_float(gc_raw)
+        if gc is not None:
+            metrics.grid_current = gc
+            break
+
+    for root in roots:
+        gf_raw = _deep_find_key(
+            root,
+            {
+                "gf",
+                "grid_frequency",
+                "gridfreq",
+                "frequency",
+                "freq",
+                "hz",
+                "fgrid",
+                "f_ac",
+                "de1",
+            },
+        )
+        gf = _to_grid_frequency(gf_raw)
         if gf is not None:
             metrics.grid_frequency = gf
+            break
+
+    if (
+        metrics.grid_current is None
+        and metrics.grid_power is not None
+        and metrics.grid_voltage not in (None, 0.0)
+    ):
+        metrics.grid_current = metrics.grid_power / metrics.grid_voltage
+
+    # Search for PV voltage/current.
+    for root in roots:
+        pv_v_raw = _deep_find_key(
+            root,
+            {
+                "pvv",
+                "pv_voltage",
+                "pvvoltage",
+                "pv_volt",
+                "pvvol",
+                "vpv",
+                "de2",
+            },
+        )
+        pv_v = _to_float(pv_v_raw)
+        if pv_v is not None:
+            metrics.pv_voltage = pv_v
+            break
+
+    for root in roots:
+        pv_i_raw = _deep_find_key(
+            root,
+            {
+                "pvi",
+                "pv_current",
+                "pvcurrent",
+                "pvcur",
+                "ipv",
+                "de1",
+            },
+        )
+        pv_i = _to_float(pv_i_raw)
+        if pv_i is not None:
+            metrics.pv_current = pv_i
             break
 
     # Search for PV metrics (APstorage field: P5/P4 might be PV)
@@ -344,6 +456,20 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
             if pp is not None:
                 metrics.pv_power = pp
                 break
+
+    if (
+        metrics.pv_current is None
+        and metrics.pv_power is not None
+        and metrics.pv_voltage not in (None, 0.0)
+    ):
+        metrics.pv_current = metrics.pv_power / metrics.pv_voltage
+
+    if (
+        metrics.pv_voltage is None
+        and metrics.pv_power is not None
+        and metrics.pv_current not in (None, 0.0)
+    ):
+        metrics.pv_voltage = metrics.pv_power / metrics.pv_current
 
     # Search for load voltage/current.
     # On this device family DE4/DE5 are the best current candidates.
@@ -412,8 +538,18 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
         extracted_fields.append(f"de={metrics.battery_discharged_energy:.3f}")
     if metrics.grid_power is not None:
         extracted_fields.append(f"gp={metrics.grid_power:.0f}")
+    if metrics.grid_voltage is not None:
+        extracted_fields.append(f"gv={metrics.grid_voltage:.2f}")
+    if metrics.grid_current is not None:
+        extracted_fields.append(f"gc={metrics.grid_current:.2f}")
+    if metrics.grid_frequency is not None:
+        extracted_fields.append(f"gf={metrics.grid_frequency:.2f}")
     if metrics.pv_power is not None:
         extracted_fields.append(f"pp={metrics.pv_power:.0f}")
+    if metrics.pv_voltage is not None:
+        extracted_fields.append(f"pvv={metrics.pv_voltage:.2f}")
+    if metrics.pv_current is not None:
+        extracted_fields.append(f"pvi={metrics.pv_current:.2f}")
     if metrics.load_voltage is not None:
         extracted_fields.append(f"lv={metrics.load_voltage:.2f}")
     if metrics.load_current is not None:
@@ -713,21 +849,29 @@ def _derive_storage_ids_from_name(device_name: str | None) -> list[str]:
     if not device_name:
         return []
 
+    name = device_name.strip()
     out: list[str] = []
 
-    if "_" in device_name:
-        suffix = device_name.split("_", 1)[1].strip()
+    # Preferred patterns seen on APstorage devices.
+    # Examples: PCS_B05000001878, B05000001878.
+    m_full = re.fullmatch(r"(?:PCS[_-]?)?(B\d{6,})", name, flags=re.IGNORECASE)
+    if m_full:
+        out.append(m_full.group(1))
+
+    # Also accept embedded serials if present in a longer label.
+    for serial in re.findall(r"B\d{6,}", name, flags=re.IGNORECASE):
+        if serial not in out:
+            out.append(serial)
+
+    # Backward-compatible fallback for exact PCS_* names.
+    if name.upper().startswith("PCS_"):
+        suffix = name.split("_", 1)[1].strip()
         if suffix and suffix not in out:
             out.append(suffix)
 
-    if device_name.startswith("PCS"):
-        trimmed = device_name.removeprefix("PCS").lstrip("_").strip()
-        if trimmed and trimmed not in out:
-            out.append(trimmed)
-
-    # Keep full advertised name as a fallback after canonical serial variants.
-    if device_name not in out:
-        out.append(device_name)
+    # Keep exact name last only if it already resembles a serial-like token.
+    if re.fullmatch(r"[A-Za-z0-9_-]{6,}", name) and name not in out:
+        out.append(name)
 
     normalized: list[str] = []
     for item in out:
@@ -745,6 +889,7 @@ class APstorageSocClient:
         self._codec = BlufiCodec(mtu=BLUFI_MTU)
         self.parsed_frames: list[BlufiFrame] = []
         self._frame_cursor = 0
+        self._preferred_storage_id: str | None = None
 
     async def async_query_metrics(
         self,
@@ -828,7 +973,16 @@ class APstorageSocClient:
         if not device_name:
             device_name = ble_device.name or ""
 
-        storage_ids = _derive_storage_ids_from_name(device_name)
+        storage_ids: list[str] = []
+
+        if self._preferred_storage_id:
+            storage_ids.append(self._preferred_storage_id)
+
+        for source in (device_name, device_name_hint, ble_device.name):
+            for candidate in _derive_storage_ids_from_name(source):
+                if candidate not in storage_ids:
+                    storage_ids.append(candidate)
+
         if not storage_ids:
             _LOGGER.warning("Could not extract storage ID from device name: %s", device_name)
             return None
@@ -848,6 +1002,16 @@ class APstorageSocClient:
                     _LOGGER.debug("_send_soc_request returned None for storage_id=%s", storage_id)
                     continue
 
+                if isinstance(parsed, dict):
+                    code = parsed.get("code")
+                    msg = str(parsed.get("msg") or parsed.get("message") or "")
+                    if code == 202 and "device id mismatch" in msg.lower():
+                        _LOGGER.debug(
+                            "Ignoring DEVICE ID MISMATCH for storage_id=%s (trying next candidate)",
+                            storage_id,
+                        )
+                        continue
+
                 metrics = _extract_metrics(parsed)
                 _LOGGER.debug(
                     "Extracted metrics for storage_id=%s: soc=%s, power=%s, state=%s",
@@ -865,10 +1029,10 @@ class APstorageSocClient:
                     metrics.battery_temperature,
                     metrics.battery_charged_energy,
                     metrics.battery_discharged_energy,
-                    metrics.system_state,
                     metrics.grid_voltage,
                     metrics.grid_current,
                     metrics.grid_power,
+                    metrics.grid_frequency,
                     metrics.pv_voltage,
                     metrics.pv_current,
                     metrics.pv_power,
@@ -877,6 +1041,7 @@ class APstorageSocClient:
                     metrics.load_power,
                     metrics.inverter_temperature,
                 )):
+                    self._preferred_storage_id = storage_id
                     return metrics
                 _LOGGER.warning("Extraction succeeded but metrics are empty for storage_id=%s", storage_id)
             except Exception as err:  # noqa: BLE001
