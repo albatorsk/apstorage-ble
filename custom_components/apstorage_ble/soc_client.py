@@ -159,6 +159,22 @@ def _to_float(value: Any) -> float | None:
         return None
 
 
+def _to_celsius(value: Any) -> float | None:
+    """Convert raw temperature-like values to Celsius.
+
+    APstorage payloads commonly encode temperatures as tenths of a degree
+    (e.g. 328.1 -> 32.8 C). Some firmwares may already report plain Celsius.
+    """
+    temp = _to_float(value)
+    if temp is None:
+        return None
+    if temp > 1000:
+        return temp / 100.0
+    if temp > 150:
+        return temp / 10.0
+    return temp
+
+
 def _extract_metrics(parsed: Any) -> SocMetrics:
     """Extract all available metrics from parsed local-data response JSON."""
     metrics = SocMetrics()
@@ -215,17 +231,14 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
             metrics.battery_power = bp
             break
 
-    # Search for battery temperature (APstorage field: T2, T3, etc.)
+    # Search for battery temperature (APstorage field is typically T2).
     for root in roots:
         bt_raw = _deep_find_key(
             root,
-            {"bt", "battery_temperature", "batterytemp", "battery_temp", "bat_temp", "tbat", "t2", "t3"},
+            {"bt", "battery_temperature", "batterytemp", "battery_temp", "bat_temp", "tbat", "t2"},
         )
-        bt = _to_float(bt_raw)
+        bt = _to_celsius(bt_raw)
         if bt is not None:
-            # Temperature from device is often in 1/100ths degree, check if scaling needed
-            if bt > 100:  # Likely 0.01°C units, convert to proper celsius
-                bt = bt / 100.0
             metrics.battery_temperature = bt
             break
 
@@ -327,10 +340,10 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
             metrics.load_power = lp
             break
 
-    # Search for inverter temperature
+    # Search for inverter temperature (APstorage field is typically T3).
     for root in roots:
-        it_raw = _deep_find_key(root, {"it", "inverter_temperature", "invertertemp", "inverter_temp", "tinv"})
-        it = _to_float(it_raw)
+        it_raw = _deep_find_key(root, {"it", "inverter_temperature", "invertertemp", "inverter_temp", "tinv", "t3"})
+        it = _to_celsius(it_raw)
         if it is not None:
             metrics.inverter_temperature = it
             break
@@ -347,6 +360,8 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
         extracted_fields.append(f"bp={metrics.battery_power:.0f}")
     if metrics.battery_temperature is not None:
         extracted_fields.append(f"bt={metrics.battery_temperature:.1f}")
+    if metrics.inverter_temperature is not None:
+        extracted_fields.append(f"it={metrics.inverter_temperature:.1f}")
     if metrics.battery_charged_energy is not None:
         extracted_fields.append(f"ce={metrics.battery_charged_energy:.3f}")
     if metrics.battery_discharged_energy is not None:
