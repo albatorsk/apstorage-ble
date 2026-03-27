@@ -111,8 +111,14 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
     def _rollover_daily_if_needed(self, *, force: bool = False) -> bool:
         """Reset daily counters when local date changes."""
         today = dt_util.now().date().isoformat()
-        if not force and self._daily_date == today:
+        if self._daily_date == today:
             return False
+
+        # Startup initialization path: if there is no prior date, set today's
+        # marker without resetting already-restored same-day values.
+        if self._daily_date is None and force:
+            self._daily_date = today
+            return True
 
         if self._daily_date != today:
             _LOGGER.debug("[%s] Daily energy rollover: %s -> %s", self._name, self._daily_date, today)
