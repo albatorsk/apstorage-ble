@@ -40,6 +40,10 @@ WRITE_CHAR = "0000ff07-0000-1000-8000-00805f9b34fb"
 NOTIFY_CHAR = "0000ff06-0000-1000-8000-00805f9b34fb"
 DEVICE_NAME_CHAR = "00002a00-0000-1000-8000-00805f9b34fb"
 
+# The PCS expects Blufi frames fragmented for the default BLE payload size.
+# Keep this aligned with the known-good standalone script defaults.
+BLUFI_MTU = 20
+
 # Timeouts
 CONNECT_TIMEOUT_SECONDS = 90
 RESPONSE_TIMEOUT_SECONDS = 30
@@ -355,7 +359,7 @@ class APstorageSocClient:
 
     async def _establish_blufi_session(self, client: BleakClient) -> None:
         """Perform Blufi DH and security setup."""
-        codec = BlufiCodec(mtu=256)
+        codec = BlufiCodec(mtu=BLUFI_MTU)
 
         # Generate DH keypair
         p = int(BLUFI_DH_P_HEX, 16)
@@ -442,7 +446,7 @@ class APstorageSocClient:
         request_json = json.dumps(request, separators=(",", ":"))
         payload = _ema_encrypt_json_hexascii(request_json)
 
-        codec = BlufiCodec(mtu=256)
+        codec = BlufiCodec(mtu=BLUFI_MTU)
         cmd_custom = _make_cmd(1, 19)
         packets = codec.build_packets(cmd_custom, payload, encrypt=True, checksum=True, aes_key=self.session_key)
 
