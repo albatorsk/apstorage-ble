@@ -181,14 +181,22 @@ def _to_grid_frequency(value: Any) -> float | None:
     if freq is None:
         return None
 
-    # Some payloads encode Hz as tenths/hundredths.
-    if freq > 1000:
-        freq = freq / 100.0
-    elif freq > 100:
-        freq = freq / 10.0
+    # Firmware variants encode frequency in different scales.
+    # Try common divisors and choose the first plausible Hz value,
+    # preferring values closest to 50 Hz.
+    candidates: list[float] = []
+    for div in (1.0, 10.0, 100.0, 1000.0):
+        hz = freq / div
+        if 40.0 <= hz <= 70.0:
+            candidates.append(hz)
 
-    if 40.0 <= freq <= 70.0:
-        return freq
+    if candidates:
+        return min(candidates, key=lambda x: abs(x - 50.0))
+
+    # Some payloads report only one decimal already (e.g. 500 -> 50.0).
+    if 400.0 <= freq <= 700.0:
+        return freq / 10.0
+
     return None
 
 
@@ -378,12 +386,16 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
             {
                 "gf",
                 "grid_frequency",
+                "grid_frequency_1",
                 "gridfreq",
+                "gridfreq1",
                 "frequency",
+                "frequency_1",
                 "freq",
                 "hz",
                 "fgrid",
                 "f_ac",
+                "fg",
                 "de1",
             },
         )
