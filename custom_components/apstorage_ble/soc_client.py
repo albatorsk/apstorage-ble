@@ -234,6 +234,43 @@ def _to_grid_frequency(value: Any) -> float | None:
     return None
 
 
+def _normalize_pv_current(
+    current: float | None,
+    power: float | None,
+    voltage: float | None,
+) -> float | None:
+    """Normalize PV current when raw value is inconsistent with P=V*I.
+
+    Some firmware payloads appear to report PV current in alternate scales.
+    Use power/voltage consistency to select a plausible current.
+    """
+    if current is None:
+        return None
+    if power is None or voltage in (None, 0.0):
+        return current
+
+    abs_current = abs(current)
+    expected = abs(float(power)) / float(voltage)
+
+    # If PV power is essentially zero, suppress clearly bogus high current.
+    if abs(float(power)) < 5.0 and abs_current > 2.0:
+        for div in (10.0, 100.0, 1000.0):
+            candidate = abs_current / div
+            if candidate <= 2.0:
+                return candidate if current >= 0 else -candidate
+        return 0.0
+
+    # Choose the scale that best matches expected current from power/voltage.
+    options = [abs_current, abs_current / 10.0, abs_current / 100.0, abs_current / 1000.0]
+    best = min(options, key=lambda x: abs(x - expected))
+
+    # Only apply correction when difference is meaningful.
+    if abs(best - abs_current) > 0.5 and (expected == 0.0 or abs_current > expected * 3.0):
+        return best if current >= 0 else -best
+
+    return current
+
+
 def _extract_metrics(parsed: Any) -> SocMetrics:
     """Extract all available metrics from parsed local-data response JSON."""
     metrics = SocMetrics()
@@ -524,6 +561,12 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
         and metrics.pv_current not in (None, 0.0)
     ):
         metrics.pv_voltage = metrics.pv_power / metrics.pv_current
+
+    metrics.pv_current = _normalize_pv_current(
+        metrics.pv_current,
+        metrics.pv_power,
+        metrics.pv_voltage,
+    )
 
     # Search for load voltage/current.
     # On this device family DE4/DE5 are the best current candidates.
