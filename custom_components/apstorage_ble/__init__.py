@@ -1,16 +1,18 @@
 """The APstorage BLE integration."""
 from __future__ import annotations
 
+from datetime import timedelta
 import logging
 
 from homeassistant.components.bluetooth import async_ble_device_from_address
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS, Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers import device_registry as dr
 
-from .const import DOMAIN, MANUFACTURER, MODEL
+from .const import DOMAIN, MANUFACTURER, MODEL, POLL_INTERVAL_SECONDS
 from .coordinator import APstorageCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -61,6 +63,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Start listening for Bluetooth advertisements *after* the platform has had
     # a chance to subscribe, so no updates are missed.
     entry.async_on_unload(coordinator.async_start())
+
+    # Fallback periodic poll so sensors continue updating even when
+    # advertisement events are sparse (common with some proxies/adapters).
+    @callback
+    def _periodic_poll(_now) -> None:
+        hass.async_create_task(coordinator.async_periodic_poll())
+
+    entry.async_on_unload(
+        async_track_time_interval(
+            hass,
+            _periodic_poll,
+            timedelta(seconds=POLL_INTERVAL_SECONDS),
+        )
+    )
 
     return True
 
