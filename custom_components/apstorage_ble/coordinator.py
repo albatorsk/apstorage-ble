@@ -115,17 +115,19 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
 
         # Initialise an empty data object and populate metrics from local query.
         self.data = PCSData()
+        _LOGGER.debug("[%s] Starting metrics poll for %s", self._name, ble_device.address)
 
         metrics = await self._soc_client.async_query_metrics(
             ble_device,
             device_name_hint=service_info.name,
         )
         if metrics is None:
-            _LOGGER.debug("[%s] SoC query returned no value", self._name)
+            _LOGGER.info("[%s] SoC query returned no metrics", self._name)
         else:
+            _LOGGER.debug("[%s] Received metrics: soc=%s, state=%s", self._name, metrics.battery_soc, metrics.system_state)
             if metrics.battery_soc is not None:
                 self.data.battery_soc = float(metrics.battery_soc)
-                _LOGGER.debug("[%s] Battery SoC: %d%%", self._name, int(metrics.battery_soc))
+                _LOGGER.debug("[%s] Battery SoC: %.1f%%", self._name, self.data.battery_soc)
             if metrics.system_state is not None:
                 self.data.system_state = metrics.system_state
                 _LOGGER.debug("[%s] System state: %s", self._name, metrics.system_state)

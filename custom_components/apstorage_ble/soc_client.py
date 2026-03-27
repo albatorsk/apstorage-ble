@@ -519,6 +519,7 @@ class APstorageSocClient:
 
         client: BleakClient | None = None
         try:
+            _LOGGER.debug("Connecting to BLE device %s (hint: %s)", ble_device.address, device_name_hint)
             async with asyncio.timeout(CONNECT_TIMEOUT_SECONDS):
                 client = await establish_connection(
                     BleakClientWithServiceCache,
@@ -527,23 +528,29 @@ class APstorageSocClient:
                     max_attempts=3,
                     use_services_cache=True,
                 )
-                return await self._query_soc_once(
+                _LOGGER.debug("Connected to %s, querying metrics", ble_device.address)
+                result = await self._query_soc_once(
                     client,
                     ble_device,
                     device_name_hint=device_name_hint,
                 )
+                _LOGGER.debug("Query complete for %s: metrics=%s", ble_device.address, result is not None)
+                return result
         except asyncio.TimeoutError:
-            _LOGGER.warning("SoC query timeout for %s", ble_device.address)
+            _LOGGER.warning("Connection timeout for %s after %ds", ble_device.address, CONNECT_TIMEOUT_SECONDS)
             return None
         except BleakError as err:
-            _LOGGER.warning("BLE error during SoC query: %s", err)
+            _LOGGER.warning("BLE error for %s: %s", ble_device.address, err)
             return None
         except Exception as err:  # noqa: BLE001
-            _LOGGER.error("Unexpected error during SoC query: %s", err, exc_info=True)
+            _LOGGER.error("Unexpected error querying %s: %s", ble_device.address, err, exc_info=True)
             return None
         finally:
             if client and client.is_connected:
-                await client.disconnect()
+                try:
+                    await client.disconnect()
+                except Exception:  # noqa: BLE001
+                    pass
 
     async def async_query_soc(
         self,
@@ -598,21 +605,23 @@ class APstorageSocClient:
             try:
                 parsed = await self._send_soc_request(client, storage_id, system_id="")
                 if parsed is None:
+                    _LOGGER.debug("_send_soc_request returned None for storage_id=%s", storage_id)
                     continue
 
                 metrics = _extract_metrics(parsed)
                 _LOGGER.debug(
-                    "Metrics for storage_id=%s -> soc=%s state=%s",
+                    "Extracted metrics for storage_id=%s: soc=%s, state=%s",
                     storage_id,
                     metrics.battery_soc,
                     metrics.system_state,
                 )
                 if metrics.battery_soc is not None or metrics.system_state is not None:
                     return metrics
+                _LOGGER.warning("Extraction succeeded but metrics are empty for storage_id=%s", storage_id)
             except Exception as err:  # noqa: BLE001
-                _LOGGER.debug("SoC query attempt failed for storage_id=%s: %s", storage_id, err)
+                _LOGGER.exception("SoC query failed for storage_id=%s: %s", storage_id, err)
 
-        _LOGGER.debug("No usable metrics found for storage_id candidates: %s", storage_ids)
+        _LOGGER.warning("No usable metrics found for storage_id candidates: %s", storage_ids)
         return None
 
     async def _establish_blufi_session(self, client: BleakClient) -> None:
