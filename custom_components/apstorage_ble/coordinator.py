@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
@@ -56,6 +57,9 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._name = name
         self._soc_client = APstorageSocClient()
         self._poll_lock = asyncio.Lock()
+        self._derived_charged_kwh = 0.0
+        self._derived_discharged_kwh = 0.0
+        self._last_energy_ts: float | None = None
         self._last_poll: float | None = None
         # Most-recent successfully parsed data; also exposed as coordinator.data
         self.data: PCSData | None = None
@@ -150,8 +154,16 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     self.data.battery_temperature = float(metrics.battery_temperature)
                 if metrics.battery_charged_energy is not None:
                     self.data.battery_charged_energy = float(metrics.battery_charged_energy)
+                    self._derived_charged_kwh = max(
+                        self._derived_charged_kwh,
+                        self.data.battery_charged_energy,
+                    )
                 if metrics.battery_discharged_energy is not None:
                     self.data.battery_discharged_energy = float(metrics.battery_discharged_energy)
+                    self._derived_discharged_kwh = max(
+                        self._derived_discharged_kwh,
+                        self.data.battery_discharged_energy,
+                    )
                 if metrics.system_state is not None:
                     self.data.system_state = metrics.system_state
                     _LOGGER.debug("[%s] System state: %s", self._name, metrics.system_state)
@@ -177,6 +189,28 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     self.data.load_power = float(metrics.load_power)
                 if metrics.inverter_temperature is not None:
                     self.data.inverter_temperature = float(metrics.inverter_temperature)
+
+                # Fallback: device local-data often omits energy totals.
+                # Derive incremental charged/discharged energy from power * time.
+                now_ts = time.monotonic()
+                if self._last_energy_ts is not None and metrics.battery_power is not None:
+                    dt_hours = (now_ts - self._last_energy_ts) / 3600.0
+                    if 0 < dt_hours < (POLL_INTERVAL_SECONDS * 4 / 3600.0):
+                        delta_kwh = abs(float(metrics.battery_power)) * dt_hours / 1000.0
+                        direction = metrics.battery_current
+                        if direction is None:
+                            direction = metrics.battery_power
+                        if direction >= 0:
+                            self._derived_charged_kwh += delta_kwh
+                        else:
+                            self._derived_discharged_kwh += delta_kwh
+
+                self._last_energy_ts = now_ts
+
+                if metrics.battery_charged_energy is None:
+                    self.data.battery_charged_energy = self._derived_charged_kwh
+                if metrics.battery_discharged_energy is None:
+                    self.data.battery_discharged_energy = self._derived_discharged_kwh
 
             # Push the update to all subscribed entities.
             self.async_update_listeners()
