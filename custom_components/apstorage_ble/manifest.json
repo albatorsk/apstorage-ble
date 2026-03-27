@@ -4,7 +4,7 @@
   "version": "0.0.1",
   "bluetooth": [
     {
-      "local_name": "PCS_*",
+      "local_name": "PCS_B050*",
       "connectable": true
     }
   ],

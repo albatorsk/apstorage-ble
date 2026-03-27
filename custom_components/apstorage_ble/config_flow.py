@@ -2,7 +2,7 @@
 
 Supports two setup paths:
   1. Automatic discovery — HA's Bluetooth integration sees a BLE advertisement
-     matching the ``bluetooth`` matchers in manifest.json (local_name "PCS_*")
+    matching the ``bluetooth`` matchers in manifest.json (local_name "PCS_B050*")
      and calls ``async_step_bluetooth``.
   2. Manual entry — The user opens the integration and types the MAC address.
      Useful if the device is behind an ESPHome proxy that is already paired.
@@ -31,7 +31,7 @@ _MAC_RE = re.compile(r"^([0-9A-F]{2}:){5}[0-9A-F]{2}$")
 def _is_apstorage_device(service_info: BluetoothServiceInfoBleak) -> bool:
     """Return True if the advertisement looks like an APstorage PCS."""
     name = service_info.name or ""
-    return name.startswith("PCS_")
+    return name.startswith("PCS_B050")
 
 
 class APstorageConfigFlow(ConfigFlow, domain=DOMAIN):
