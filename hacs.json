@@ -1,0 +1,6 @@
+{
+  "name": "APstorage BLE",
+  "description": "Home Assistant integration for APstorage ELT-12 PCS via Bluetooth Low Energy",
+  "render_readme": true,
+  "homeassistant": "2024.1.0"
+}

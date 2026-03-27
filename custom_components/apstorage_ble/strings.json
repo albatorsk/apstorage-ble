@@ -1,0 +1,32 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "title": "Set up APstorage BLE",
+        "description": "Select a discovered APstorage PCS or enter its MAC address manually.",
+        "data": {
+          "address": "Device / MAC address"
+        }
+      },
+      "manual": {
+        "title": "Enter MAC address",
+        "description": "Enter the Bluetooth MAC address of your APstorage ELT-12 PCS (e.g., AA:BB:CC:DD:EE:FF).",
+        "data": {
+          "address": "Bluetooth MAC address"
+        }
+      },
+      "bluetooth_confirm": {
+        "title": "APstorage PCS discovered",
+        "description": "Do you want to set up **{name}**?"
+      }
+    },
+    "error": {
+      "invalid_address": "Invalid Bluetooth MAC address format. Use the format AA:BB:CC:DD:EE:FF."
+    },
+    "abort": {
+      "already_configured": "This device is already configured.",
+      "no_devices_found": "No APstorage PCS devices found in Bluetooth range."
+    }
+  }
+}
