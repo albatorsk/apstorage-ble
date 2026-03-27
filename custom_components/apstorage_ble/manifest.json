@@ -1,7 +1,7 @@
 {
   "domain": "apstorage_ble",
   "name": "APstorage BLE",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "bluetooth": [
     {
       "local_name": "PCS_B050*",
@@ -14,8 +14,7 @@
   "documentation": "https://github.com/perbs/apstorage-ble",
   "iot_class": "local_polling",
   "requirements": [
-    "bleak==0.22.3",
-    "bleak-retry-connector==3.6.0",
+    "bleak-retry-connector==4.4.3",
     "pycryptodome==3.20.0"
   ]
 }
