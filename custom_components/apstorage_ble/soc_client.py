@@ -325,19 +325,64 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
 
     # Search for PV metrics (APstorage field: P5/P4 might be PV)
     for root in roots:
-        pp_raw = _deep_find_key(root, {"pp", "pvpow", "pv_power", "p4", "p5"})
+        pp_raw = _deep_find_key(root, {"pp", "pvpow", "pv_power"})
         pp = _to_float(pp_raw)
         if pp is not None:
             metrics.pv_power = pp
             break
+    if metrics.pv_power is None:
+        for root in roots:
+            pp_raw = _deep_find_key(root, {"p5"})
+            pp = _to_float(pp_raw)
+            if pp is not None:
+                metrics.pv_power = pp
+                break
+    if metrics.pv_power is None:
+        for root in roots:
+            pp_raw = _deep_find_key(root, {"p4"})
+            pp = _to_float(pp_raw)
+            if pp is not None:
+                metrics.pv_power = pp
+                break
+
+    # Search for load voltage/current.
+    # On this device family DE4/DE5 are the best current candidates.
+    for root in roots:
+        lv_raw = _deep_find_key(root, {"lv", "loadvol", "load_voltage", "de4"})
+        lv = _to_float(lv_raw)
+        if lv is not None:
+            metrics.load_voltage = lv
+            break
+
+    for root in roots:
+        li_raw = _deep_find_key(root, {"li", "loadcur", "load_current", "de5"})
+        li = _to_float(li_raw)
+        if li is not None:
+            metrics.load_current = li
+            break
 
     # Search for load power (APstorage field: P3 appears to be load power)
     for root in roots:
-        lp_raw = _deep_find_key(root, {"lp", "loadpow", "load_power", "p3", "p2"})
+        lp_raw = _deep_find_key(root, {"lp", "loadpow", "load_power", "p3"})
         lp = _to_float(lp_raw)
         if lp is not None:
             metrics.load_power = lp
             break
+    if metrics.load_power is None:
+        for root in roots:
+            lp_raw = _deep_find_key(root, {"p2"})
+            lp = _to_float(lp_raw)
+            if lp is not None:
+                metrics.load_power = lp
+                break
+
+    # Last-resort derived load current from load power and load voltage.
+    if (
+        metrics.load_current is None
+        and metrics.load_power is not None
+        and metrics.load_voltage not in (None, 0.0)
+    ):
+        metrics.load_current = metrics.load_power / metrics.load_voltage
 
     # Search for inverter temperature (APstorage field is typically T3).
     for root in roots:
@@ -369,6 +414,10 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
         extracted_fields.append(f"gp={metrics.grid_power:.0f}")
     if metrics.pv_power is not None:
         extracted_fields.append(f"pp={metrics.pv_power:.0f}")
+    if metrics.load_voltage is not None:
+        extracted_fields.append(f"lv={metrics.load_voltage:.2f}")
+    if metrics.load_current is not None:
+        extracted_fields.append(f"li={metrics.load_current:.2f}")
     if metrics.load_power is not None:
         extracted_fields.append(f"lp={metrics.load_power:.0f}")
     if metrics.system_state is not None:
