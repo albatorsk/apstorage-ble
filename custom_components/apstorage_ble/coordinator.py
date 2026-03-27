@@ -91,6 +91,11 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._store_loaded = True
         self._rollover_daily_if_needed(force=True)
 
+    @property
+    def daily_energy_last_reset(self) -> str | None:
+        """Return the date (local) when daily energy counters were last reset."""
+        return self._daily_date
+
     async def _async_save_daily_state(self) -> None:
         """Persist daily counters so restart does not reset to zero."""
         await self._energy_store.async_save(
