@@ -128,9 +128,40 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             if metrics.battery_soc is not None:
                 self.data.battery_soc = float(metrics.battery_soc)
                 _LOGGER.debug("[%s] Battery SoC: %.1f%%", self._name, self.data.battery_soc)
+            if metrics.battery_voltage is not None:
+                self.data.battery_voltage = float(metrics.battery_voltage)
+            if metrics.battery_current is not None:
+                self.data.battery_current = float(metrics.battery_current)
+            if metrics.battery_power is not None:
+                self.data.battery_power = float(metrics.battery_power)
+                _LOGGER.debug("[%s] Battery Power: %.1f W", self._name, self.data.battery_power)
+            if metrics.battery_temperature is not None:
+                self.data.battery_temperature = float(metrics.battery_temperature)
             if metrics.system_state is not None:
                 self.data.system_state = metrics.system_state
                 _LOGGER.debug("[%s] System state: %s", self._name, metrics.system_state)
+            if metrics.grid_voltage is not None:
+                self.data.grid_voltage = float(metrics.grid_voltage)
+            if metrics.grid_current is not None:
+                self.data.grid_current = float(metrics.grid_current)
+            if metrics.grid_power is not None:
+                self.data.grid_power = float(metrics.grid_power)
+            if metrics.grid_frequency is not None:
+                self.data.grid_frequency = float(metrics.grid_frequency)
+            if metrics.pv_voltage is not None:
+                self.data.pv_voltage = float(metrics.pv_voltage)
+            if metrics.pv_current is not None:
+                self.data.pv_current = float(metrics.pv_current)
+            if metrics.pv_power is not None:
+                self.data.pv_power = float(metrics.pv_power)
+            if metrics.load_voltage is not None:
+                self.data.load_voltage = float(metrics.load_voltage)
+            if metrics.load_current is not None:
+                self.data.load_current = float(metrics.load_current)
+            if metrics.load_power is not None:
+                self.data.load_power = float(metrics.load_power)
+            if metrics.inverter_temperature is not None:
+                self.data.inverter_temperature = float(metrics.inverter_temperature)
 
         # Push the update to all subscribed entities.
         self.async_update_listeners()

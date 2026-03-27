@@ -160,7 +160,7 @@ def _to_float(value: Any) -> float | None:
 
 
 def _extract_metrics(parsed: Any) -> SocMetrics:
-    """Extract SoC and system state from parsed local-data response JSON."""
+    """Extract all available metrics from parsed local-data response JSON."""
     metrics = SocMetrics()
     if not isinstance(parsed, dict):
         return metrics
@@ -171,6 +171,7 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
         roots.append(data_root)
     roots.append(parsed)
 
+    # Search for SoC
     for root in roots:
         soc_raw = _deep_find_key(
             root,
@@ -181,6 +182,54 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
             metrics.battery_soc = soc
             break
 
+    # Search for battery voltage (APstorage field: DE0-DE5 appear to be voltage/current)
+    for root in roots:
+        bv_raw = _deep_find_key(
+            root,
+            {"bv", "uvdc", "battery_voltage", "batteryvoltage", "bat_vol", "batvol", "de0"},
+        )
+        bv = _to_float(bv_raw)
+        if bv is not None:
+            metrics.battery_voltage = bv
+            break
+
+    # Search for battery current
+    for root in roots:
+        bi_raw = _deep_find_key(
+            root,
+            {"bi", "battery_current", "batterycurrent", "bat_cur", "batcur", "idc", "de3"},
+        )
+        bi = _to_float(bi_raw)
+        if bi is not None:
+            metrics.battery_current = bi
+            break
+
+    # Search for battery power (APstorage field: P0 appears to be battery power)
+    for root in roots:
+        bp_raw = _deep_find_key(
+            root,
+            {"bp", "battery_power", "batterypower", "bat_pow", "batpow", "pdc", "p0"},
+        )
+        bp = _to_float(bp_raw)
+        if bp is not None:
+            metrics.battery_power = bp
+            break
+
+    # Search for battery temperature (APstorage field: T2, T3, etc.)
+    for root in roots:
+        bt_raw = _deep_find_key(
+            root,
+            {"bt", "battery_temperature", "batterytemp", "battery_temp", "bat_temp", "tbat", "t2", "t3"},
+        )
+        bt = _to_float(bt_raw)
+        if bt is not None:
+            # Temperature from device is often in 1/100ths degree, check if scaling needed
+            if bt > 100:  # Likely 0.01°C units, convert to proper celsius
+                bt = bt / 100.0
+            metrics.battery_temperature = bt
+            break
+
+    # Search for system state
     state_keys = {
         "system_state",
         "systemstate",
@@ -208,6 +257,68 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
         elif code is not None:
             metrics.system_state = f"code {code}"
 
+    # Search for grid power (APstorage field: P1 appears to be grid power)
+    for root in roots:
+        gp_raw = _deep_find_key(root, {"gp", "grid_power", "gridpow", "p1"})
+        gp = _to_float(gp_raw)
+        if gp is not None:
+            metrics.grid_power = gp
+            break
+
+    for root in roots:
+        gf_raw = _deep_find_key(root, {"gf", "grid_frequency", "gridfreq"})
+        gf = _to_float(gf_raw)
+        if gf is not None:
+            metrics.grid_frequency = gf
+            break
+
+    # Search for PV metrics (APstorage field: P5/P4 might be PV)
+    for root in roots:
+        pp_raw = _deep_find_key(root, {"pp", "pvpow", "pv_power", "p4", "p5"})
+        pp = _to_float(pp_raw)
+        if pp is not None:
+            metrics.pv_power = pp
+            break
+
+    # Search for load power (APstorage field: P3 appears to be load power)
+    for root in roots:
+        lp_raw = _deep_find_key(root, {"lp", "loadpow", "load_power", "p3", "p2"})
+        lp = _to_float(lp_raw)
+        if lp is not None:
+            metrics.load_power = lp
+            break
+
+    # Search for inverter temperature
+    for root in roots:
+        it_raw = _deep_find_key(root, {"it", "inverter_temperature", "invertertemp", "inverter_temp", "tinv"})
+        it = _to_float(it_raw)
+        if it is not None:
+            metrics.inverter_temperature = it
+            break
+
+    # Log summary of extracted fields
+    extracted_fields = []
+    if metrics.battery_soc is not None:
+        extracted_fields.append(f"soc={metrics.battery_soc}")
+    if metrics.battery_voltage is not None:
+        extracted_fields.append(f"bv={metrics.battery_voltage:.2f}")
+    if metrics.battery_current is not None:
+        extracted_fields.append(f"bi={metrics.battery_current:.2f}")
+    if metrics.battery_power is not None:
+        extracted_fields.append(f"bp={metrics.battery_power:.0f}")
+    if metrics.battery_temperature is not None:
+        extracted_fields.append(f"bt={metrics.battery_temperature:.1f}")
+    if metrics.grid_power is not None:
+        extracted_fields.append(f"gp={metrics.grid_power:.0f}")
+    if metrics.pv_power is not None:
+        extracted_fields.append(f"pp={metrics.pv_power:.0f}")
+    if metrics.load_power is not None:
+        extracted_fields.append(f"lp={metrics.load_power:.0f}")
+    if metrics.system_state is not None:
+        extracted_fields.append(f"state={metrics.system_state}")
+    if extracted_fields:
+        _LOGGER.debug("Extracted from local-data: %s", ", ".join(extracted_fields))
+
     return metrics
 
 
@@ -226,8 +337,29 @@ class BlufiFrame:
 class SocMetrics:
     """Metrics extracted from a single local data response."""
 
-    battery_soc: float | None = None
-    system_state: str | None = None
+    # Battery metrics
+    battery_soc: float | None = None           # %  (0–100)
+    battery_voltage: float | None = None       # V
+    battery_current: float | None = None       # A
+    battery_power: float | None = None         # W
+    battery_temperature: float | None = None   # °C
+    # System state
+    system_state: str | None = None            # free-form state string
+    # Grid metrics
+    grid_voltage: float | None = None          # V
+    grid_current: float | None = None          # A
+    grid_power: float | None = None            # W
+    grid_frequency: float | None = None        # Hz
+    # PV metrics
+    pv_voltage: float | None = None            # V
+    pv_current: float | None = None            # A
+    pv_power: float | None = None              # W
+    # Load metrics
+    load_voltage: float | None = None          # V
+    load_current: float | None = None          # A
+    load_power: float | None = None            # W
+    # Inverter
+    inverter_temperature: float | None = None  # °C
 
 
 class BlufiCodec:
@@ -610,12 +742,31 @@ class APstorageSocClient:
 
                 metrics = _extract_metrics(parsed)
                 _LOGGER.debug(
-                    "Extracted metrics for storage_id=%s: soc=%s, state=%s",
+                    "Extracted metrics for storage_id=%s: soc=%s, power=%s, state=%s",
                     storage_id,
                     metrics.battery_soc,
+                    metrics.battery_power,
                     metrics.system_state,
                 )
-                if metrics.battery_soc is not None or metrics.system_state is not None:
+                # Return if we extracted any useful metric
+                if any([
+                    metrics.battery_soc,
+                    metrics.battery_voltage,
+                    metrics.battery_current,
+                    metrics.battery_power,
+                    metrics.battery_temperature,
+                    metrics.system_state,
+                    metrics.grid_voltage,
+                    metrics.grid_current,
+                    metrics.grid_power,
+                    metrics.pv_voltage,
+                    metrics.pv_current,
+                    metrics.pv_power,
+                    metrics.load_voltage,
+                    metrics.load_current,
+                    metrics.load_power,
+                    metrics.inverter_temperature,
+                ]):
                     return metrics
                 _LOGGER.warning("Extraction succeeded but metrics are empty for storage_id=%s", storage_id)
             except Exception as err:  # noqa: BLE001
@@ -746,6 +897,12 @@ class APstorageSocClient:
                     storage_id,
                     list(parsed.keys()),
                 )
+                # Log the nested 'data' structure if present
+                data_root = parsed.get("data")
+                if isinstance(data_root, dict):
+                    _LOGGER.debug("Response 'data' field: %s", data_root)
+                elif isinstance(data_root, list):
+                    _LOGGER.debug("Response 'data' field (list): %s", data_root)
                 return parsed
             _LOGGER.debug("Local-data response was non-dict for storage_id=%s", storage_id)
             return None
