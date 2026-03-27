@@ -386,7 +386,7 @@ def _derive_storage_ids_from_name(device_name: str | None) -> list[str]:
     if not device_name:
         return []
 
-    out: list[str] = [device_name]
+    out: list[str] = []
 
     if "_" in device_name:
         suffix = device_name.split("_", 1)[1].strip()
@@ -397,6 +397,10 @@ def _derive_storage_ids_from_name(device_name: str | None) -> list[str]:
         trimmed = device_name.removeprefix("PCS").lstrip("_").strip()
         if trimmed and trimmed not in out:
             out.append(trimmed)
+
+    # Keep full advertised name as a fallback after canonical serial variants.
+    if device_name not in out:
+        out.append(device_name)
 
     normalized: list[str] = []
     for item in out:
@@ -487,13 +491,17 @@ class APstorageSocClient:
             _LOGGER.error("Failed to establish Blufi session: %s", err)
             return None
 
-        # 3. Send SoC query request
-        try:
-            soc_value = await self._send_soc_request(client, storage_ids[0], system_id="")
-            return int(soc_value) if soc_value is not None else None
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.error("Failed to query SoC: %s", err)
-            return None
+        # 3. Send SoC query request, trying common ID variants.
+        for storage_id in storage_ids:
+            try:
+                soc_value = await self._send_soc_request(client, storage_id, system_id="")
+                if soc_value is not None:
+                    return int(soc_value)
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.debug("SoC query attempt failed for storage_id=%s: %s", storage_id, err)
+
+        _LOGGER.debug("SoC not found for any storage_id candidate: %s", storage_ids)
+        return None
 
     async def _establish_blufi_session(self, client: BleakClient) -> None:
         """Perform Blufi DH and security setup."""
@@ -541,7 +549,7 @@ class APstorageSocClient:
 
             # Wait for device public key response
             frame = await self._wait_frame(1, 0, RESPONSE_TIMEOUT_SECONDS)
-            dev_pub = int(frame["payload"].hex(), 16)
+            dev_pub = int(frame.payload.hex(), 16)
             shared = pow(dev_pub, priv, p)
             shared_hex = format(shared, "x")
             if len(shared_hex) % 2:
