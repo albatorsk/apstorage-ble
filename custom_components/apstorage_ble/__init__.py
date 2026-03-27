@@ -8,6 +8,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers import device_registry as dr
 
 from .const import DOMAIN, MANUFACTURER, MODEL
 from .coordinator import APstorageCoordinator
@@ -38,6 +39,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass=hass,
         logger=_LOGGER,
         address=address,
+        name=name,
+    )
+
+    # Ensure a device is registered even before entities are added so the
+    # Battery State of Charge sensor is always attached to a concrete device.
+    device_registry = dr.async_get(hass)
+    device_registry.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, address)},
+        connections={(dr.CONNECTION_BLUETOOTH, address)},
+        manufacturer=MANUFACTURER,
+        model=MODEL,
         name=name,
     )
 
