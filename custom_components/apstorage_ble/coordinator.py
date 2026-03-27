@@ -117,20 +117,24 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             )
             return
 
+        # Keep a mutable data object so we can still expose SoC even if the
+        # generic status parser has no match yet.
         result = await self._ble_client.async_fetch_data(ble_device)
-        if result is not None:
-            self.data = result
+        self.data = result if result is not None else PCSData()
 
-            # Query SoC via custom Blufi protocol
-            soc = await self._soc_client.async_query_soc(ble_device)
-            if soc is not None:
-                self.data.battery_soc = float(soc)
-                _LOGGER.debug("[%s] Battery SoC: %d%%", self._name, soc)
+        if result is None:
+            _LOGGER.debug("[%s] Poll returned no generic data frame", self._name)
 
-            # Push the update to all subscribed entities.
-            self.async_update_listeners()
+        # Query SoC via custom Blufi protocol independently from generic poll.
+        soc = await self._soc_client.async_query_soc(ble_device)
+        if soc is not None:
+            self.data.battery_soc = float(soc)
+            _LOGGER.debug("[%s] Battery SoC: %d%%", self._name, soc)
         else:
-            _LOGGER.debug("[%s] Poll returned no data", self._name)
+            _LOGGER.debug("[%s] SoC query returned no value", self._name)
+
+        # Push the update to all subscribed entities.
+        self.async_update_listeners()
 
     @callback
     def _async_handle_bluetooth_event(

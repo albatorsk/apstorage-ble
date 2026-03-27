@@ -271,7 +271,7 @@ class APstorageSocClient:
         # 3. Send SoC query request
         try:
             soc_value = await self._send_soc_request(client, storage_ids[0])
-            return int(soc_value) if soc_value else None
+            return int(soc_value) if soc_value is not None else None
         except Exception as err:  # noqa: BLE001
             _LOGGER.error("Failed to query SoC: %s", err)
             return None
