@@ -17,7 +17,6 @@ from homeassistant.components.bluetooth.active_update_coordinator import (
 )
 from homeassistant.core import CoreState, HomeAssistant, callback
 
-from .ble_client import APstorageBLEClient
 from .const import POLL_INTERVAL_SECONDS
 from .models import PCSData
 from .soc_client import APstorageSocClient
@@ -53,7 +52,6 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             connectable=True,
         )
         self._name = name
-        self._ble_client = APstorageBLEClient(name)
         self._soc_client = APstorageSocClient()
         self._last_poll: float | None = None
         # Most-recent successfully parsed data; also exposed as coordinator.data
@@ -115,15 +113,10 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             )
             return
 
-        # Keep a mutable data object so we can still expose SoC even if the
-        # generic status parser has no match yet.
-        result = await self._ble_client.async_fetch_data(ble_device)
-        self.data = result if result is not None else PCSData()
+        # Initialise an empty data object; soc_client will populate battery_soc.
+        self.data = PCSData()
 
-        if result is None:
-            _LOGGER.debug("[%s] Poll returned no generic data frame", self._name)
-
-        # Query SoC via custom Blufi protocol independently from generic poll.
+        # Query SoC via custom Blufi protocol.
         soc = await self._soc_client.async_query_soc(
             ble_device,
             device_name_hint=service_info.name,
