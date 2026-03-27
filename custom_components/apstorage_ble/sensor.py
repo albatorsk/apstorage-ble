@@ -241,6 +241,18 @@ class APstorageSensor(
         )
 
     @property
+    def available(self) -> bool:
+        """Return True when the BLE device is reachable.
+
+        ActiveBluetoothDataUpdateCoordinator does not expose
+        last_update_success (that is a DataUpdateCoordinator concept).
+        Use the coordinator's own .available property instead, which is
+        maintained by PassiveBluetoothDataUpdateCoordinator based on
+        whether the device is still advertising.
+        """
+        return self.coordinator.available
+
+    @property
     def native_value(self) -> Any:
         """Return the current sensor value."""
         if self.coordinator.data is None:
