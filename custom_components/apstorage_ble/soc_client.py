@@ -13,6 +13,7 @@ import hashlib
 import json
 import logging
 import secrets
+from dataclasses import dataclass
 from typing import Any
 
 from bleak import BleakClient
@@ -28,10 +29,10 @@ AES_IV_STR = "8914934610490056"
 
 # Blufi DH parameters (standard Blufi spec)
 BLUFI_DH_P_HEX = (
-    "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74"
-    "020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F1437"
-    "4FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7ED"
-    "EE386BFB5A899FA5AE9F24117C4B1FE649286651ECE65381FFFFFFFFFFFFFFFF"
+    "cf5cf5c38419a724957ff5dd323b9c45c3cdd261eb740f69aa94b8bb1a5c9640"
+    "9153bd76b24222d03274e4725a5406092e9e82e9135c643cae98132b0d95f7d6"
+    "5347c68afc1e677da90e51bbab5f5cf429c291b4ba39c6b2dc5e8c7231e46aa7"
+    "728e87664532cdf547be20c9a3fa8342be6e34371a27c06f7dc0edddd2f86373"
 )
 BLUFI_DH_G = 2
 
@@ -58,6 +59,36 @@ except ImportError:
 def _make_cmd(frame_type: int, subtype: int) -> int:
     """Encode Blufi frame type and subtype into command byte."""
     return (frame_type & 0x03) | ((subtype & 0x3F) << 2)
+
+
+def _u16_le(value: int) -> bytes:
+    """Encode a 16-bit integer in little-endian."""
+    return bytes((value & 0xFF, (value >> 8) & 0xFF))
+
+
+def _crc16_app(seed: int, data: bytes) -> int:
+    """CRC16 used by APstorage app flow (poly 0x1021, inverted init/final)."""
+    crc = (~seed) & 0xFFFF
+    for b in data:
+        crc ^= (b & 0xFF) << 8
+        for _ in range(8):
+            if crc & 0x8000:
+                crc = ((crc << 1) ^ 0x1021) & 0xFFFF
+            else:
+                crc = (crc << 1) & 0xFFFF
+    return (~crc) & 0xFFFF
+
+
+def _aes_cfb_encrypt(key: bytes, seq: int, payload: bytes) -> bytes:
+    """Blufi payload encryption with IV seeded by sequence number."""
+    iv = bytes([seq & 0xFF]) + (b"\x00" * 15)
+    return AES.new(key, AES.MODE_CFB, iv=iv, segment_size=128).encrypt(payload)
+
+
+def _aes_cfb_decrypt(key: bytes, seq: int, payload: bytes) -> bytes:
+    """Blufi payload decryption with IV seeded by sequence number."""
+    iv = bytes([seq & 0xFF]) + (b"\x00" * 15)
+    return AES.new(key, AES.MODE_CFB, iv=iv, segment_size=128).decrypt(payload)
 
 
 def _pad_key_16(key: str) -> bytes:
@@ -101,11 +132,71 @@ def _deep_find_soc(obj: Any) -> str | None:
     return None
 
 
+@dataclass
+class BlufiFrame:
+    """Parsed Blufi frame."""
+
+    frame_type: int
+    subtype: int
+    flags: int
+    seq: int
+    payload: bytes
+
+
 class BlufiCodec:
     """Blufi MTU-based packet builder/parser."""
 
-    def __init__(self, mtu: int = 256) -> None:
-        self.mtu = mtu
+    def __init__(self, mtu: int = 20) -> None:
+        self.mtu = max(20, mtu)
+        self.write_seq = -1
+        self.read_seq = -1
+        self._rx_buf = bytearray()
+        self._rx_expect_total: int | None = None
+        self._rx_hdr: tuple[int, int, int] | None = None
+
+    def _next_write_seq(self) -> int:
+        self.write_seq = (self.write_seq + 1) & 0xFF
+        return self.write_seq
+
+    @staticmethod
+    def _flags(encrypt: bool, checksum: bool, frag: bool) -> int:
+        flags = 0
+        if encrypt:
+            flags |= 0x01
+        if checksum:
+            flags |= 0x02
+        if frag:
+            flags |= 0x10
+        return flags
+
+    def _build_single_packet(
+        self,
+        cmd: int,
+        seq: int,
+        payload: bytes,
+        encrypt: bool,
+        checksum: bool,
+        frag: bool,
+        aes_key: bytes | None,
+    ) -> bytes:
+        if encrypt:
+            if not aes_key:
+                raise RuntimeError("Missing AES key for encrypted packet")
+            payload_wire = _aes_cfb_encrypt(aes_key, seq, payload)
+        else:
+            payload_wire = payload
+
+        flags = self._flags(encrypt=encrypt, checksum=checksum, frag=frag)
+        out = bytearray((cmd & 0xFF, flags & 0xFF, seq & 0xFF, len(payload_wire) & 0xFF))
+        out.extend(payload_wire)
+
+        if checksum:
+            crc = _crc16_app(0, bytes((seq & 0xFF, len(payload_wire) & 0xFF)))
+            if payload:
+                crc = _crc16_app(crc, payload)
+            out.extend(_u16_le(crc))
+
+        return bytes(out)
 
     def build_packets(
         self,
@@ -116,97 +207,143 @@ class BlufiCodec:
         checksum: bool = False,
         aes_key: bytes | None = None,
     ) -> list[bytes]:
-        """Fragment payload into MTU-bounded Blufi packets."""
-        packets = []
-        seq = 0
-        remaining = payload
-        more_flag = 0x10  # Fragmentation flag bit 4
+        """Fragment payload into MTU-sized Blufi packets (EMA-compatible)."""
+        max_payload = self.mtu - (8 if checksum else 6)
+        if max_payload < 1:
+            max_payload = 1
 
-        while remaining:
-            chunk_size = self.mtu - 4 - (2 if checksum else 0)
-            chunk = remaining[:chunk_size]
-            remaining = remaining[chunk_size:]
+        packets: list[bytes] = []
+        cursor = 0
+        total_len = len(payload)
 
-            # Last fragment clears fragmentation flag
-            flags = (0x01 if encrypt else 0x00) | (0x02 if checksum else 0x00)
-            if remaining:
-                flags |= more_flag
+        if total_len == 0:
+            seq = self._next_write_seq()
+            packets.append(
+                self._build_single_packet(
+                    cmd=cmd,
+                    seq=seq,
+                    payload=b"",
+                    encrypt=encrypt,
+                    checksum=checksum,
+                    frag=False,
+                    aes_key=aes_key,
+                )
+            )
+            return packets
 
-            frame = bytes([cmd, flags, seq, len(chunk)]) + chunk
+        while cursor < total_len:
+            chunk_end = min(total_len, cursor + max_payload)
+            chunk = payload[cursor:chunk_end]
+            remaining = total_len - chunk_end
 
-            # Checksum if needed
-            if checksum:
-                crc = self._crc16(frame)
-                frame += crc.to_bytes(2, "little")
+            # Avoid leaving a tiny trailer frame (1-2 bytes).
+            if 0 < remaining <= 2:
+                take = min(max_payload - len(chunk), remaining)
+                if take > 0:
+                    chunk = payload[cursor:chunk_end + take]
+                    chunk_end += take
+                    remaining = total_len - chunk_end
 
-            # Encrypt if needed
-            if encrypt and aes_key:
-                frame = self._encrypt_frame(frame, aes_key)
+            has_more = remaining > 0
+            if has_more:
+                wrapped = _u16_le(total_len - cursor) + chunk
+            else:
+                wrapped = chunk
 
-            packets.append(frame)
-            seq += 1
+            seq = self._next_write_seq()
+            packets.append(
+                self._build_single_packet(
+                    cmd=cmd,
+                    seq=seq,
+                    payload=wrapped,
+                    encrypt=encrypt,
+                    checksum=checksum,
+                    frag=has_more,
+                    aes_key=aes_key,
+                )
+            )
+            cursor = chunk_end
 
         return packets
 
     def parse_notify(
         self, raw: bytes, aes_key: bytes | None = None
-    ) -> dict[str, Any] | None:
+    ) -> BlufiFrame | None:
         """Parse a Blufi notification frame."""
         if len(raw) < 4:
             return None
 
-        cmd = raw[0]
+        type_subtype = raw[0]
         flags = raw[1]
         seq = raw[2]
         data_len = raw[3]
+        encrypt = (flags & 0x01) != 0
+        checksum = (flags & 0x02) != 0
+        frag = (flags & 0x10) != 0
 
-        is_encrypted = bool(flags & 0x01)
-        has_checksum = bool(flags & 0x02)
-        is_fragmented = bool(flags & 0x10)
+        need = 4 + data_len + (2 if checksum else 0)
+        if len(raw) < need:
+            return None
 
-        payload_start = 4
-        payload_end = payload_start + data_len
-        payload = raw[payload_start:payload_end]
+        payload_wire = raw[4 : 4 + data_len]
+        if encrypt:
+            if not aes_key:
+                raise RuntimeError("Encrypted notify received but AES key is not set")
+            payload = _aes_cfb_decrypt(aes_key, seq, payload_wire)
+        else:
+            payload = bytes(payload_wire)
 
-        if is_encrypted and aes_key:
-            payload = self._decrypt_frame(payload, aes_key)
+        if checksum:
+            got = raw[4 + data_len] | (raw[4 + data_len + 1] << 8)
+            crc = _crc16_app(0, bytes((seq & 0xFF, data_len & 0xFF)))
+            if payload:
+                crc = _crc16_app(crc, payload)
+            if got != crc:
+                raise RuntimeError(
+                    f"Checksum mismatch: got=0x{got:04x} expected=0x{crc:04x}"
+                )
 
-        return {
-            "cmd": cmd,
-            "flags": flags,
-            "seq": seq,
-            "encrypted": is_encrypted,
-            "checksum": has_checksum,
-            "fragmented": is_fragmented,
-            "payload": payload,
-        }
+        self.read_seq = (self.read_seq + 1) & 0xFF
+        if seq != self.read_seq:
+            self.read_seq = seq
 
-    @staticmethod
-    def _crc16(data: bytes) -> int:
-        """CRC16-CCITT."""
-        crc = 0x0000
-        for byte in data:
-            crc ^= byte << 8
-            for _ in range(8):
-                crc <<= 1
-                if crc & 0x10000:
-                    crc ^= 0x1021
-                crc &= 0xFFFF
-        return crc
+        frame_type = type_subtype & 0x03
+        subtype = (type_subtype >> 2) & 0x3F
 
-    @staticmethod
-    def _encrypt_frame(frame: bytes, key: bytes) -> bytes:
-        """AES/CFB/128 encryption (Blufi standard)."""
-        iv = bytes(16)
-        cipher = AES.new(key, AES.MODE_CFB, iv=iv, segment_size=128)
-        return cipher.encrypt(frame)
+        if frag:
+            if len(payload) < 2:
+                raise RuntimeError("Fragmented payload too short for total length header")
+            frag_total = payload[0] | (payload[1] << 8)
+            data = payload[2:]
+            if self._rx_hdr is None:
+                self._rx_hdr = (frame_type, subtype, flags)
+                self._rx_expect_total = frag_total
+                self._rx_buf.clear()
+            self._rx_buf.extend(data)
+            return None
 
-    @staticmethod
-    def _decrypt_frame(frame: bytes, key: bytes) -> bytes:
-        """AES/CFB/128 decryption."""
-        iv = bytes(16)
-        cipher = AES.new(key, AES.MODE_CFB, iv=iv, segment_size=128)
-        return cipher.decrypt(frame)
+        if self._rx_hdr is not None:
+            self._rx_buf.extend(payload)
+            data = bytes(self._rx_buf)
+            frame_type, subtype, first_flags = self._rx_hdr
+            self._rx_hdr = None
+            self._rx_expect_total = None
+            self._rx_buf.clear()
+            return BlufiFrame(
+                frame_type=frame_type,
+                subtype=subtype,
+                flags=first_flags,
+                seq=seq,
+                payload=data,
+            )
+
+        return BlufiFrame(
+            frame_type=frame_type,
+            subtype=subtype,
+            flags=flags,
+            seq=seq,
+            payload=payload,
+        )
 
 
 def _ema_encrypt_json(request_json: str) -> bytes:
@@ -274,7 +411,8 @@ class APstorageSocClient:
 
     def __init__(self) -> None:
         self.session_key: bytes | None = None
-        self.parsed_frames: list[dict[str, Any]] = []
+        self._codec = BlufiCodec(mtu=BLUFI_MTU)
+        self.parsed_frames: list[BlufiFrame] = []
         self._frame_cursor = 0
 
     async def async_query_soc(
@@ -359,12 +497,12 @@ class APstorageSocClient:
 
     async def _establish_blufi_session(self, client: BleakClient) -> None:
         """Perform Blufi DH and security setup."""
-        codec = BlufiCodec(mtu=BLUFI_MTU)
+        self._codec = BlufiCodec(mtu=BLUFI_MTU)
 
         # Generate DH keypair
         p = int(BLUFI_DH_P_HEX, 16)
         g = BLUFI_DH_G
-        priv = secrets.randbelow(p)
+        priv = secrets.randbelow(p - 3) + 2
         pub = pow(g, priv, p)
         p_bytes = bytes.fromhex(BLUFI_DH_P_HEX)
 
@@ -389,10 +527,11 @@ class APstorageSocClient:
             + pub_bytes
         )
 
-        packets_0 = codec.build_packets(cmd_nego, nego_payload_0, encrypt=False, checksum=False)
-        packets_1 = codec.build_packets(cmd_nego, nego_payload_1, encrypt=False, checksum=False)
+        packets_0 = self._codec.build_packets(cmd_nego, nego_payload_0, encrypt=False, checksum=False)
+        packets_1 = self._codec.build_packets(cmd_nego, nego_payload_1, encrypt=False, checksum=False)
 
         self.parsed_frames = []
+        self._frame_cursor = 0
         await client.start_notify(NOTIFY_CHAR, self._on_notify)
 
         try:
@@ -412,7 +551,7 @@ class APstorageSocClient:
 
             # Set security mode (checksum + encrypt)
             cmd_sec = _make_cmd(0, 1)
-            sec_packets = codec.build_packets(cmd_sec, bytes([0x03]), encrypt=False, checksum=True, aes_key=self.session_key)
+            sec_packets = self._codec.build_packets(cmd_sec, bytes([0x03]), encrypt=False, checksum=True, aes_key=self.session_key)
             for pkt in sec_packets:
                 await client.write_gatt_char(WRITE_CHAR, pkt, response=True)
                 await asyncio.sleep(0.01)
@@ -446,11 +585,11 @@ class APstorageSocClient:
         request_json = json.dumps(request, separators=(",", ":"))
         payload = _ema_encrypt_json_hexascii(request_json)
 
-        codec = BlufiCodec(mtu=BLUFI_MTU)
         cmd_custom = _make_cmd(1, 19)
-        packets = codec.build_packets(cmd_custom, payload, encrypt=True, checksum=True, aes_key=self.session_key)
+        packets = self._codec.build_packets(cmd_custom, payload, encrypt=True, checksum=True, aes_key=self.session_key)
 
         self.parsed_frames = []
+        self._frame_cursor = 0
         await client.start_notify(NOTIFY_CHAR, self._on_notify_impl)
 
         try:
@@ -460,7 +599,7 @@ class APstorageSocClient:
 
             # Wait for custom data response
             frame = await self._wait_frame(1, 19, RESPONSE_TIMEOUT_SECONDS)
-            decrypted = _ema_decrypt_payload(frame["payload"])
+            decrypted = _ema_decrypt_payload(frame.payload)
             parsed = json.loads(decrypted)
 
             # Extract SoC value
@@ -481,8 +620,7 @@ class APstorageSocClient:
         """Internal notification accumulation."""
         raw = bytes(data)
         try:
-            codec = BlufiCodec()
-            frame = codec.parse_notify(raw, aes_key=self.session_key)
+            frame = self._codec.parse_notify(raw, aes_key=self.session_key)
             if frame:
                 self.parsed_frames.append(frame)
         except Exception:  # noqa: BLE001
@@ -490,16 +628,14 @@ class APstorageSocClient:
 
     async def _wait_frame(
         self, frame_type: int, subtype: int, timeout_seconds: float
-    ) -> dict[str, Any]:
+    ) -> BlufiFrame:
         """Wait for a specific frame type/subtype."""
         start = asyncio.get_event_loop().time()
         while asyncio.get_event_loop().time() - start < timeout_seconds:
-            for frame in self.parsed_frames:
-                cmd = frame["cmd"]
-                actual_type = cmd & 0x03
-                actual_subtype = (cmd & 0xFC) >> 2
-                if actual_type == frame_type and actual_subtype == subtype:
-                    self.parsed_frames.remove(frame)
+            while self._frame_cursor < len(self.parsed_frames):
+                frame = self.parsed_frames[self._frame_cursor]
+                self._frame_cursor += 1
+                if frame.frame_type == frame_type and frame.subtype == subtype:
                     return frame
 
             await asyncio.sleep(0.05)
