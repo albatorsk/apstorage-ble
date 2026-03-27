@@ -163,13 +163,16 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 delta_kwh = abs(float(metrics.battery_power)) * dt_hours / 1000.0
                 direction_sign = self._resolve_battery_direction_sign(metrics)
                 if direction_sign is None:
-                    direction_sign = 1.0 if float(metrics.battery_power) >= 0 else -1.0
-
-                if direction_sign >= 0:
+                    _LOGGER.debug(
+                        "[%s] Skipping daily integration this cycle: unknown battery flow direction",
+                        self._name,
+                    )
+                elif direction_sign >= 0:
                     self._daily_charged_kwh += delta_kwh
+                    changed = delta_kwh > 0
                 else:
                     self._daily_discharged_kwh += delta_kwh
-                changed = delta_kwh > 0
+                    changed = delta_kwh > 0
 
         self._last_energy_ts = now_ts
         return changed
@@ -180,12 +183,21 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         Returns:
             +1 for charging, -1 for discharging, None when unknown.
         """
-        flow_sign: float | None = None
-
+        current_sign: float | None = None
         if metrics.battery_current is not None and abs(float(metrics.battery_current)) >= 0.05:
-            flow_sign = 1.0 if float(metrics.battery_current) >= 0 else -1.0
-        elif metrics.battery_power is not None and abs(float(metrics.battery_power)) >= 5.0:
-            flow_sign = 1.0 if float(metrics.battery_power) >= 0 else -1.0
+            current_sign = 1.0 if float(metrics.battery_current) >= 0 else -1.0
+
+        power_sign: float | None = None
+        if metrics.battery_power is not None and abs(float(metrics.battery_power)) >= 5.0:
+            power_sign = 1.0 if float(metrics.battery_power) >= 0 else -1.0
+
+        state_sign: float | None = None
+        if metrics.system_state is not None:
+            state_text = str(metrics.system_state).lower()
+            if any(token in state_text for token in ("discharge", "discharging", "battery discharge", "battery_discharge")):
+                state_sign = -1.0
+            elif any(token in state_text for token in ("charge", "charging", "battery charge", "battery_charge")):
+                state_sign = 1.0
 
         soc_sign: float | None = None
         if metrics.battery_soc is not None:
@@ -196,7 +208,9 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     soc_sign = 1.0 if delta_soc > 0 else -1.0
             self._last_battery_soc = current_soc
 
+        # SoC trend best reflects actual energy movement over time.
         if soc_sign is not None:
+            flow_sign = current_sign if current_sign is not None else power_sign
             if flow_sign is not None and flow_sign != soc_sign:
                 _LOGGER.debug(
                     "[%s] Battery flow sign mismatch (flow=%s, soc=%s); using SoC trend",
@@ -206,7 +220,25 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 )
             return soc_sign
 
-        return flow_sign
+        # Next prefer explicit system state when it indicates charge/discharge.
+        if state_sign is not None:
+            return state_sign
+
+        # If current and power disagree and we have no tie-breaker, do not guess.
+        if current_sign is not None and power_sign is not None and current_sign != power_sign:
+            _LOGGER.debug(
+                "[%s] Battery current/power sign conflict (current=%s, power=%s); direction unknown",
+                self._name,
+                current_sign,
+                power_sign,
+            )
+            return None
+
+        if current_sign is not None:
+            return current_sign
+        if power_sign is not None:
+            return power_sign
+        return None
 
     # ------------------------------------------------------------------
     # ActiveBluetoothDataUpdateCoordinator callbacks
