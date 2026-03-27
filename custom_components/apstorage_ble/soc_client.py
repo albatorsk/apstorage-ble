@@ -162,16 +162,15 @@ def _to_float(value: Any) -> float | None:
 def _to_celsius(value: Any) -> float | None:
     """Convert raw temperature-like values to Celsius.
 
-    APstorage payloads commonly encode temperatures as tenths of a degree
-    (e.g. 328.1 -> 32.8 C). Some firmwares may already report plain Celsius.
+    APstorage payloads for this device family appear to encode temperatures
+    in hundredths of a degree (e.g. 328.1 -> 3.28 C). Some firmwares may
+    already report plain Celsius.
     """
     temp = _to_float(value)
     if temp is None:
         return None
-    if temp > 1000:
+    if temp > 100:
         return temp / 100.0
-    if temp > 150:
-        return temp / 10.0
     return temp
 
 
