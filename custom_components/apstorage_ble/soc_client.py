@@ -132,6 +132,85 @@ def _deep_find_soc(obj: Any) -> str | None:
     return None
 
 
+def _deep_find_key(obj: Any, keys: set[str]) -> Any | None:
+    """Find first value in nested payload where key matches one of keys."""
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if key.lower() in keys and value is not None:
+                return value
+            nested = _deep_find_key(value, keys)
+            if nested is not None:
+                return nested
+    elif isinstance(obj, list):
+        for value in obj:
+            nested = _deep_find_key(value, keys)
+            if nested is not None:
+                return nested
+    return None
+
+
+def _to_float(value: Any) -> float | None:
+    """Best-effort conversion to float."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_metrics(parsed: Any) -> SocMetrics:
+    """Extract SoC and system state from parsed local-data response JSON."""
+    metrics = SocMetrics()
+    if not isinstance(parsed, dict):
+        return metrics
+
+    roots: list[Any] = []
+    data_root = parsed.get("data")
+    if isinstance(data_root, (dict, list)):
+        roots.append(data_root)
+    roots.append(parsed)
+
+    for root in roots:
+        soc_raw = _deep_find_key(
+            root,
+            {"bs", "soc", "ssoc", "battery_soc", "batterysoc"},
+        )
+        soc = _to_float(soc_raw)
+        if soc is not None:
+            metrics.battery_soc = soc
+            break
+
+    state_keys = {
+        "system_state",
+        "systemstate",
+        "run_state",
+        "runstate",
+        "work_mode",
+        "workmode",
+        "device_state",
+        "devicestate",
+        "state",
+        "status",
+        "mode",
+    }
+    for root in roots:
+        state_raw = _deep_find_key(root, state_keys)
+        if state_raw is not None:
+            metrics.system_state = str(state_raw)
+            break
+
+    if metrics.system_state is None:
+        code = parsed.get("code")
+        msg = parsed.get("msg") or parsed.get("message")
+        if code is not None and msg is not None:
+            metrics.system_state = f"{code} {msg}"
+        elif code is not None:
+            metrics.system_state = f"code {code}"
+
+    return metrics
+
+
 @dataclass
 class BlufiFrame:
     """Parsed Blufi frame."""
@@ -141,6 +220,14 @@ class BlufiFrame:
     flags: int
     seq: int
     payload: bytes
+
+
+@dataclass
+class SocMetrics:
+    """Metrics extracted from a single local data response."""
+
+    battery_soc: float | None = None
+    system_state: str | None = None
 
 
 class BlufiCodec:
@@ -419,13 +506,13 @@ class APstorageSocClient:
         self.parsed_frames: list[BlufiFrame] = []
         self._frame_cursor = 0
 
-    async def async_query_soc(
+    async def async_query_metrics(
         self,
         ble_device: BLEDevice,
         *,
         device_name_hint: str | None = None,
-    ) -> int | None:
-        """Connect to device, query SoC, return percentage or None on error."""
+    ) -> SocMetrics | None:
+        """Connect to device and return extracted metrics or None on failure."""
         if not HAS_CRYPTO:
             _LOGGER.error("pycryptodome required; install with: pip install pycryptodome")
             return None
@@ -458,14 +545,29 @@ class APstorageSocClient:
             if client and client.is_connected:
                 await client.disconnect()
 
+    async def async_query_soc(
+        self,
+        ble_device: BLEDevice,
+        *,
+        device_name_hint: str | None = None,
+    ) -> int | None:
+        """Compatibility wrapper that returns SoC percent only."""
+        metrics = await self.async_query_metrics(
+            ble_device,
+            device_name_hint=device_name_hint,
+        )
+        if metrics is None or metrics.battery_soc is None:
+            return None
+        return int(metrics.battery_soc)
+
     async def _query_soc_once(
         self,
         client: BleakClient,
         ble_device: BLEDevice,
         *,
         device_name_hint: str | None = None,
-    ) -> int | None:
-        """Execute full SoC query sequence."""
+    ) -> SocMetrics | None:
+        """Execute full local-data query sequence."""
         # 1. Read device name
         try:
             name_raw = await client.read_gatt_char(DEVICE_NAME_CHAR)
@@ -491,16 +593,26 @@ class APstorageSocClient:
             _LOGGER.error("Failed to establish Blufi session: %s", err)
             return None
 
-        # 3. Send SoC query request, trying common ID variants.
+        # 3. Send local-data request, trying common ID variants.
         for storage_id in storage_ids:
             try:
-                soc_value = await self._send_soc_request(client, storage_id, system_id="")
-                if soc_value is not None:
-                    return int(soc_value)
+                parsed = await self._send_soc_request(client, storage_id, system_id="")
+                if parsed is None:
+                    continue
+
+                metrics = _extract_metrics(parsed)
+                _LOGGER.debug(
+                    "Metrics for storage_id=%s -> soc=%s state=%s",
+                    storage_id,
+                    metrics.battery_soc,
+                    metrics.system_state,
+                )
+                if metrics.battery_soc is not None or metrics.system_state is not None:
+                    return metrics
             except Exception as err:  # noqa: BLE001
                 _LOGGER.debug("SoC query attempt failed for storage_id=%s: %s", storage_id, err)
 
-        _LOGGER.debug("SoC not found for any storage_id candidate: %s", storage_ids)
+        _LOGGER.debug("No usable metrics found for storage_id candidates: %s", storage_ids)
         return None
 
     async def _establish_blufi_session(self, client: BleakClient) -> None:
@@ -567,8 +679,13 @@ class APstorageSocClient:
         finally:
             await client.stop_notify(NOTIFY_CHAR)
 
-    async def _send_soc_request(self, client: BleakClient, storage_id: str, system_id: str = "") -> str | None:
-        """Send encrypted SoC query and parse response."""
+    async def _send_soc_request(
+        self,
+        client: BleakClient,
+        storage_id: str,
+        system_id: str = "",
+    ) -> dict[str, Any] | None:
+        """Send encrypted local-data query and return parsed JSON response."""
         request = {
             "company": "apsystems",
             "companyKey": "AmS4SV9oy3gk",
@@ -608,13 +725,20 @@ class APstorageSocClient:
             # Wait for custom data response
             frame = await self._wait_frame(1, 19, RESPONSE_TIMEOUT_SECONDS)
             decrypted = _ema_decrypt_payload(frame.payload)
-            parsed = json.loads(decrypted)
+            try:
+                parsed = json.loads(decrypted)
+            except json.JSONDecodeError:
+                _LOGGER.debug("SoC response was not valid JSON for storage_id=%s", storage_id)
+                return None
 
-            # Extract SoC value
-            soc_str = _deep_find_soc(parsed)
-            if soc_str is not None:
-                return soc_str
-
+            if isinstance(parsed, dict):
+                _LOGGER.debug(
+                    "Local-data response keys for storage_id=%s: %s",
+                    storage_id,
+                    list(parsed.keys()),
+                )
+                return parsed
+            _LOGGER.debug("Local-data response was non-dict for storage_id=%s", storage_id)
             return None
 
         finally:
