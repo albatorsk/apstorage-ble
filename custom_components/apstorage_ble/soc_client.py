@@ -150,6 +150,40 @@ def _deep_find_key(obj: Any, keys: set[str]) -> Any | None:
     return None
 
 
+def _deep_find_grid_frequency_key(obj: Any) -> Any | None:
+    """Find frequency-like values under grid/AC-related keys.
+
+    Some firmwares use key names not covered by explicit mappings.
+    This fallback searches keys containing freq/hz with grid/AC hints.
+    """
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            kl = key.lower()
+            freq_hint = (
+                "freq" in kl
+                or "hz" in kl
+                or re.fullmatch(r"f(?:_?(?:ac|grid|g|\d+))?", kl) is not None
+            )
+            grid_hint = (
+                "grid" in kl
+                or "ac" in kl
+                or kl.startswith("gf")
+                or kl.startswith("f")
+            )
+            if freq_hint and grid_hint and value is not None:
+                return value
+
+            nested = _deep_find_grid_frequency_key(value)
+            if nested is not None:
+                return nested
+    elif isinstance(obj, list):
+        for value in obj:
+            nested = _deep_find_grid_frequency_key(value)
+            if nested is not None:
+                return nested
+    return None
+
+
 def _to_float(value: Any) -> float | None:
     """Best-effort conversion to float."""
     if value is None:
@@ -403,6 +437,14 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
         if gf is not None:
             metrics.grid_frequency = gf
             break
+
+    if metrics.grid_frequency is None:
+        for root in roots:
+            gf_raw = _deep_find_grid_frequency_key(root)
+            gf = _to_grid_frequency(gf_raw)
+            if gf is not None:
+                metrics.grid_frequency = gf
+                break
 
     if (
         metrics.grid_current is None
