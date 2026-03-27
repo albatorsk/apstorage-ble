@@ -18,6 +18,7 @@ from typing import Any
 from bleak import BleakClient
 from bleak.backends.device import BLEDevice
 from bleak.exc import BleakError
+from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -272,16 +273,32 @@ class APstorageSocClient:
         self.parsed_frames: list[dict[str, Any]] = []
         self._frame_cursor = 0
 
-    async def async_query_soc(self, ble_device: BLEDevice) -> int | None:
+    async def async_query_soc(
+        self,
+        ble_device: BLEDevice,
+        *,
+        device_name_hint: str | None = None,
+    ) -> int | None:
         """Connect to device, query SoC, return percentage or None on error."""
         if not HAS_CRYPTO:
             _LOGGER.error("pycryptodome required; install with: pip install pycryptodome")
             return None
 
+        client: BleakClient | None = None
         try:
             async with asyncio.timeout(CONNECT_TIMEOUT_SECONDS):
-                async with BleakClient(ble_device) as client:
-                    return await self._query_soc_once(client, ble_device)
+                client = await establish_connection(
+                    BleakClientWithServiceCache,
+                    ble_device,
+                    ble_device.address,
+                    max_attempts=3,
+                    use_services_cache=True,
+                )
+                return await self._query_soc_once(
+                    client,
+                    ble_device,
+                    device_name_hint=device_name_hint,
+                )
         except asyncio.TimeoutError:
             _LOGGER.warning("SoC query timeout for %s", ble_device.address)
             return None
@@ -291,8 +308,17 @@ class APstorageSocClient:
         except Exception as err:  # noqa: BLE001
             _LOGGER.error("Unexpected error during SoC query: %s", err, exc_info=True)
             return None
+        finally:
+            if client and client.is_connected:
+                await client.disconnect()
 
-    async def _query_soc_once(self, client: BleakClient, ble_device: BLEDevice) -> int | None:
+    async def _query_soc_once(
+        self,
+        client: BleakClient,
+        ble_device: BLEDevice,
+        *,
+        device_name_hint: str | None = None,
+    ) -> int | None:
         """Execute full SoC query sequence."""
         # 1. Read device name
         try:
@@ -300,6 +326,9 @@ class APstorageSocClient:
             device_name = bytes(name_raw).decode("utf-8", errors="ignore").strip("\x00\r\n ")
         except Exception:  # noqa: BLE001
             device_name = ""
+
+        if not device_name:
+            device_name = device_name_hint or ""
 
         if not device_name:
             device_name = ble_device.name or ""

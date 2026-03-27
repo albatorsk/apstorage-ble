@@ -126,7 +126,10 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             _LOGGER.debug("[%s] Poll returned no generic data frame", self._name)
 
         # Query SoC via custom Blufi protocol independently from generic poll.
-        soc = await self._soc_client.async_query_soc(ble_device)
+        soc = await self._soc_client.async_query_soc(
+            ble_device,
+            device_name_hint=service_info.name,
+        )
         if soc is not None:
             self.data.battery_soc = float(soc)
             _LOGGER.debug("[%s] Battery SoC: %d%%", self._name, soc)
