@@ -69,6 +69,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._energy_store: Store[dict[str, Any]] = Store(hass, 1, store_key)
         self._store_loaded = False
         self._last_energy_ts: float | None = None
+        self._last_battery_soc: float | None = None
         self._last_poll: float | None = None
         # Most-recent successfully parsed data; also exposed as coordinator.data
         self.data: PCSData | None = None
@@ -160,10 +161,11 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             dt_hours = (now_ts - self._last_energy_ts) / 3600.0
             if 0 < dt_hours < (POLL_INTERVAL_SECONDS * 4 / 3600.0):
                 delta_kwh = abs(float(metrics.battery_power)) * dt_hours / 1000.0
-                direction = metrics.battery_current
-                if direction is None:
-                    direction = metrics.battery_power
-                if direction >= 0:
+                direction_sign = self._resolve_battery_direction_sign(metrics)
+                if direction_sign is None:
+                    direction_sign = 1.0 if float(metrics.battery_power) >= 0 else -1.0
+
+                if direction_sign >= 0:
                     self._daily_charged_kwh += delta_kwh
                 else:
                     self._daily_discharged_kwh += delta_kwh
@@ -171,6 +173,40 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
 
         self._last_energy_ts = now_ts
         return changed
+
+    def _resolve_battery_direction_sign(self, metrics) -> float | None:
+        """Resolve battery flow direction sign.
+
+        Returns:
+            +1 for charging, -1 for discharging, None when unknown.
+        """
+        flow_sign: float | None = None
+
+        if metrics.battery_current is not None and abs(float(metrics.battery_current)) >= 0.05:
+            flow_sign = 1.0 if float(metrics.battery_current) >= 0 else -1.0
+        elif metrics.battery_power is not None and abs(float(metrics.battery_power)) >= 5.0:
+            flow_sign = 1.0 if float(metrics.battery_power) >= 0 else -1.0
+
+        soc_sign: float | None = None
+        if metrics.battery_soc is not None:
+            current_soc = float(metrics.battery_soc)
+            if self._last_battery_soc is not None:
+                delta_soc = current_soc - self._last_battery_soc
+                if abs(delta_soc) >= 0.02:
+                    soc_sign = 1.0 if delta_soc > 0 else -1.0
+            self._last_battery_soc = current_soc
+
+        if soc_sign is not None:
+            if flow_sign is not None and flow_sign != soc_sign:
+                _LOGGER.debug(
+                    "[%s] Battery flow sign mismatch (flow=%s, soc=%s); using SoC trend",
+                    self._name,
+                    flow_sign,
+                    soc_sign,
+                )
+            return soc_sign
+
+        return flow_sign
 
     # ------------------------------------------------------------------
     # ActiveBluetoothDataUpdateCoordinator callbacks
