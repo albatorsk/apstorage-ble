@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from typing import Any
 
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
@@ -18,8 +19,10 @@ from homeassistant.components.bluetooth.active_update_coordinator import (
     ActiveBluetoothDataUpdateCoordinator,
 )
 from homeassistant.core import CoreState, HomeAssistant, callback
+from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
 
-from .const import POLL_INTERVAL_SECONDS
+from .const import DOMAIN, POLL_INTERVAL_SECONDS
 from .models import PCSData
 from .soc_client import APstorageSocClient
 
@@ -57,12 +60,106 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._name = name
         self._soc_client = APstorageSocClient()
         self._poll_lock = asyncio.Lock()
-        self._derived_charged_kwh = 0.0
-        self._derived_discharged_kwh = 0.0
+        self._daily_charged_kwh = 0.0
+        self._daily_discharged_kwh = 0.0
+        self._daily_date: str | None = None
+        self._baseline_total_charged: float | None = None
+        self._baseline_total_discharged: float | None = None
+        store_key = f"{DOMAIN}_{address.replace(':', '').lower()}_energy_daily"
+        self._energy_store: Store[dict[str, Any]] = Store(hass, 1, store_key)
+        self._store_loaded = False
         self._last_energy_ts: float | None = None
         self._last_poll: float | None = None
         # Most-recent successfully parsed data; also exposed as coordinator.data
         self.data: PCSData | None = None
+
+    async def async_initialize(self) -> None:
+        """Load persisted daily energy state."""
+        if self._store_loaded:
+            return
+
+        stored = await self._energy_store.async_load()
+        if isinstance(stored, dict):
+            self._daily_date = str(stored.get("date") or "") or None
+            self._daily_charged_kwh = float(stored.get("charged", 0.0) or 0.0)
+            self._daily_discharged_kwh = float(stored.get("discharged", 0.0) or 0.0)
+            btc = stored.get("baseline_total_charged")
+            btd = stored.get("baseline_total_discharged")
+            self._baseline_total_charged = float(btc) if btc is not None else None
+            self._baseline_total_discharged = float(btd) if btd is not None else None
+
+        self._store_loaded = True
+        self._rollover_daily_if_needed(force=True)
+
+    async def _async_save_daily_state(self) -> None:
+        """Persist daily counters so restart does not reset to zero."""
+        await self._energy_store.async_save(
+            {
+                "date": self._daily_date,
+                "charged": self._daily_charged_kwh,
+                "discharged": self._daily_discharged_kwh,
+                "baseline_total_charged": self._baseline_total_charged,
+                "baseline_total_discharged": self._baseline_total_discharged,
+            }
+        )
+
+    def _rollover_daily_if_needed(self, *, force: bool = False) -> bool:
+        """Reset daily counters when local date changes."""
+        today = dt_util.now().date().isoformat()
+        if not force and self._daily_date == today:
+            return False
+
+        if self._daily_date != today:
+            _LOGGER.debug("[%s] Daily energy rollover: %s -> %s", self._name, self._daily_date, today)
+
+        self._daily_date = today
+        self._daily_charged_kwh = 0.0
+        self._daily_discharged_kwh = 0.0
+        self._baseline_total_charged = None
+        self._baseline_total_discharged = None
+        self._last_energy_ts = None
+        return True
+
+    def _apply_direct_daily_totals(self, metrics) -> bool:
+        """Use device-reported cumulative totals to calculate today's values."""
+        used_direct = False
+
+        if metrics.battery_charged_energy is not None:
+            total = float(metrics.battery_charged_energy)
+            if self._baseline_total_charged is None or total < self._baseline_total_charged:
+                self._baseline_total_charged = total
+            self._daily_charged_kwh = max(0.0, total - self._baseline_total_charged)
+            used_direct = True
+
+        if metrics.battery_discharged_energy is not None:
+            total = float(metrics.battery_discharged_energy)
+            if self._baseline_total_discharged is None or total < self._baseline_total_discharged:
+                self._baseline_total_discharged = total
+            self._daily_discharged_kwh = max(0.0, total - self._baseline_total_discharged)
+            used_direct = True
+
+        return used_direct
+
+    def _integrate_daily_from_power(self, metrics) -> bool:
+        """Fallback daily counters by integrating battery power over time."""
+        now_ts = time.monotonic()
+        changed = False
+
+        if self._last_energy_ts is not None and metrics.battery_power is not None:
+            dt_hours = (now_ts - self._last_energy_ts) / 3600.0
+            if 0 < dt_hours < (POLL_INTERVAL_SECONDS * 4 / 3600.0):
+                delta_kwh = abs(float(metrics.battery_power)) * dt_hours / 1000.0
+                direction = metrics.battery_current
+                if direction is None:
+                    direction = metrics.battery_power
+                if direction >= 0:
+                    self._daily_charged_kwh += delta_kwh
+                else:
+                    self._daily_discharged_kwh += delta_kwh
+                changed = delta_kwh > 0
+
+        self._last_energy_ts = now_ts
+        return changed
 
     # ------------------------------------------------------------------
     # ActiveBluetoothDataUpdateCoordinator callbacks
@@ -103,6 +200,9 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
     async def _async_poll(self) -> None:
         """Connect to the device via GATT and update coordinator data."""
         async with self._poll_lock:
+            if not self._store_loaded:
+                await self.async_initialize()
+
             service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
             # Prefer the connectable device from the most recent advertisement;
@@ -128,17 +228,20 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 )
                 return
 
-            # Initialise an empty data object and populate metrics from local query.
-            self.data = PCSData()
+            # Start from the previous snapshot so transient query failures
+            # do not force all entities to Unknown.
+            previous = self.data
+            self.data = PCSData(**vars(previous)) if previous is not None else PCSData()
             _LOGGER.debug("[%s] Starting metrics poll for %s", self._name, ble_device.address)
 
             metrics = await self._soc_client.async_query_metrics(
                 ble_device,
-                device_name_hint=service_info.name if service_info is not None else self._name,
+                device_name_hint=self._name,
             )
             if metrics is None:
                 _LOGGER.info("[%s] SoC query returned no metrics", self._name)
             else:
+                store_dirty = self._rollover_daily_if_needed()
                 _LOGGER.debug("[%s] Received metrics: soc=%s, state=%s", self._name, metrics.battery_soc, metrics.system_state)
                 if metrics.battery_soc is not None:
                     self.data.battery_soc = float(metrics.battery_soc)
@@ -152,18 +255,6 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     _LOGGER.debug("[%s] Battery Power: %.1f W", self._name, self.data.battery_power)
                 if metrics.battery_temperature is not None:
                     self.data.battery_temperature = float(metrics.battery_temperature)
-                if metrics.battery_charged_energy is not None:
-                    self.data.battery_charged_energy = float(metrics.battery_charged_energy)
-                    self._derived_charged_kwh = max(
-                        self._derived_charged_kwh,
-                        self.data.battery_charged_energy,
-                    )
-                if metrics.battery_discharged_energy is not None:
-                    self.data.battery_discharged_energy = float(metrics.battery_discharged_energy)
-                    self._derived_discharged_kwh = max(
-                        self._derived_discharged_kwh,
-                        self.data.battery_discharged_energy,
-                    )
                 if metrics.system_state is not None:
                     self.data.system_state = metrics.system_state
                     _LOGGER.debug("[%s] System state: %s", self._name, metrics.system_state)
@@ -190,27 +281,20 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 if metrics.inverter_temperature is not None:
                     self.data.inverter_temperature = float(metrics.inverter_temperature)
 
-                # Fallback: device local-data often omits energy totals.
-                # Derive incremental charged/discharged energy from power * time.
-                now_ts = time.monotonic()
-                if self._last_energy_ts is not None and metrics.battery_power is not None:
-                    dt_hours = (now_ts - self._last_energy_ts) / 3600.0
-                    if 0 < dt_hours < (POLL_INTERVAL_SECONDS * 4 / 3600.0):
-                        delta_kwh = abs(float(metrics.battery_power)) * dt_hours / 1000.0
-                        direction = metrics.battery_current
-                        if direction is None:
-                            direction = metrics.battery_power
-                        if direction >= 0:
-                            self._derived_charged_kwh += delta_kwh
-                        else:
-                            self._derived_discharged_kwh += delta_kwh
+                # Daily energy counters: prefer direct cumulative totals when
+                # available, otherwise integrate battery power over time.
+                used_direct = self._apply_direct_daily_totals(metrics)
+                if used_direct:
+                    store_dirty = True
+                else:
+                    if self._integrate_daily_from_power(metrics):
+                        store_dirty = True
 
-                self._last_energy_ts = now_ts
+                self.data.battery_charged_energy = self._daily_charged_kwh
+                self.data.battery_discharged_energy = self._daily_discharged_kwh
 
-                if metrics.battery_charged_energy is None:
-                    self.data.battery_charged_energy = self._derived_charged_kwh
-                if metrics.battery_discharged_energy is None:
-                    self.data.battery_discharged_energy = self._derived_discharged_kwh
+                if store_dirty:
+                    await self._async_save_daily_state()
 
             # Push the update to all subscribed entities.
             self.async_update_listeners()

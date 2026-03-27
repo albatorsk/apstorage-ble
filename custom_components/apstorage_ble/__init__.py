@@ -43,6 +43,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         address=address,
         name=name,
     )
+    await coordinator.async_initialize()
 
     # Ensure a device is registered even before entities are added so the
     # Battery State of Charge sensor is always attached to a concrete device.
