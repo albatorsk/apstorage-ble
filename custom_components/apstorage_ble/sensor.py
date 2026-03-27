@@ -88,6 +88,24 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         suggested_display_precision=1,
         value_fn=lambda d: d.battery_temperature,
     ),
+    APstorageSensorDescription(
+        key="battery_charged_energy",
+        name="Battery Charged Energy",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        suggested_display_precision=2,
+        value_fn=lambda d: d.battery_charged_energy,
+    ),
+    APstorageSensorDescription(
+        key="battery_discharged_energy",
+        name="Battery Discharged Energy",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        suggested_display_precision=2,
+        value_fn=lambda d: d.battery_discharged_energy,
+    ),
     # --- Grid ---
     APstorageSensorDescription(
         key="grid_voltage",

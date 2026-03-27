@@ -229,6 +229,45 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
             metrics.battery_temperature = bt
             break
 
+    # Search for charged/discharged energy totals (kWh).
+    # App data models use chargeTotal/dischargeTotal and sometimes
+    # todayChargeEnergy/todayDischargeEnergy in home views.
+    for root in roots:
+        ce_raw = _deep_find_key(
+            root,
+            {
+                "charge_total",
+                "chargetotal",
+                "charged_total",
+                "chargedtotal",
+                "charge_energy",
+                "chargeenergy",
+                "todaychargeenergy",
+            },
+        )
+        ce = _to_float(ce_raw)
+        if ce is not None:
+            metrics.battery_charged_energy = ce
+            break
+
+    for root in roots:
+        de_raw = _deep_find_key(
+            root,
+            {
+                "discharge_total",
+                "dischargetotal",
+                "discharged_total",
+                "dischargedtotal",
+                "discharge_energy",
+                "dischargeenergy",
+                "todaydischargeenergy",
+            },
+        )
+        de = _to_float(de_raw)
+        if de is not None:
+            metrics.battery_discharged_energy = de
+            break
+
     # Search for system state
     state_keys = {
         "system_state",
@@ -308,6 +347,10 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
         extracted_fields.append(f"bp={metrics.battery_power:.0f}")
     if metrics.battery_temperature is not None:
         extracted_fields.append(f"bt={metrics.battery_temperature:.1f}")
+    if metrics.battery_charged_energy is not None:
+        extracted_fields.append(f"ce={metrics.battery_charged_energy:.3f}")
+    if metrics.battery_discharged_energy is not None:
+        extracted_fields.append(f"de={metrics.battery_discharged_energy:.3f}")
     if metrics.grid_power is not None:
         extracted_fields.append(f"gp={metrics.grid_power:.0f}")
     if metrics.pv_power is not None:
@@ -343,6 +386,8 @@ class SocMetrics:
     battery_current: float | None = None       # A
     battery_power: float | None = None         # W
     battery_temperature: float | None = None   # °C
+    battery_charged_energy: float | None = None      # kWh (total charged)
+    battery_discharged_energy: float | None = None   # kWh (total discharged)
     # System state
     system_state: str | None = None            # free-form state string
     # Grid metrics
@@ -749,12 +794,14 @@ class APstorageSocClient:
                     metrics.system_state,
                 )
                 # Return if we extracted any useful metric
-                if any([
+                if any(value is not None for value in (
                     metrics.battery_soc,
                     metrics.battery_voltage,
                     metrics.battery_current,
                     metrics.battery_power,
                     metrics.battery_temperature,
+                    metrics.battery_charged_energy,
+                    metrics.battery_discharged_energy,
                     metrics.system_state,
                     metrics.grid_voltage,
                     metrics.grid_current,
@@ -766,7 +813,7 @@ class APstorageSocClient:
                     metrics.load_current,
                     metrics.load_power,
                     metrics.inverter_temperature,
-                ]):
+                )):
                     return metrics
                 _LOGGER.warning("Extraction succeeded but metrics are empty for storage_id=%s", storage_id)
             except Exception as err:  # noqa: BLE001

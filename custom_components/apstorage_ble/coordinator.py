@@ -137,6 +137,10 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 _LOGGER.debug("[%s] Battery Power: %.1f W", self._name, self.data.battery_power)
             if metrics.battery_temperature is not None:
                 self.data.battery_temperature = float(metrics.battery_temperature)
+            if metrics.battery_charged_energy is not None:
+                self.data.battery_charged_energy = float(metrics.battery_charged_energy)
+            if metrics.battery_discharged_energy is not None:
+                self.data.battery_discharged_energy = float(metrics.battery_discharged_energy)
             if metrics.system_state is not None:
                 self.data.system_state = metrics.system_state
                 _LOGGER.debug("[%s] System state: %s", self._name, metrics.system_state)
