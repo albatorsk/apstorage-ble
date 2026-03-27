@@ -95,11 +95,9 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             )
         )
 
-    async def _async_poll(
-        self,
-        service_info: BluetoothServiceInfoBleak,
-    ) -> None:
+    async def _async_poll(self) -> None:
         """Connect to the device via GATT and update coordinator data."""
+        service_info: BluetoothServiceInfoBleak = self._last_service_info
         # Prefer the connectable device from the service_info if available;
         # otherwise obtain the best connectable device HA knows about.
         if service_info.connectable:
