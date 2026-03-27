@@ -1,7 +1,7 @@
 {
   "domain": "apstorage_ble",
   "name": "APstorage BLE",
-  "version": "0.0.33",
+  "version": "0.0.34",
   "bluetooth": [
     {
       "local_name": "PCS_B050*",
