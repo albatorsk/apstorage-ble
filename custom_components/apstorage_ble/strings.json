@@ -4,9 +4,13 @@
     "step": {
       "user": {
         "title": "Set up APstorage BLE",
-        "description": "Select a discovered APstorage PCS or enter its MAC address manually.",
+        "description": "Click Submit to scan for nearby APstorage ELT-12 PCS devices. Make sure the device is powered on and in Bluetooth range."
+      },
+      "pick_device": {
+        "title": "APstorage ELT-12 found",
+        "description": "Select the device to add.",
         "data": {
-          "address": "Device / MAC address"
+          "address": "Device"
         }
       },
       "manual": {

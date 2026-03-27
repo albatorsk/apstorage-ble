@@ -1,22 +1,29 @@
 """Config flow for the APstorage BLE integration.
 
-Supports two setup paths:
+Supports three setup paths:
   1. Automatic discovery — HA's Bluetooth integration sees a BLE advertisement
-    matching the ``bluetooth`` matchers in manifest.json (local_name "PCS_B050*")
+     matching the ``bluetooth`` matchers in manifest.json (local_name "PCS_B050*")
      and calls ``async_step_bluetooth``.
-  2. Manual entry — The user opens the integration and types the MAC address.
-     Useful if the device is behind an ESPHome proxy that is already paired.
+  2. Scan — User opens the integration manually; the flow checks the Bluetooth
+     cache first, then runs an active scan for up to SCAN_TIMEOUT seconds
+     looking for a device whose name starts with "PCS_B050".  Found devices
+     are shown in a picker.
+  3. Manual entry — If no device is found after scanning, the user is asked to
+     type the Bluetooth MAC address directly.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 
 import voluptuous as vol
 
 from homeassistant.components.bluetooth import (
+    BluetoothScanningMode,
     BluetoothServiceInfoBleak,
     async_discovered_service_info,
+    async_process_advertisements,
 )
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_ADDRESS
@@ -27,9 +34,12 @@ _LOGGER = logging.getLogger(__name__)
 
 _MAC_RE = re.compile(r"^([0-9A-F]{2}:){5}[0-9A-F]{2}$")
 
+# How long (seconds) to run an active BLE scan when no cached device exists.
+SCAN_TIMEOUT = 10
+
 
 def _is_apstorage_device(service_info: BluetoothServiceInfoBleak) -> bool:
-    """Return True if the advertisement looks like an APstorage PCS."""
+    """Return True if the advertisement looks like an APstorage ELT-12 PCS."""
     name = service_info.name or ""
     return name.startswith("PCS_B050")
 
@@ -41,6 +51,8 @@ class APstorageConfigFlow(ConfigFlow, domain=DOMAIN):
 
     def __init__(self) -> None:
         self._discovery_info: BluetoothServiceInfoBleak | None = None
+        # Devices found during the user-triggered scan, keyed by upper-case MAC.
+        self._discovered_devices: dict[str, BluetoothServiceInfoBleak] = {}
 
     # ------------------------------------------------------------------
     # Auto-discovery path (triggered by manifest.json bluetooth matchers)
@@ -83,59 +95,90 @@ class APstorageConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
     # ------------------------------------------------------------------
-    # Manual entry path
+    # User-triggered path: scan first, picker if found, manual fallback
     # ------------------------------------------------------------------
 
     async def async_step_user(
         self, user_input: dict | None = None
     ) -> ConfigFlowResult:
-        """Handle the initial user-triggered setup step.
+        """Entry point when the user adds the integration manually.
 
-        If there are already-discovered APstorage devices that haven't been
-        added yet, we present a picker; otherwise we ask for a MAC address.
+        1. Check HA's Bluetooth cache for already-seen PCS_B050* devices.
+        2. If none cached, show a prompt so the user can trigger an active scan.
+        3. After scanning (or immediately if cached devices exist), show a device
+           picker.
+        4. If scanning times out with no result, fall back to manual MAC entry.
         """
-        # Collect any PCS devices seen by HA's Bluetooth stack that are not
-        # yet configured.
         already_configured = {
             entry.unique_id
             for entry in self._async_current_entries()
             if entry.unique_id
         }
-        discovered = {
-            service_info.address.upper(): service_info
-            for service_info in async_discovered_service_info(self.hass)
-            if _is_apstorage_device(service_info)
-            and service_info.address.upper() not in already_configured
+
+        # Check HA's Bluetooth advertisement cache.
+        self._discovered_devices = {
+            si.address.upper(): si
+            for si in async_discovered_service_info(self.hass)
+            if _is_apstorage_device(si)
+            and si.address.upper() not in already_configured
         }
 
-        if discovered:
-            # Offer a picker of known devices.
-            if user_input is not None:
-                address = user_input[CONF_ADDRESS].upper()
-                await self.async_set_unique_id(address)
-                self._abort_if_unique_id_configured()
-                info = discovered[address]
-                return self.async_create_entry(
-                    title=info.name or address,
-                    data={CONF_ADDRESS: address},
-                )
+        if self._discovered_devices:
+            # Skip straight to the picker — no scan needed.
+            return await self.async_step_pick_device()
 
-            return self.async_show_form(
-                step_id="user",
-                data_schema=vol.Schema(
-                    {
-                        vol.Required(CONF_ADDRESS): vol.In(
-                            {
-                                addr: f"{info.name} ({addr})"
-                                for addr, info in discovered.items()
-                            }
-                        )
-                    }
-                ),
+        if user_input is not None:
+            # User clicked Submit on the scan prompt — run an active scan.
+            _LOGGER.debug("Starting active BLE scan for PCS_B050* devices")
+            try:
+                found = await async_process_advertisements(
+                    self.hass,
+                    _is_apstorage_device,
+                    {"local_name_pattern": "PCS_B050*"},
+                    BluetoothScanningMode.ACTIVE,
+                    SCAN_TIMEOUT,
+                )
+                if found.address.upper() not in already_configured:
+                    self._discovered_devices[found.address.upper()] = found
+            except asyncio.TimeoutError:
+                _LOGGER.debug("BLE scan timed out — no ELT-12 found")
+
+            if self._discovered_devices:
+                return await self.async_step_pick_device()
+
+            # Nothing found after scan → manual entry.
+            return await self.async_step_manual()
+
+        # Show the scan prompt (empty form — Submit starts the scan).
+        return self.async_show_form(step_id="user", data_schema=vol.Schema({}))
+
+    async def async_step_pick_device(
+        self, user_input: dict | None = None
+    ) -> ConfigFlowResult:
+        """Present a picker of discovered ELT-12 devices."""
+        if user_input is not None:
+            address = user_input[CONF_ADDRESS].upper()
+            info = self._discovered_devices[address]
+            await self.async_set_unique_id(address)
+            self._abort_if_unique_id_configured()
+            return self.async_create_entry(
+                title=info.name or address,
+                data={CONF_ADDRESS: address},
             )
 
-        # No device discovered — fall back to free-form MAC address entry.
-        return await self.async_step_manual()
+        return self.async_show_form(
+            step_id="pick_device",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_ADDRESS): vol.In(
+                        {
+                            addr: f"{info.name} ({addr})"
+                            for addr, info in self._discovered_devices.items()
+                        }
+                    )
+                }
+            ),
+        )
 
     async def async_step_manual(
         self, user_input: dict | None = None
