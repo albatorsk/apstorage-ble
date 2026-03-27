@@ -65,6 +65,9 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._daily_date: str | None = None
         self._baseline_total_charged: float | None = None
         self._baseline_total_discharged: float | None = None
+        self._last_total_charged: float | None = None
+        self._last_total_discharged: float | None = None
+        self._swap_energy_totals = False
         store_key = f"{DOMAIN}_{address.replace(':', '').lower()}_energy_daily"
         self._energy_store: Store[dict[str, Any]] = Store(hass, 1, store_key)
         self._store_loaded = False
@@ -88,6 +91,11 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             btd = stored.get("baseline_total_discharged")
             self._baseline_total_charged = float(btc) if btc is not None else None
             self._baseline_total_discharged = float(btd) if btd is not None else None
+            ltc = stored.get("last_total_charged")
+            ltd = stored.get("last_total_discharged")
+            self._last_total_charged = float(ltc) if ltc is not None else None
+            self._last_total_discharged = float(ltd) if ltd is not None else None
+            self._swap_energy_totals = bool(stored.get("swap_energy_totals", False))
 
         self._store_loaded = True
         self._rollover_daily_if_needed(force=True)
@@ -101,6 +109,9 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         """Persist daily counters so restart does not reset to zero."""
         await self._energy_store.async_save(
             {
+                "last_total_charged": self._last_total_charged,
+                "last_total_discharged": self._last_total_discharged,
+                "swap_energy_totals": self._swap_energy_totals,
                 "date": self._daily_date,
                 "charged": self._daily_charged_kwh,
                 "discharged": self._daily_discharged_kwh,
@@ -129,28 +140,57 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._daily_discharged_kwh = 0.0
         self._baseline_total_charged = None
         self._baseline_total_discharged = None
+        self._last_total_charged = None
+        self._last_total_discharged = None
+        self._swap_energy_totals = False
         self._last_energy_ts = None
         return True
 
     def _apply_direct_daily_totals(self, metrics) -> bool:
         """Use device-reported cumulative totals to calculate today's values."""
-        used_direct = False
+        charged_raw = metrics.battery_charged_energy
+        discharged_raw = metrics.battery_discharged_energy
+        if charged_raw is None or discharged_raw is None:
+            return False
 
-        if metrics.battery_charged_energy is not None:
-            total = float(metrics.battery_charged_energy)
-            if self._baseline_total_charged is None or total < self._baseline_total_charged:
-                self._baseline_total_charged = total
-            self._daily_charged_kwh = max(0.0, total - self._baseline_total_charged)
-            used_direct = True
+        charged_total = float(charged_raw)
+        discharged_total = float(discharged_raw)
 
-        if metrics.battery_discharged_energy is not None:
-            total = float(metrics.battery_discharged_energy)
-            if self._baseline_total_discharged is None or total < self._baseline_total_discharged:
-                self._baseline_total_discharged = total
-            self._daily_discharged_kwh = max(0.0, total - self._baseline_total_discharged)
-            used_direct = True
+        if self._swap_energy_totals:
+            charged_total, discharged_total = discharged_total, charged_total
 
-        return used_direct
+        if self._last_total_charged is not None and self._last_total_discharged is not None:
+            delta_charged = charged_total - self._last_total_charged
+            delta_discharged = discharged_total - self._last_total_discharged
+            direction_sign = self._resolve_battery_direction_sign(metrics)
+
+            # Some firmware variants appear to report these two counters swapped.
+            if (
+                not self._swap_energy_totals
+                and direction_sign is not None
+                and (
+                    (direction_sign < 0 and delta_charged > 0.001 and delta_discharged <= 0.0)
+                    or (direction_sign > 0 and delta_discharged > 0.001 and delta_charged <= 0.0)
+                )
+            ):
+                _LOGGER.warning(
+                    "[%s] Detected swapped battery energy totals from device; applying automatic correction",
+                    self._name,
+                )
+                self._swap_energy_totals = True
+                charged_total, discharged_total = discharged_total, charged_total
+
+        self._last_total_charged = charged_total
+        self._last_total_discharged = discharged_total
+
+        if self._baseline_total_charged is None or charged_total < self._baseline_total_charged:
+            self._baseline_total_charged = charged_total
+        if self._baseline_total_discharged is None or discharged_total < self._baseline_total_discharged:
+            self._baseline_total_discharged = discharged_total
+
+        self._daily_charged_kwh = max(0.0, charged_total - self._baseline_total_charged)
+        self._daily_discharged_kwh = max(0.0, discharged_total - self._baseline_total_discharged)
+        return True
 
     def _integrate_daily_from_power(self, metrics) -> bool:
         """Fallback daily counters by integrating battery power over time."""
