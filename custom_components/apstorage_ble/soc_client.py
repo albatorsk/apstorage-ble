@@ -55,6 +55,47 @@ def _make_cmd(frame_type: int, subtype: int) -> int:
     return (frame_type & 0x03) | ((subtype & 0x3F) << 2)
 
 
+def _pad_key_16(key: str) -> bytes:
+    """Pad or truncate key material to 16 bytes."""
+    if len(key) < 16:
+        key = key + ("0" * (16 - len(key)))
+    return key.encode("utf-8")[:16]
+
+
+def _normalize_storage_ids(storage_id: str) -> list[str]:
+    """Generate common candidate forms for a storage ID."""
+    candidates = [storage_id]
+    compact = storage_id.replace(":", "")
+    if compact and compact not in candidates:
+        candidates.append(compact)
+    upper = compact.upper()
+    if upper and upper not in candidates:
+        candidates.append(upper)
+    lower = compact.lower()
+    if lower and lower not in candidates:
+        candidates.append(lower)
+    return candidates
+
+
+def _deep_find_soc(obj: Any) -> str | None:
+    """Search nested dict/list payloads for a SoC-like key."""
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            k = key.lower()
+            if k in {"ssoc", "soc", "battery_soc", "batterysoc", "bs"}:
+                if value is not None:
+                    return str(value)
+            nested = _deep_find_soc(value)
+            if nested is not None:
+                return nested
+    elif isinstance(obj, list):
+        for value in obj:
+            nested = _deep_find_soc(value)
+            if nested is not None:
+                return nested
+    return None
+
+
 class BlufiCodec:
     """Blufi MTU-based packet builder/parser."""
 
@@ -169,11 +210,10 @@ def _ema_encrypt_json(request_json: str) -> bytes:
         raise RuntimeError("pycryptodome required")
 
     data = request_json.encode("utf-8")
-    # Zero padding to 16-byte boundary
-    pad_len = (16 - (len(data) % 16)) % 16 or 16
-    data = data + bytes(pad_len)
+    if len(data) % 16 != 0:
+        data += b"\x00" * (16 - (len(data) % 16))
 
-    key = (AES_KEY_STR.ljust(32, "\x00")).encode("utf-8")[:32]
+    key = _pad_key_16(AES_KEY_STR)
     iv = (AES_IV_STR.ljust(16, "\x00")).encode("utf-8")[:16]
 
     cipher = AES.new(key, AES.MODE_CBC, iv=iv)
@@ -183,7 +223,7 @@ def _ema_encrypt_json(request_json: str) -> bytes:
 def _ema_encrypt_json_hexascii(request_json: str) -> bytes:
     """Encrypt JSON and encode result as hex-ASCII (matching EMA app)."""
     ciphertext = _ema_encrypt_json(request_json)
-    return hex(int.from_bytes(ciphertext, "big"))[2:].encode("ascii")
+    return ciphertext.hex().encode("ascii")
 
 
 def _ema_decrypt_payload(payload: bytes) -> str:
@@ -191,12 +231,12 @@ def _ema_decrypt_payload(payload: bytes) -> str:
     if not HAS_CRYPTO:
         raise RuntimeError("pycryptodome required")
 
-    key = (AES_KEY_STR.ljust(32, "\x00")).encode("utf-8")[:32]
+    key = _pad_key_16(AES_KEY_STR)
     iv = (AES_IV_STR.ljust(16, "\x00")).encode("utf-8")[:16]
 
     cipher = AES.new(key, AES.MODE_CBC, iv=iv)
     decrypted = cipher.decrypt(payload)
-    return decrypted.rstrip(b"\x00").decode("utf-8", errors="ignore")
+    return decrypted.rstrip(b"\x00").decode("utf-8", errors="replace").strip()
 
 
 def _derive_storage_ids_from_name(device_name: str | None) -> list[str]:
@@ -216,7 +256,12 @@ def _derive_storage_ids_from_name(device_name: str | None) -> list[str]:
         if trimmed and trimmed not in out:
             out.append(trimmed)
 
-    return out
+    normalized: list[str] = []
+    for item in out:
+        for candidate in _normalize_storage_ids(item):
+            if candidate not in normalized:
+                normalized.append(candidate)
+    return normalized
 
 
 class APstorageSocClient:
@@ -236,7 +281,7 @@ class APstorageSocClient:
         try:
             async with asyncio.timeout(CONNECT_TIMEOUT_SECONDS):
                 async with BleakClient(ble_device) as client:
-                    return await self._query_soc_once(client)
+                    return await self._query_soc_once(client, ble_device)
         except asyncio.TimeoutError:
             _LOGGER.warning("SoC query timeout for %s", ble_device.address)
             return None
@@ -247,7 +292,7 @@ class APstorageSocClient:
             _LOGGER.error("Unexpected error during SoC query: %s", err, exc_info=True)
             return None
 
-    async def _query_soc_once(self, client: BleakClient) -> int | None:
+    async def _query_soc_once(self, client: BleakClient, ble_device: BLEDevice) -> int | None:
         """Execute full SoC query sequence."""
         # 1. Read device name
         try:
@@ -255,6 +300,9 @@ class APstorageSocClient:
             device_name = bytes(name_raw).decode("utf-8", errors="ignore").strip("\x00\r\n ")
         except Exception:  # noqa: BLE001
             device_name = ""
+
+        if not device_name:
+            device_name = ble_device.name or ""
 
         storage_ids = _derive_storage_ids_from_name(device_name)
         if not storage_ids:
@@ -270,7 +318,7 @@ class APstorageSocClient:
 
         # 3. Send SoC query request
         try:
-            soc_value = await self._send_soc_request(client, storage_ids[0])
+            soc_value = await self._send_soc_request(client, storage_ids[0], system_id="")
             return int(soc_value) if soc_value is not None else None
         except Exception as err:  # noqa: BLE001
             _LOGGER.error("Failed to query SoC: %s", err)
@@ -285,19 +333,37 @@ class APstorageSocClient:
         g = BLUFI_DH_G
         priv = secrets.randbelow(p)
         pub = pow(g, priv, p)
-        pub_hex = format(pub, "x")
-        if len(pub_hex) % 2:
-            pub_hex = "0" + pub_hex
+        p_bytes = bytes.fromhex(BLUFI_DH_P_HEX)
+
+        g_hex = format(g, "x")
+        if len(g_hex) % 2:
+            g_hex = "0" + g_hex
+        g_bytes = bytes.fromhex(g_hex)
+
+        pub_hex = format(pub, "x").zfill(256)
+        pub_bytes = bytes.fromhex(pub_hex)
 
         # DH handshake
         cmd_nego = _make_cmd(1, 0)
-        packets = codec.build_packets(cmd_nego, bytes.fromhex(pub_hex), encrypt=False, checksum=False)
+        nego_payload_0_len = len(p_bytes) + len(g_bytes) + len(pub_bytes) + 6
+        nego_payload_0 = bytes((0, (nego_payload_0_len >> 8) & 0xFF, nego_payload_0_len & 0xFF))
+        nego_payload_1 = (
+            bytes((1, (len(p_bytes) >> 8) & 0xFF, len(p_bytes) & 0xFF))
+            + p_bytes
+            + bytes((len(g_bytes) >> 8, len(g_bytes) & 0xFF))
+            + g_bytes
+            + bytes((len(pub_bytes) >> 8, len(pub_bytes) & 0xFF))
+            + pub_bytes
+        )
+
+        packets_0 = codec.build_packets(cmd_nego, nego_payload_0, encrypt=False, checksum=False)
+        packets_1 = codec.build_packets(cmd_nego, nego_payload_1, encrypt=False, checksum=False)
 
         self.parsed_frames = []
         await client.start_notify(NOTIFY_CHAR, self._on_notify)
 
         try:
-            for pkt in packets:
+            for pkt in packets_0 + packets_1:
                 await client.write_gatt_char(WRITE_CHAR, pkt, response=True)
                 await asyncio.sleep(0.01)
 
@@ -321,7 +387,7 @@ class APstorageSocClient:
         finally:
             await client.stop_notify(NOTIFY_CHAR)
 
-    async def _send_soc_request(self, client: BleakClient, storage_id: str) -> str | None:
+    async def _send_soc_request(self, client: BleakClient, storage_id: str, system_id: str = "") -> str | None:
         """Send encrypted SoC query and parse response."""
         request = {
             "company": "apsystems",
@@ -339,7 +405,7 @@ class APstorageSocClient:
                 "V": "01",
                 "userId": "",
                 "EID": storage_id,
-                "systemId": "",
+                "systemId": system_id,
                 "storageId": storage_id,
             },
         }
@@ -365,17 +431,18 @@ class APstorageSocClient:
             parsed = json.loads(decrypted)
 
             # Extract SoC value
-            if isinstance(parsed, dict):
-                data = parsed.get("data", {})
-                if isinstance(data, dict):
-                    soc_str = data.get("SSOC")
-                    if soc_str:
-                        return str(soc_str)
+            soc_str = _deep_find_soc(parsed)
+            if soc_str is not None:
+                return soc_str
 
             return None
 
         finally:
             await client.stop_notify(NOTIFY_CHAR)
+
+    def _on_notify(self, _sender: Any, data: bytearray) -> None:
+        """Notification callback used during DH/security setup."""
+        self._on_notify_impl(_sender, data)
 
     def _on_notify_impl(self, _sender: Any, data: bytearray) -> None:
         """Internal notification accumulation."""
