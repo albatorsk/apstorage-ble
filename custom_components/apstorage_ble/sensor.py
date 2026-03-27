@@ -277,6 +277,21 @@ class APstorageSensor(
             return None
         return self.entity_description.value_fn(self.coordinator.data)
 
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return optional extra attributes for selected sensors."""
+        if self.entity_description.key not in {
+            "battery_charged_energy",
+            "battery_discharged_energy",
+        }:
+            return None
+
+        last_reset = self.coordinator.daily_energy_last_reset
+        if last_reset is None:
+            return None
+
+        return {"last_reset": last_reset}
+
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
