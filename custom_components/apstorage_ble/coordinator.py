@@ -146,20 +146,35 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._last_energy_ts = None
         return True
 
-    def _apply_direct_daily_totals(self, metrics) -> bool:
-        """Use device-reported cumulative totals to calculate today's values."""
+    def _apply_direct_daily_totals(self, metrics) -> tuple[bool, bool, bool]:
+        """Use device-reported cumulative totals to calculate today's values.
+
+        Returns a tuple of:
+            (used_any_direct, used_direct_charged, used_direct_discharged)
+        """
         charged_raw = metrics.battery_charged_energy
         discharged_raw = metrics.battery_discharged_energy
-        if charged_raw is None or discharged_raw is None:
-            return False
 
-        charged_total = float(charged_raw)
-        discharged_total = float(discharged_raw)
+        charged_total = float(charged_raw) if charged_raw is not None else None
+        discharged_total = float(discharged_raw) if discharged_raw is not None else None
 
-        if self._swap_energy_totals:
+        used_direct_charged = charged_total is not None
+        used_direct_discharged = discharged_total is not None
+
+        if not used_direct_charged and not used_direct_discharged:
+            return False, False, False
+
+        if self._swap_energy_totals and used_direct_charged and used_direct_discharged:
             charged_total, discharged_total = discharged_total, charged_total
 
-        if self._last_total_charged is not None and self._last_total_discharged is not None:
+        if (
+            used_direct_charged
+            and used_direct_discharged
+            and self._last_total_charged is not None
+            and self._last_total_discharged is not None
+            and charged_total is not None
+            and discharged_total is not None
+        ):
             delta_charged = charged_total - self._last_total_charged
             delta_discharged = discharged_total - self._last_total_discharged
             direction_sign = self._resolve_battery_direction_sign(metrics)
@@ -180,19 +195,27 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 self._swap_energy_totals = True
                 charged_total, discharged_total = discharged_total, charged_total
 
-        self._last_total_charged = charged_total
-        self._last_total_discharged = discharged_total
+        if used_direct_charged and charged_total is not None:
+            self._last_total_charged = charged_total
+            if self._baseline_total_charged is None or charged_total < self._baseline_total_charged:
+                self._baseline_total_charged = charged_total
+            self._daily_charged_kwh = max(0.0, charged_total - self._baseline_total_charged)
 
-        if self._baseline_total_charged is None or charged_total < self._baseline_total_charged:
-            self._baseline_total_charged = charged_total
-        if self._baseline_total_discharged is None or discharged_total < self._baseline_total_discharged:
-            self._baseline_total_discharged = discharged_total
+        if used_direct_discharged and discharged_total is not None:
+            self._last_total_discharged = discharged_total
+            if self._baseline_total_discharged is None or discharged_total < self._baseline_total_discharged:
+                self._baseline_total_discharged = discharged_total
+            self._daily_discharged_kwh = max(0.0, discharged_total - self._baseline_total_discharged)
 
-        self._daily_charged_kwh = max(0.0, charged_total - self._baseline_total_charged)
-        self._daily_discharged_kwh = max(0.0, discharged_total - self._baseline_total_discharged)
-        return True
+        return True, used_direct_charged, used_direct_discharged
 
-    def _integrate_daily_from_power(self, metrics) -> bool:
+    def _integrate_daily_from_power(
+        self,
+        metrics,
+        *,
+        integrate_charged: bool = True,
+        integrate_discharged: bool = True,
+    ) -> bool:
         """Fallback daily counters by integrating battery power over time."""
         now_ts = time.monotonic()
         changed = False
@@ -208,9 +231,15 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                         self._name,
                     )
                 elif direction_sign >= 0:
+                    if not integrate_charged:
+                        self._last_energy_ts = now_ts
+                        return changed
                     self._daily_charged_kwh += delta_kwh
                     changed = delta_kwh > 0
                 else:
+                    if not integrate_discharged:
+                        self._last_energy_ts = now_ts
+                        return changed
                     self._daily_discharged_kwh += delta_kwh
                     changed = delta_kwh > 0
 
@@ -264,15 +293,16 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         if state_sign is not None:
             return state_sign
 
-        # If current and power disagree and we have no tie-breaker, do not guess.
+        # If current and power disagree and we have no tie-breaker,
+        # prefer power sign so daily counters continue to advance.
         if current_sign is not None and power_sign is not None and current_sign != power_sign:
             _LOGGER.debug(
-                "[%s] Battery current/power sign conflict (current=%s, power=%s); direction unknown",
+                "[%s] Battery current/power sign conflict (current=%s, power=%s); using power sign",
                 self._name,
                 current_sign,
                 power_sign,
             )
-            return None
+            return power_sign
 
         if current_sign is not None:
             return current_sign
@@ -402,12 +432,16 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
 
                 # Daily energy counters: prefer direct cumulative totals when
                 # available, otherwise integrate battery power over time.
-                used_direct = self._apply_direct_daily_totals(metrics)
+                used_direct, used_direct_charged, used_direct_discharged = self._apply_direct_daily_totals(metrics)
                 if used_direct:
                     store_dirty = True
-                else:
-                    if self._integrate_daily_from_power(metrics):
-                        store_dirty = True
+
+                if self._integrate_daily_from_power(
+                    metrics,
+                    integrate_charged=not used_direct_charged,
+                    integrate_discharged=not used_direct_discharged,
+                ):
+                    store_dirty = True
 
                 self.data.battery_charged_energy = self._daily_charged_kwh
                 self.data.battery_discharged_energy = self._daily_discharged_kwh
