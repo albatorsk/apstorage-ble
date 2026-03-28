@@ -36,6 +36,19 @@ from .models import PCSData
 _LOGGER = logging.getLogger(__name__)
 
 
+SYSTEM_STATE_LABELS: dict[str, str] = {
+    "1": "Self-consumption",
+    "3": "Advanced mode",
+}
+
+
+def _format_system_state(value: Any) -> Any:
+    """Return human-readable label for known system state codes."""
+    if value is None:
+        return None
+    return SYSTEM_STATE_LABELS.get(str(value), value)
+
+
 @dataclass(frozen=True, kw_only=True)
 class APstorageSensorDescription(SensorEntityDescription):
     """Describes a single APstorage sensor."""
@@ -211,7 +224,15 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         name="System State",
         device_class=None,
         state_class=None,
-        value_fn=lambda d: d.system_state,
+        value_fn=lambda d: _format_system_state(d.system_state),
+    ),
+    APstorageSensorDescription(
+        key="battery_flow_state",
+        name="Battery Flow State",
+        device_class=SensorDeviceClass.ENUM,
+        state_class=None,
+        options=["Charging", "Discharging", "Holding"],
+        value_fn=lambda d: d.battery_flow_state,
     ),
 )
 

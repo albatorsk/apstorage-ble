@@ -125,6 +125,13 @@ custom_components/apstorage_ble/
 
 ## Release Notes
 
+### v0.0.37
+
+- Added a new `Battery Flow State` enum sensor with values `Charging`, `Discharging`, and `Holding`.
+- Implemented app-compatible battery flow mapping from `essStatus` (`0` -> `Discharging`, `1` -> `Charging`, otherwise `Holding`).
+- Added fallback battery flow detection from battery power/current when `essStatus` is not present.
+- `System State` now maps key numeric modes to labels (`1` -> `Self-consumption`, `3` -> `Advanced mode`).
+
 ### v0.0.36
 
 - Improved daily energy reliability for charging/discharging counters.

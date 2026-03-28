@@ -234,6 +234,35 @@ def _to_grid_frequency(value: Any) -> float | None:
     return None
 
 
+def _map_ess_status_to_battery_flow_state(value: Any) -> str:
+    """Map app essStatus to battery flow state label.
+
+    Decompiled app logic in SystemModeActivityByStorage maps:
+      essStatus == "0" -> discharge
+      essStatus == "1" -> charge
+      otherwise         -> standby
+    """
+    if str(value).strip() == "0":
+        return "Discharging"
+    if str(value).strip() == "1":
+        return "Charging"
+    return "Holding"
+
+
+def _derive_battery_flow_state(
+    battery_current: float | None,
+    battery_power: float | None,
+) -> str | None:
+    """Best-effort battery flow state when essStatus is absent."""
+    if battery_power is not None and abs(float(battery_power)) >= 5.0:
+        return "Charging" if float(battery_power) >= 0 else "Discharging"
+    if battery_current is not None and abs(float(battery_current)) >= 0.05:
+        return "Charging" if float(battery_current) >= 0 else "Discharging"
+    if battery_power is not None or battery_current is not None:
+        return "Holding"
+    return None
+
+
 def _normalize_pv_current(
     current: float | None,
     power: float | None,
@@ -395,6 +424,12 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
         state_raw = _deep_find_key(root, state_keys)
         if state_raw is not None:
             metrics.system_state = str(state_raw)
+            break
+
+    for root in roots:
+        ess_status_raw = _deep_find_key(root, {"essstatus", "ess_status"})
+        if ess_status_raw is not None:
+            metrics.battery_flow_state = _map_ess_status_to_battery_flow_state(ess_status_raw)
             break
 
     if metrics.system_state is None:
@@ -607,6 +642,12 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
     ):
         metrics.load_current = metrics.load_power / metrics.load_voltage
 
+    if metrics.battery_flow_state is None:
+        metrics.battery_flow_state = _derive_battery_flow_state(
+            metrics.battery_current,
+            metrics.battery_power,
+        )
+
     # Search for inverter temperature (APstorage field is typically T3).
     for root in roots:
         it_raw = _deep_find_key(root, {"it", "inverter_temperature", "invertertemp", "inverter_temp", "tinv", "t3"})
@@ -655,6 +696,8 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
         extracted_fields.append(f"lp={metrics.load_power:.0f}")
     if metrics.system_state is not None:
         extracted_fields.append(f"state={metrics.system_state}")
+    if metrics.battery_flow_state is not None:
+        extracted_fields.append(f"flow={metrics.battery_flow_state}")
     if extracted_fields:
         _LOGGER.debug("Extracted from local-data: %s", ", ".join(extracted_fields))
 
@@ -686,6 +729,7 @@ class SocMetrics:
     battery_discharged_energy: float | None = None   # kWh (total discharged)
     # System state
     system_state: str | None = None            # free-form state string
+    battery_flow_state: str | None = None      # Charging / Discharging / Holding
     # Grid metrics
     grid_voltage: float | None = None          # V
     grid_current: float | None = None          # A
