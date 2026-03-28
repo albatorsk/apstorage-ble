@@ -120,3 +120,14 @@ custom_components/apstorage_ble/
 └── translations/
     └── en.json
 ```
+
+---
+
+## Release Notes
+
+### v0.0.36
+
+- Improved daily energy reliability for charging/discharging counters.
+- Daily counters now support partial direct totals (charged or discharged) from firmware payloads.
+- Fallback integration now updates missing sides instead of skipping all daily energy updates.
+- Improved direction handling when battery current and power signs disagree.
