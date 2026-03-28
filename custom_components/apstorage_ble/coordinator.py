@@ -261,6 +261,13 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             power_sign = 1.0 if float(metrics.battery_power) >= 0 else -1.0
 
         state_sign: float | None = None
+        if getattr(metrics, "battery_flow_state", None) is not None:
+            flow_text = str(metrics.battery_flow_state).lower()
+            if flow_text.startswith("discharg"):
+                state_sign = -1.0
+            elif flow_text.startswith("charg"):
+                state_sign = 1.0
+
         if metrics.system_state is not None:
             state_text = str(metrics.system_state).lower()
             if any(token in state_text for token in ("discharge", "discharging", "battery discharge", "battery_discharge")):
@@ -391,7 +398,13 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 _LOGGER.info("[%s] SoC query returned no metrics", self._name)
             else:
                 store_dirty = self._rollover_daily_if_needed()
-                _LOGGER.debug("[%s] Received metrics: soc=%s, state=%s", self._name, metrics.battery_soc, metrics.system_state)
+                _LOGGER.debug(
+                    "[%s] Received metrics: soc=%s, state=%s, flow=%s",
+                    self._name,
+                    metrics.battery_soc,
+                    metrics.system_state,
+                    metrics.battery_flow_state,
+                )
                 if metrics.battery_soc is not None:
                     self.data.battery_soc = float(metrics.battery_soc)
                     _LOGGER.debug("[%s] Battery SoC: %.1f%%", self._name, self.data.battery_soc)
@@ -407,6 +420,8 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 if metrics.system_state is not None:
                     self.data.system_state = metrics.system_state
                     _LOGGER.debug("[%s] System state: %s", self._name, metrics.system_state)
+                if metrics.battery_flow_state is not None:
+                    self.data.battery_flow_state = metrics.battery_flow_state
                 if metrics.grid_voltage is not None:
                     self.data.grid_voltage = float(metrics.grid_voltage)
                 if metrics.grid_current is not None:

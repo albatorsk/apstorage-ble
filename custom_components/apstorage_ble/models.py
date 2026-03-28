@@ -47,3 +47,4 @@ class PCSData:
     # --- System ---
     inverter_temperature: float | None = None  # °C
     system_state: str | None = None            # free-form state string
+    battery_flow_state: str | None = None      # charging / discharging / holding
