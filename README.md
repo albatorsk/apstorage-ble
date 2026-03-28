@@ -125,6 +125,12 @@ custom_components/apstorage_ble/
 
 ## Release Notes
 
+### v0.1.0
+
+- Fixed `Battery Flow State` reporting being stuck on `Charging` for some devices.
+- Live battery telemetry (`battery_power`/`battery_current`) now takes precedence over `essStatus` when determining charge/discharge direction.
+- Added debug logging when `essStatus` and live telemetry disagree, to help firmware-specific diagnostics.
+
 ### v0.0.37
 
 - Added a new `Battery Flow State` enum sensor with values `Charging`, `Discharging`, and `Holding`.
