@@ -306,6 +306,8 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
     if not isinstance(parsed, dict):
         return metrics
 
+    ess_flow_state: str | None = None
+
     roots: list[Any] = []
     data_root = parsed.get("data")
     if isinstance(data_root, (dict, list)):
@@ -429,7 +431,7 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
     for root in roots:
         ess_status_raw = _deep_find_key(root, {"essstatus", "ess_status"})
         if ess_status_raw is not None:
-            metrics.battery_flow_state = _map_ess_status_to_battery_flow_state(ess_status_raw)
+            ess_flow_state = _map_ess_status_to_battery_flow_state(ess_status_raw)
             break
 
     if metrics.system_state is None:
@@ -642,11 +644,26 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
     ):
         metrics.load_current = metrics.load_power / metrics.load_voltage
 
-    if metrics.battery_flow_state is None:
-        metrics.battery_flow_state = _derive_battery_flow_state(
-            metrics.battery_current,
-            metrics.battery_power,
-        )
+    derived_flow_state = _derive_battery_flow_state(
+        metrics.battery_current,
+        metrics.battery_power,
+    )
+
+    # Prefer live flow inferred from instantaneous battery telemetry.
+    # essStatus can reflect control mode and may remain stale relative to
+    # actual charge/discharge direction.
+    if derived_flow_state in {"Charging", "Discharging"}:
+        if ess_flow_state is not None and ess_flow_state != derived_flow_state:
+            _LOGGER.debug(
+                "Battery flow mismatch (essStatus=%s, derived=%s); using derived flow",
+                ess_flow_state,
+                derived_flow_state,
+            )
+        metrics.battery_flow_state = derived_flow_state
+    elif ess_flow_state is not None:
+        metrics.battery_flow_state = ess_flow_state
+    else:
+        metrics.battery_flow_state = derived_flow_state
 
     # Search for inverter temperature (APstorage field is typically T3).
     for root in roots:
