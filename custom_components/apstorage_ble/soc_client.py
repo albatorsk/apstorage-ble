@@ -528,6 +528,7 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
                 "charge_energy",
                 "chargeenergy",
                 "todaychargeenergy",
+                "de1",
             },
         )
         ce = _to_float(ce_raw)
@@ -546,6 +547,7 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
                 "discharge_energy",
                 "dischargeenergy",
                 "todaydischargeenergy",
+                "de0",
             },
         )
         de = _to_float(de_raw)
@@ -686,7 +688,6 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
                 "fgrid",
                 "f_ac",
                 "fg",
-                "de1",
             },
         )
         gf = _to_grid_frequency(gf_raw)
@@ -758,7 +759,6 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
                 "pvcurrent",
                 "pvcur",
                 "ipv",
-                "de1",
             },
         )
         pv_i = _to_float(pv_i_raw)
