@@ -269,6 +269,23 @@ def _to_float(value: Any) -> float | None:
         return None
 
 
+def _last_nonzero_from_array(value: Any) -> float | None:
+    """Extract the last non-zero numeric value from a list of strings/numbers.
+
+    APstorage getDeviceLastDataLocal responses use array fields (e.g. SV0,
+    SP0, SI0) containing historical readings as string values.  The last
+    non-zero element represents the most recent valid measurement.
+    """
+    if not isinstance(value, list):
+        return None
+    result: float | None = None
+    for item in value:
+        num = _to_float(item)
+        if num is not None and num != 0.0:
+            result = num
+    return result
+
+
 def _to_celsius(value: Any) -> float | None:
     """Convert raw temperature-like values to Celsius.
 
@@ -457,7 +474,7 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
     for root in roots:
         bv_raw = _deep_find_key(
             root,
-            {"bv", "uvdc", "battery_voltage", "batteryvoltage", "bat_vol", "batvol", "de2"},
+            {"bv", "uvdc", "battery_voltage", "batteryvoltage", "bat_vol", "batvol"},
         )
         bv = _to_battery_voltage(bv_raw)
         if bv is not None:
@@ -468,7 +485,7 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
     for root in roots:
         bi_raw = _deep_find_key(
             root,
-            {"bi", "battery_current", "batterycurrent", "bat_cur", "batcur", "idc", "de3"},
+            {"bi", "battery_current", "batterycurrent", "bat_cur", "batcur", "idc"},
         )
         bi = _to_battery_current(bi_raw)
         if bi is not None:
@@ -490,7 +507,7 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
     for root in roots:
         bt_raw = _deep_find_key(
             root,
-            {"bt", "battery_temperature", "batterytemp", "battery_temp", "bat_temp", "tbat", "t2"},
+            {"bt", "battery_temperature", "batterytemp", "battery_temp", "bat_temp", "tbat"},
         )
         bt = _to_celsius(bt_raw)
         if bt is not None:
@@ -536,6 +553,14 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
             metrics.battery_discharged_energy = de
             break
 
+    # Search for buzzer setting (BUZ attribute).
+    for root in roots:
+        buz_raw = _deep_find_key(root, {"buz", "buzzer"})
+        buz = _to_float(buz_raw)
+        if buz is not None and buz in (0.0, 1.0):
+            metrics.buzzer = int(buz)
+            break
+
     # Search for system state
     state_keys = {
         "system_state",
@@ -578,6 +603,15 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
             metrics.grid_power = gp
             break
 
+    # SP0 is grid/storage power as an array of historical readings.
+    if metrics.grid_power is None:
+        for root in roots:
+            sp0_raw = _deep_find_key(root, {"sp0"})
+            gp = _last_nonzero_from_array(sp0_raw)
+            if gp is not None:
+                metrics.grid_power = gp
+                break
+
     # Search for grid voltage/current/frequency.
     for root in roots:
         gv_raw = _deep_find_key(
@@ -597,6 +631,17 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
             metrics.grid_voltage = gv
             break
 
+    # SV0 is grid voltage as an array of historical readings.
+    if metrics.grid_voltage is None:
+        for root in roots:
+            sv0_raw = _deep_find_key(root, {"sv0"})
+            gv = _last_nonzero_from_array(sv0_raw)
+            if gv is not None:
+                gv = _to_grid_voltage(gv)
+                if gv is not None:
+                    metrics.grid_voltage = gv
+                    break
+
     for root in roots:
         gc_raw = _deep_find_key(
             root,
@@ -613,6 +658,17 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
         if gc is not None:
             metrics.grid_current = gc
             break
+
+    # SI0 is grid current as an array of historical readings.
+    if metrics.grid_current is None:
+        for root in roots:
+            si0_raw = _deep_find_key(root, {"si0"})
+            gc = _last_nonzero_from_array(si0_raw)
+            if gc is not None:
+                gc = _to_grid_current(gc)
+                if gc is not None:
+                    metrics.grid_current = gc
+                    break
 
     for root in roots:
         gf_raw = _deep_find_key(
@@ -686,7 +742,6 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
                 "pv_volt",
                 "pvvol",
                 "vpv",
-                "de2",
             },
         )
         pv_v = _to_float(pv_v_raw)
@@ -810,9 +865,47 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
     else:
         metrics.battery_flow_state = derived_flow_state
 
+    # Search for daily produced energy (DE2) and daily consumed energy (DE3).
+    for root in roots:
+        de2_raw = _deep_find_key(root, {"de2", "daily_produced_energy"})
+        de2 = _to_float(de2_raw)
+        if de2 is not None:
+            metrics.daily_produced_energy = de2
+            break
+
+    for root in roots:
+        de3_raw = _deep_find_key(root, {"de3", "daily_consumed_energy"})
+        de3 = _to_float(de3_raw)
+        if de3 is not None:
+            metrics.daily_consumed_energy = de3
+            break
+
+    # Search for CO2 reduction.
+    for root in roots:
+        co2_raw = _deep_find_key(root, {"co2", "co2_reduction"})
+        co2 = _to_float(co2_raw)
+        if co2 is not None:
+            metrics.co2_reduction = co2
+            break
+
+    # Search for total produced energy (T2) and total consumed energy (T3).
+    for root in roots:
+        t2_raw = _deep_find_key(root, {"t2", "total_produced"})
+        t2 = _to_float(t2_raw)
+        if t2 is not None:
+            metrics.total_produced = t2
+            break
+
+    for root in roots:
+        t3_raw = _deep_find_key(root, {"t3", "total_consumed"})
+        t3 = _to_float(t3_raw)
+        if t3 is not None:
+            metrics.total_consumed = t3
+            break
+
     # Search for inverter temperature (APstorage field is typically T3).
     for root in roots:
-        it_raw = _deep_find_key(root, {"it", "inverter_temperature", "invertertemp", "inverter_temp", "tinv", "t3"})
+        it_raw = _deep_find_key(root, {"it", "inverter_temperature", "invertertemp", "inverter_temp", "tinv"})
         it = _to_celsius(it_raw)
         if it is not None:
             metrics.inverter_temperature = it
@@ -836,6 +929,10 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
         extracted_fields.append(f"ce={metrics.battery_charged_energy:.3f}")
     if metrics.battery_discharged_energy is not None:
         extracted_fields.append(f"de={metrics.battery_discharged_energy:.3f}")
+    if metrics.daily_produced_energy is not None:
+        extracted_fields.append(f"de2={metrics.daily_produced_energy:.3f}")
+    if metrics.daily_consumed_energy is not None:
+        extracted_fields.append(f"de3={metrics.daily_consumed_energy:.3f}")
     if metrics.grid_power is not None:
         extracted_fields.append(f"gp={metrics.grid_power:.0f}")
     if metrics.grid_voltage is not None:
@@ -860,6 +957,14 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
         extracted_fields.append(f"state={metrics.system_state}")
     if metrics.battery_flow_state is not None:
         extracted_fields.append(f"flow={metrics.battery_flow_state}")
+    if metrics.buzzer is not None:
+        extracted_fields.append(f"buz={metrics.buzzer}")
+    if metrics.co2_reduction is not None:
+        extracted_fields.append(f"co2={metrics.co2_reduction:.2f}")
+    if metrics.total_produced is not None:
+        extracted_fields.append(f"t2={metrics.total_produced:.3f}")
+    if metrics.total_consumed is not None:
+        extracted_fields.append(f"t3={metrics.total_consumed:.3f}")
     if extracted_fields:
         _LOGGER.debug("Extracted from local-data: %s", ", ".join(extracted_fields))
 
@@ -889,9 +994,15 @@ class SocMetrics:
     battery_temperature: float | None = None   # °C
     battery_charged_energy: float | None = None      # kWh (total charged)
     battery_discharged_energy: float | None = None   # kWh (total discharged)
+    daily_produced_energy: float | None = None        # kWh (DE2)
+    daily_consumed_energy: float | None = None        # kWh (DE3)
     # System state
     system_state: str | None = None            # free-form state string
     battery_flow_state: str | None = None      # Charging / Discharging / Holding
+    buzzer: int | None = None                  # 0=Silent, 1=Normal
+    co2_reduction: float | None = None            # kg
+    total_produced: float | None = None           # kWh (T2)
+    total_consumed: float | None = None           # kWh (T3)
     # Grid metrics
     grid_voltage: float | None = None          # V
     grid_current: float | None = None          # A

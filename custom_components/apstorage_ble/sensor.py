@@ -22,6 +22,7 @@ from homeassistant.const import (
     UnitOfFrequency,
     UnitOfPower,
     UnitOfTemperature,
+    UnitOfMass,
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
@@ -39,6 +40,11 @@ _LOGGER = logging.getLogger(__name__)
 SYSTEM_STATE_LABELS: dict[str, str] = {
     "1": "Self-consumption",
     "3": "Advanced mode",
+}
+
+BUZZER_LABELS: dict[int, str] = {
+    0: "Silent",
+    1: "Normal",
 }
 
 
@@ -118,6 +124,24 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=2,
         value_fn=lambda d: d.battery_discharged_energy,
+    ),
+    APstorageSensorDescription(
+        key="daily_produced_energy",
+        name="Daily Produced Energy",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=2,
+        value_fn=lambda d: d.daily_produced_energy,
+    ),
+    APstorageSensorDescription(
+        key="daily_consumed_energy",
+        name="Daily Consumed Energy",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=2,
+        value_fn=lambda d: d.daily_consumed_energy,
     ),
     # --- Grid ---
     APstorageSensorDescription(
@@ -233,6 +257,41 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         state_class=None,
         options=["Charging", "Discharging", "Holding"],
         value_fn=lambda d: d.battery_flow_state,
+    ),
+    APstorageSensorDescription(
+        key="buzzer",
+        name="Buzzer",
+        device_class=SensorDeviceClass.ENUM,
+        state_class=None,
+        options=["Silent", "Normal"],
+        value_fn=lambda d: BUZZER_LABELS.get(d.buzzer) if d.buzzer is not None else None,
+    ),
+    APstorageSensorDescription(
+        key="co2_reduction",
+        name="CO2 Reduction",
+        native_unit_of_measurement=UnitOfMass.KILOGRAMS,
+        device_class=SensorDeviceClass.WEIGHT,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=2,
+        value_fn=lambda d: d.co2_reduction,
+    ),
+    APstorageSensorDescription(
+        key="total_produced",
+        name="Total Produced",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        suggested_display_precision=2,
+        value_fn=lambda d: d.total_produced,
+    ),
+    APstorageSensorDescription(
+        key="total_consumed",
+        name="Total Consumed",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        suggested_display_precision=2,
+        value_fn=lambda d: d.total_consumed,
     ),
 )
 
