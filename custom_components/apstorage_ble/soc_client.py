@@ -683,16 +683,12 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
             metrics.grid_current = gc
             break
 
-    # SI0 is grid current as an array of historical readings.
-    if metrics.grid_current is None:
-        for root in roots:
-            si0_raw = _deep_find_key(root, {"si0"})
-            gc = _last_nonzero_from_array(si0_raw)
-            if gc is not None:
-                gc = _to_grid_current(gc)
-                if gc is not None:
-                    metrics.grid_current = gc
-                    break
+    # Do not use P5 for grid current. If not found, always derive from grid power / 230.
+
+
+    # If grid current is still None, derive from grid power / 230
+    if metrics.grid_current is None and metrics.grid_power is not None:
+        metrics.grid_current = metrics.grid_power / 230.0
 
     for root in roots:
         gf_raw = _deep_find_key(
