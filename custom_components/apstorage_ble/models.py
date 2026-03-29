@@ -27,8 +27,7 @@ class PCSData:
     battery_temperature: float | None = None  # °C
     battery_charged_energy: float | None = None      # kWh (total charged)
     battery_discharged_energy: float | None = None   # kWh (total discharged)
-    daily_produced_energy: float | None = None        # kWh (DE2)
-    daily_consumed_energy: float | None = None        # kWh (DE3)
+    pv_energy_produced: float | None = None           # kWh (DE2)
 
     # --- Grid ---
     grid_voltage: float | None = None         # V
@@ -54,3 +53,4 @@ class PCSData:
     co2_reduction: float | None = None            # kg
     total_produced: float | None = None           # kWh (T2)
     total_consumed: float | None = None           # kWh (T3)
+    total_consumed_daily: float | None = None     # kWh (DE3)

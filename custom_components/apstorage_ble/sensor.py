@@ -126,22 +126,13 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         value_fn=lambda d: d.battery_discharged_energy,
     ),
     APstorageSensorDescription(
-        key="daily_produced_energy",
-        name="Daily Produced Energy",
+        key="pv_energy_produced",
+        name="Daily PV Energy Produced",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=2,
-        value_fn=lambda d: d.daily_produced_energy,
-    ),
-    APstorageSensorDescription(
-        key="daily_consumed_energy",
-        name="Daily Consumed Energy",
-        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=2,
-        value_fn=lambda d: d.daily_consumed_energy,
+        value_fn=lambda d: d.pv_energy_produced,
     ),
     # --- Grid ---
     APstorageSensorDescription(
@@ -292,6 +283,15 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         state_class=SensorStateClass.TOTAL_INCREASING,
         suggested_display_precision=2,
         value_fn=lambda d: d.total_consumed,
+    ),
+    APstorageSensorDescription(
+        key="total_consumed_daily",
+        name="Daily Total Consumed",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=2,
+        value_fn=lambda d: d.total_consumed_daily,
     ),
 )
 
