@@ -185,6 +185,80 @@ def _deep_find_grid_frequency_key(obj: Any) -> Any | None:
     return None
 
 
+def _deep_collect_numeric_items(
+    obj: Any,
+    *,
+    path_prefix: str = "",
+) -> list[tuple[str, float]]:
+    """Collect numeric leaf values from nested dict/list payloads.
+
+    Returns tuples of (path, value) where path is a dotted key path.
+    """
+    items: list[tuple[str, float]] = []
+
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            key_str = str(key)
+            path = f"{path_prefix}.{key_str}" if path_prefix else key_str
+            items.extend(_deep_collect_numeric_items(value, path_prefix=path))
+        return items
+
+    if isinstance(obj, list):
+        for idx, value in enumerate(obj):
+            path = f"{path_prefix}[{idx}]" if path_prefix else f"[{idx}]"
+            items.extend(_deep_collect_numeric_items(value, path_prefix=path))
+        return items
+
+    number = _to_float(obj)
+    if number is not None:
+        items.append((path_prefix, number))
+
+    return items
+
+
+def _infer_grid_frequency_from_numeric_fields(root: Any) -> float | None:
+    """Infer grid frequency from numeric fields when key names are opaque.
+
+    The decompiled app frequently represents frequency in tenths of Hz.
+    This heuristic scans numeric leaf values and tests common divisors,
+    selecting candidates that land close to 50 Hz (grid-standard prior).
+    """
+    numeric_items = _deep_collect_numeric_items(root)
+    if not numeric_items:
+        return None
+
+    best_hz: float | None = None
+    best_score = float("inf")
+    best_path: str | None = None
+
+    for path, value in numeric_items:
+        kl = path.lower()
+        # Skip likely non-grid-frequency fields to reduce false positives.
+        if any(token in kl for token in ("soc", "temp", "co2", "power", "current", "voltage", "energy")):
+            continue
+
+        for div in (1.0, 10.0, 100.0, 1000.0):
+            hz = value / div
+            if 49.0 <= hz <= 51.0:
+                score = abs(hz - 50.0)
+                # Prefer keys hinting at frequency/grid/ac when scores tie.
+                if any(token in kl for token in ("freq", "hz", "grid", "ac", "gf", "f")):
+                    score -= 0.01
+                if score < best_score:
+                    best_score = score
+                    best_hz = hz
+                    best_path = path
+
+    if best_hz is not None:
+        _LOGGER.debug(
+            "Inferred grid frequency %.2f Hz from numeric field '%s'",
+            best_hz,
+            best_path,
+        )
+
+    return best_hz
+
+
 def _to_float(value: Any) -> float | None:
     """Best-effort conversion to float."""
     if value is None:
@@ -232,6 +306,57 @@ def _to_grid_frequency(value: Any) -> float | None:
     if 400.0 <= freq <= 700.0:
         return freq / 10.0
 
+    return None
+
+
+def _to_grid_voltage(value: Any) -> float | None:
+    """Convert and validate grid voltage-like values.
+
+    Grid voltage should be within a plausible AC range; reject values that
+    look like counters/energies (e.g. single-digit kWh-like values).
+    """
+    volts = _to_float(value)
+    if volts is None:
+        return None
+    if 80.0 <= volts <= 300.0:
+        return volts
+    return None
+
+
+def _to_battery_voltage(value: Any) -> float | None:
+    """Convert and validate battery voltage-like values.
+
+    APstorage low-voltage battery packs are expected roughly in the 20-65 V
+    range depending on chemistry/state.
+    """
+    volts = _to_float(value)
+    if volts is None:
+        return None
+    if 20.0 <= volts <= 65.0:
+        return volts
+    return None
+
+
+def _to_battery_current(value: Any) -> float | None:
+    """Convert and validate battery current-like values."""
+    amps = _to_float(value)
+    if amps is None:
+        return None
+    if -300.0 <= amps <= 300.0:
+        return amps
+    return None
+
+
+def _to_grid_current(value: Any) -> float | None:
+    """Convert and validate grid current-like values.
+
+    Reject values outside plausible AC current range for this class of device.
+    """
+    amps = _to_float(value)
+    if amps is None:
+        return None
+    if -200.0 <= amps <= 200.0:
+        return amps
     return None
 
 
@@ -326,13 +451,13 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
             metrics.battery_soc = soc
             break
 
-    # Search for battery voltage (APstorage field: DE0-DE5 appear to be voltage/current)
+    # Search for battery voltage.
     for root in roots:
         bv_raw = _deep_find_key(
             root,
-            {"bv", "uvdc", "battery_voltage", "batteryvoltage", "bat_vol", "batvol", "de0"},
+            {"bv", "uvdc", "battery_voltage", "batteryvoltage", "bat_vol", "batvol"},
         )
-        bv = _to_float(bv_raw)
+        bv = _to_battery_voltage(bv_raw)
         if bv is not None:
             metrics.battery_voltage = bv
             break
@@ -341,9 +466,9 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
     for root in roots:
         bi_raw = _deep_find_key(
             root,
-            {"bi", "battery_current", "batterycurrent", "bat_cur", "batcur", "idc", "de3"},
+            {"bi", "battery_current", "batterycurrent", "bat_cur", "batcur", "idc"},
         )
-        bi = _to_float(bi_raw)
+        bi = _to_battery_current(bi_raw)
         if bi is not None:
             metrics.battery_current = bi
             break
@@ -463,10 +588,9 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
                 "dv1",
                 "uac",
                 "vac",
-                "de0",
             },
         )
-        gv = _to_float(gv_raw)
+        gv = _to_grid_voltage(gv_raw)
         if gv is not None:
             metrics.grid_voltage = gv
             break
@@ -481,10 +605,9 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
                 "grida",
                 "da1",
                 "iac",
-                "de3",
             },
         )
-        gc = _to_float(gc_raw)
+        gc = _to_grid_current(gc_raw)
         if gc is not None:
             metrics.grid_current = gc
             break
@@ -519,6 +642,13 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
             gf = _to_grid_frequency(gf_raw)
             if gf is not None:
                 metrics.grid_frequency = gf
+                break
+
+    if metrics.grid_frequency is None:
+        for root in roots:
+            inferred = _infer_grid_frequency_from_numeric_fields(root)
+            if inferred is not None:
+                metrics.grid_frequency = inferred
                 break
 
     if (
