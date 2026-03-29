@@ -125,6 +125,13 @@ custom_components/apstorage_ble/
 
 ## Release Notes
 
+### v0.1.3
+
+- Restored `Battery Voltage` and `Battery Current` on payload variants where these instantaneous values are reported via `DE2`/`DE3`, with plausibility validation.
+- Kept `Grid Voltage`/`Grid Current` protected from accumulator-like `DE*` mappings to prevent daily-reset/day-ramp misreads.
+- Added safe grid fallback behavior when explicit grid voltage/current are absent: nominal `230 V` fallback for voltage and derived current from `grid_power / grid_voltage`.
+- Aligned battery flow derivation and model documentation with APstorage sign convention (positive battery current/power = `Discharging`).
+
 ### v0.1.2
 
 - Fixed incorrect `Grid Voltage`, `Grid Current`, and `Battery Voltage` readings caused by accumulator-like fallback fields in some payloads.
