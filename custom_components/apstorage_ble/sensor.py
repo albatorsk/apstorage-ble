@@ -75,24 +75,6 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         value_fn=lambda d: d.battery_soc,
     ),
     APstorageSensorDescription(
-        key="battery_voltage",
-        name="Battery Voltage",
-        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
-        device_class=SensorDeviceClass.VOLTAGE,
-        state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=1,
-        value_fn=lambda d: d.battery_voltage,
-    ),
-    APstorageSensorDescription(
-        key="battery_current",
-        name="Battery Current",
-        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
-        device_class=SensorDeviceClass.CURRENT,
-        state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=1,
-        value_fn=lambda d: d.battery_current,
-    ),
-    APstorageSensorDescription(
         key="battery_power",
         name="Battery Discharging Power",
         native_unit_of_measurement=UnitOfPower.WATT,
@@ -107,15 +89,6 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda d: d.battery_charging_power,
-    ),
-    APstorageSensorDescription(
-        key="battery_temperature",
-        name="Battery Temperature",
-        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
-        device_class=SensorDeviceClass.TEMPERATURE,
-        state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=1,
-        value_fn=lambda d: d.battery_temperature,
     ),
     APstorageSensorDescription(
         key="battery_charged_energy",
@@ -173,24 +146,6 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
     ),
     # --- PV / Solar ---
     APstorageSensorDescription(
-        key="pv_voltage",
-        name="PV Voltage",
-        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
-        device_class=SensorDeviceClass.VOLTAGE,
-        state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=1,
-        value_fn=lambda d: d.pv_voltage,
-    ),
-    APstorageSensorDescription(
-        key="pv_current",
-        name="PV Current",
-        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
-        device_class=SensorDeviceClass.CURRENT,
-        state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=1,
-        value_fn=lambda d: d.pv_current,
-    ),
-    APstorageSensorDescription(
         key="pv_power",
         name="PV Power",
         native_unit_of_measurement=UnitOfPower.WATT,
@@ -226,15 +181,6 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         value_fn=lambda d: d.load_power,
     ),
     # --- System ---
-    APstorageSensorDescription(
-        key="inverter_temperature",
-        name="Inverter Temperature",
-        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
-        device_class=SensorDeviceClass.TEMPERATURE,
-        state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=1,
-        value_fn=lambda d: d.inverter_temperature,
-    ),
     APstorageSensorDescription(
         key="system_state",
         name="System State",
