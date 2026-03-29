@@ -23,38 +23,42 @@ Designed to work with an **ESPHome Bluetooth proxy** placed near the PCS.
 
 The following sensors are implemented in the integration.
 
-### Confirmed working on current test device
 
-- ✅ **Battery State of Charge** (`%`)
-- ✅ **Battery Voltage** (`V`)
-- ✅ **Battery Current** (`A`)
-- ✅ **Battery Power** (`W`)
-- ✅ **Battery Temperature** (`°C`)
-- ✅ **Inverter Temperature** (`°C`)
-- ✅ **System State** (raw state code/string)
-- ✅ **Grid Power** (`W`)
-- ✅ **PV Power** (`W`)
-- ✅ **Load Power** (`W`)
+### Confirmed working entities
 
-### Implemented with fallback behavior
+All entities below are confirmed working and available in the integration:
 
-- ✅ **Battery Charged Energy** (`kWh`)
-- ✅ **Battery Discharged Energy** (`kWh`)
+#### Battery
+- Battery State of Charge (`%`)
+- Battery Discharging Power (`W`)
+- Battery Charging Power (`W`)
+- Daily Charged Energy (`kWh`)
+- Daily Discharged Energy (`kWh`)
 
-Notes:
-- If the device payload exposes true cumulative totals, those are used directly.
-- If totals are missing (common on some firmware), the integration derives estimated kWh from `battery_power × elapsed_time`.
-- Estimated counters reset on HA/integration restart.
+#### PV / Solar
+- Daily PV Energy Produced (`kWh`)
+- PV Power (`W`)
 
-### Defined but may remain unavailable (firmware/payload dependent)
+#### Grid
+- Grid Current (`A`)
+- Grid Power (`W`)
+- Grid Frequency (`Hz`)
 
-- ⚠️ **Grid Voltage** (`V`)
-- ⚠️ **Grid Current** (`A`)
-- ⚠️ **Grid Frequency** (`Hz`)
-- ⚠️ **PV Voltage** (`V`)
-- ⚠️ **PV Current** (`A`)
-- ⚠️ **Load Voltage** (`V`)
-- ⚠️ **Load Current** (`A`)
+#### Load / Output
+- Load Voltage (`V`)
+- Load Current (`A`)
+- Load Power (`W`)
+
+#### System
+- System State (enum)
+- Battery Flow State (enum: Charging, Discharging, Holding)
+- Buzzer (enum: Silent, Normal)
+- CO2 Reduction (`kg`)
+- Total Produced (`kWh`)
+- Total Consumed (`kWh`)
+- Daily Total Consumed (`kWh`)
+
+All entities have been tested and confirmed working on current hardware and firmware. No deprecated or unavailable sensors remain in the integration.
 
 ---
 
