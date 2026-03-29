@@ -795,13 +795,7 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
         if pp is not None:
             metrics.pv_power = pp
             break
-    if metrics.pv_power is None:
-        for root in roots:
-            pp_raw = _deep_find_key(root, {"p5"})
-            pp = _to_float(pp_raw)
-            if pp is not None:
-                metrics.pv_power = pp
-                break
+    # Do not use p5 for PV Power (per user request)
     if metrics.pv_power is None:
         for root in roots:
             pp_raw = _deep_find_key(root, {"p4"})
