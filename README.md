@@ -125,6 +125,13 @@ custom_components/apstorage_ble/
 
 ## Release Notes
 
+### v0.1.2
+
+- Fixed incorrect `Grid Voltage`, `Grid Current`, and `Battery Voltage` readings caused by accumulator-like fallback fields in some payloads.
+- Hardened metric parsing with stricter plausibility checks for instantaneous voltage/current values.
+- Removed risky `de*` fallback mappings from affected instantaneous sensors to avoid midnight-reset/day-ramp behavior.
+- Added `scripts/get_grid_frequency.py` helper for direct BLE frequency checks and diagnostics.
+
 ### v0.1.1
 
 - Fixed `Battery Flow State` in Home Assistant to reflect live APstorage battery direction.
