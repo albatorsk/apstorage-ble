@@ -395,15 +395,29 @@ def _map_ess_status_to_battery_flow_state(value: Any) -> str:
 def _derive_battery_flow_state(
     battery_current: float | None,
     battery_power: float | None,
+    battery_charging_power: float | None = None,
 ) -> str | None:
     """Best-effort battery flow state when essStatus is absent."""
-    if battery_power is not None and abs(float(battery_power)) >= 5.0:
-        # APstorage convention: positive battery power means discharging.
-        return "Discharging" if float(battery_power) >= 0 else "Charging"
+    p0 = float(battery_power) if battery_power is not None else None
+    p1 = float(battery_charging_power) if battery_charging_power is not None else None
+
+    if p0 is not None and p1 is not None:
+        if p1 >= 5.0:
+            return "Charging"
+        if p0 >= 5.0:
+            return "Discharging"
+        return "Holding"
+
+    if p1 is not None:
+        return "Charging" if p1 >= 5.0 else "Holding"
+
+    if p0 is not None and abs(p0) >= 5.0:
+        return "Discharging" if p0 >= 0 else "Charging"
+
     if battery_current is not None and abs(float(battery_current)) >= 0.05:
-        # APstorage convention: positive battery current means discharging.
         return "Discharging" if float(battery_current) >= 0 else "Charging"
-    if battery_power is not None or battery_current is not None:
+
+    if p0 is not None or battery_current is not None:
         return "Holding"
     return None
 
@@ -501,6 +515,14 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
         bp = _to_float(bp_raw)
         if bp is not None:
             metrics.battery_power = bp
+            break
+
+    # Search for battery charging power (P1).
+    for root in roots:
+        bcp_raw = _deep_find_key(root, {"p1", "battery_charging_power"})
+        bcp = _to_float(bcp_raw)
+        if bcp is not None:
+            metrics.battery_charging_power = bcp
             break
 
     # Search for battery temperature (APstorage field is typically T2).
@@ -850,6 +872,7 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
     derived_flow_state = _derive_battery_flow_state(
         metrics.battery_current,
         metrics.battery_power,
+        metrics.battery_charging_power,
     )
 
     # Match EMA app behavior: prefer essStatus when present.
@@ -990,7 +1013,8 @@ class SocMetrics:
     battery_soc: float | None = None           # %  (0–100)
     battery_voltage: float | None = None       # V
     battery_current: float | None = None       # A
-    battery_power: float | None = None         # W
+    battery_power: float | None = None         # W  (P0)
+    battery_charging_power: float | None = None  # W  (P1)
     battery_temperature: float | None = None   # °C
     battery_charged_energy: float | None = None      # kWh (total charged)
     battery_discharged_energy: float | None = None   # kWh (total discharged)
