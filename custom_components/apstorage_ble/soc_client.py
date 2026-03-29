@@ -599,7 +599,7 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
 
     # Search for grid power (APstorage field: P1 appears to be grid power)
     for root in roots:
-        gp_raw = _deep_find_key(root, {"gp", "grid_power", "gridpow", "p1"})
+        gp_raw = _deep_find_key(root, {"gp", "grid_power", "gridpow", "p5"})
         gp = _to_float(gp_raw)
         if gp is not None:
             metrics.grid_power = gp
