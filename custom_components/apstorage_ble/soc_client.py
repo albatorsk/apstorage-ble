@@ -381,9 +381,11 @@ def _derive_battery_flow_state(
 ) -> str | None:
     """Best-effort battery flow state when essStatus is absent."""
     if battery_power is not None and abs(float(battery_power)) >= 5.0:
-        return "Charging" if float(battery_power) >= 0 else "Discharging"
+        # APstorage convention: positive battery power means discharging.
+        return "Discharging" if float(battery_power) >= 0 else "Charging"
     if battery_current is not None and abs(float(battery_current)) >= 0.05:
-        return "Charging" if float(battery_current) >= 0 else "Discharging"
+        # APstorage convention: positive battery current means discharging.
+        return "Discharging" if float(battery_current) >= 0 else "Charging"
     if battery_power is not None or battery_current is not None:
         return "Holding"
     return None
@@ -455,7 +457,7 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
     for root in roots:
         bv_raw = _deep_find_key(
             root,
-            {"bv", "uvdc", "battery_voltage", "batteryvoltage", "bat_vol", "batvol"},
+            {"bv", "uvdc", "battery_voltage", "batteryvoltage", "bat_vol", "batvol", "de2"},
         )
         bv = _to_battery_voltage(bv_raw)
         if bv is not None:
@@ -466,7 +468,7 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
     for root in roots:
         bi_raw = _deep_find_key(
             root,
-            {"bi", "battery_current", "batterycurrent", "bat_cur", "batcur", "idc"},
+            {"bi", "battery_current", "batterycurrent", "bat_cur", "batcur", "idc", "de3"},
         )
         bi = _to_battery_current(bi_raw)
         if bi is not None:
@@ -657,6 +659,21 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
         and metrics.grid_voltage not in (None, 0.0)
     ):
         metrics.grid_current = metrics.grid_power / metrics.grid_voltage
+
+    # If no explicit grid voltage is exposed in this payload variant,
+    # use a nominal single-phase fallback so current can still be derived.
+    if metrics.grid_voltage is None and metrics.grid_power is not None:
+        metrics.grid_voltage = 230.0
+
+    if (
+        metrics.grid_current is None
+        and metrics.grid_power is not None
+        and metrics.grid_voltage not in (None, 0.0)
+    ):
+        metrics.grid_current = metrics.grid_power / metrics.grid_voltage
+
+    if metrics.grid_current is None and metrics.grid_power is not None and abs(metrics.grid_power) < 5.0:
+        metrics.grid_current = 0.0
 
     # Search for PV voltage/current.
     for root in roots:
