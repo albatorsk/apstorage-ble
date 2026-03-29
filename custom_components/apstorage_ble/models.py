@@ -12,9 +12,9 @@ class PCSData:
     A value of None means the field has not yet been decoded from the device
     (either not yet received or the parser does not handle it yet).
 
-    Sign conventions (once the protocol is decoded):
-      battery_current  > 0  →  charging
-                       < 0  →  discharging
+    Sign conventions (APstorage):
+      battery_current  > 0  →  discharging
+                       < 0  →  charging
       grid_power       > 0  →  importing from grid
                        < 0  →  exporting to grid
     """
