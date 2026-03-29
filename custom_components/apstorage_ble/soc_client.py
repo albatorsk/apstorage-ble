@@ -865,19 +865,12 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
     else:
         metrics.battery_flow_state = derived_flow_state
 
-    # Search for daily produced energy (DE2) and daily consumed energy (DE3).
+    # Search for daily produced energy (DE2).
     for root in roots:
-        de2_raw = _deep_find_key(root, {"de2", "daily_produced_energy"})
+        de2_raw = _deep_find_key(root, {"de2", "daily_produced_energy", "pv_energy_produced"})
         de2 = _to_float(de2_raw)
         if de2 is not None:
-            metrics.daily_produced_energy = de2
-            break
-
-    for root in roots:
-        de3_raw = _deep_find_key(root, {"de3", "daily_consumed_energy"})
-        de3 = _to_float(de3_raw)
-        if de3 is not None:
-            metrics.daily_consumed_energy = de3
+            metrics.pv_energy_produced = de2
             break
 
     # Search for CO2 reduction.
@@ -888,7 +881,7 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
             metrics.co2_reduction = co2
             break
 
-    # Search for total produced energy (T2) and total consumed energy (T3).
+    # Search for total produced energy (T2) and total consumed energy (T3/DE3).
     for root in roots:
         t2_raw = _deep_find_key(root, {"t2", "total_produced"})
         t2 = _to_float(t2_raw)
@@ -901,6 +894,13 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
         t3 = _to_float(t3_raw)
         if t3 is not None:
             metrics.total_consumed = t3
+            break
+
+    for root in roots:
+        de3_raw = _deep_find_key(root, {"de3", "total_consumed_daily"})
+        de3 = _to_float(de3_raw)
+        if de3 is not None:
+            metrics.total_consumed_daily = de3
             break
 
     # Search for inverter temperature (APstorage field is typically T3).
@@ -929,10 +929,8 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
         extracted_fields.append(f"ce={metrics.battery_charged_energy:.3f}")
     if metrics.battery_discharged_energy is not None:
         extracted_fields.append(f"de={metrics.battery_discharged_energy:.3f}")
-    if metrics.daily_produced_energy is not None:
-        extracted_fields.append(f"de2={metrics.daily_produced_energy:.3f}")
-    if metrics.daily_consumed_energy is not None:
-        extracted_fields.append(f"de3={metrics.daily_consumed_energy:.3f}")
+    if metrics.pv_energy_produced is not None:
+        extracted_fields.append(f"de2={metrics.pv_energy_produced:.3f}")
     if metrics.grid_power is not None:
         extracted_fields.append(f"gp={metrics.grid_power:.0f}")
     if metrics.grid_voltage is not None:
@@ -965,6 +963,8 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
         extracted_fields.append(f"t2={metrics.total_produced:.3f}")
     if metrics.total_consumed is not None:
         extracted_fields.append(f"t3={metrics.total_consumed:.3f}")
+    if metrics.total_consumed_daily is not None:
+        extracted_fields.append(f"de3={metrics.total_consumed_daily:.3f}")
     if extracted_fields:
         _LOGGER.debug("Extracted from local-data: %s", ", ".join(extracted_fields))
 
@@ -994,8 +994,7 @@ class SocMetrics:
     battery_temperature: float | None = None   # °C
     battery_charged_energy: float | None = None      # kWh (total charged)
     battery_discharged_energy: float | None = None   # kWh (total discharged)
-    daily_produced_energy: float | None = None        # kWh (DE2)
-    daily_consumed_energy: float | None = None        # kWh (DE3)
+    pv_energy_produced: float | None = None           # kWh (DE2)
     # System state
     system_state: str | None = None            # free-form state string
     battery_flow_state: str | None = None      # Charging / Discharging / Holding
@@ -1003,6 +1002,7 @@ class SocMetrics:
     co2_reduction: float | None = None            # kg
     total_produced: float | None = None           # kWh (T2)
     total_consumed: float | None = None           # kWh (T3)
+    total_consumed_daily: float | None = None     # kWh (DE3)
     # Grid metrics
     grid_voltage: float | None = None          # V
     grid_current: float | None = None          # A

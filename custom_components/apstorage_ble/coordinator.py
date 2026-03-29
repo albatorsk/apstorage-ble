@@ -223,10 +223,10 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     self.data.total_produced = float(metrics.total_produced)
                 if metrics.total_consumed is not None:
                     self.data.total_consumed = float(metrics.total_consumed)
-                if metrics.daily_produced_energy is not None:
-                    self.data.daily_produced_energy = float(metrics.daily_produced_energy)
-                if metrics.daily_consumed_energy is not None:
-                    self.data.daily_consumed_energy = float(metrics.daily_consumed_energy)
+                if metrics.total_consumed_daily is not None:
+                    self.data.total_consumed_daily = float(metrics.total_consumed_daily)
+                if metrics.pv_energy_produced is not None:
+                    self.data.pv_energy_produced = float(metrics.pv_energy_produced)
                 if metrics.battery_charged_energy is not None:
                     self.data.battery_charged_energy = float(metrics.battery_charged_energy)
                 if metrics.battery_discharged_energy is not None:
