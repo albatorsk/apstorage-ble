@@ -24,9 +24,8 @@ Designed to work with an **ESPHome Bluetooth proxy** placed near the PCS.
 The following sensors are implemented in the integration.
 
 
-### Confirmed working entities
 
-All entities below are confirmed working and available in the integration:
+### Entities
 
 #### Battery
 - Battery State of Charge (`%`)
@@ -57,8 +56,6 @@ All entities below are confirmed working and available in the integration:
 - Total Produced (`kWh`)
 - Total Consumed (`kWh`)
 - Daily Total Consumed (`kWh`)
-
-All entities have been tested and confirmed working on current hardware and firmware. No deprecated or unavailable sensors remain in the integration.
 
 ---
 
@@ -127,44 +124,3 @@ custom_components/apstorage_ble/
 
 ---
 
-## Release Notes
-
-### v0.1.3
-
-- Restored `Battery Voltage` and `Battery Current` on payload variants where these instantaneous values are reported via `DE2`/`DE3`, with plausibility validation.
-- Kept `Grid Voltage`/`Grid Current` protected from accumulator-like `DE*` mappings to prevent daily-reset/day-ramp misreads.
-- Added safe grid fallback behavior when explicit grid voltage/current are absent: nominal `230 V` fallback for voltage and derived current from `grid_power / grid_voltage`.
-- Aligned battery flow derivation and model documentation with APstorage sign convention (positive battery current/power = `Discharging`).
-
-### v0.1.2
-
-- Fixed incorrect `Grid Voltage`, `Grid Current`, and `Battery Voltage` readings caused by accumulator-like fallback fields in some payloads.
-- Hardened metric parsing with stricter plausibility checks for instantaneous voltage/current values.
-- Removed risky `de*` fallback mappings from affected instantaneous sensors to avoid midnight-reset/day-ramp behavior.
-- Added `scripts/get_grid_frequency.py` helper for direct BLE frequency checks and diagnostics.
-
-### v0.1.1
-
-- Fixed `Battery Flow State` in Home Assistant to reflect live APstorage battery direction.
-- Corrected APstorage sign convention handling: positive battery power/current now maps to `Discharging`, negative maps to `Charging`.
-- Updated coordinator flow-state resolution to prioritize live telemetry so the entity no longer stays on `Charging` while discharging.
-
-### v0.1.0
-
-- Fixed `Battery Flow State` reporting being stuck on `Charging` for some devices.
-- Live battery telemetry (`battery_power`/`battery_current`) now takes precedence over `essStatus` when determining charge/discharge direction.
-- Added debug logging when `essStatus` and live telemetry disagree, to help firmware-specific diagnostics.
-
-### v0.0.37
-
-- Added a new `Battery Flow State` enum sensor with values `Charging`, `Discharging`, and `Holding`.
-- Implemented app-compatible battery flow mapping from `essStatus` (`0` -> `Discharging`, `1` -> `Charging`, otherwise `Holding`).
-- Added fallback battery flow detection from battery power/current when `essStatus` is not present.
-- `System State` now maps key numeric modes to labels (`1` -> `Self-consumption`, `3` -> `Advanced mode`).
-
-### v0.0.36
-
-- Improved daily energy reliability for charging/discharging counters.
-- Daily counters now support partial direct totals (charged or discharged) from firmware payloads.
-- Fallback integration now updates missing sides instead of skipping all daily energy updates.
-- Improved direction handling when battery current and power signs disagree.
