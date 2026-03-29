@@ -23,7 +23,8 @@ class PCSData:
     battery_soc: float | None = None          # %  (0–100)
     battery_voltage: float | None = None      # V
     battery_current: float | None = None      # A
-    battery_power: float | None = None        # W  (derived or direct)
+    battery_power: float | None = None        # W  (derived or direct, P0)
+    battery_charging_power: float | None = None  # W  (P1)
     battery_temperature: float | None = None  # °C
     battery_charged_energy: float | None = None      # kWh (total charged)
     battery_discharged_energy: float | None = None   # kWh (total discharged)

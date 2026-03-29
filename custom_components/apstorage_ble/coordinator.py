@@ -68,16 +68,30 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         """Resolve user-facing battery flow state from live telemetry.
 
         Priority:
-          1. Instantaneous battery power/current with APstorage sign convention
-          2. Parsed text state fallback from query metrics
+          1. Battery charging power (P1) vs discharging power (P0)
+          2. Instantaneous battery current sign convention
+          3. Parsed text state fallback from query metrics
         """
-        if metrics.battery_power is not None and abs(float(metrics.battery_power)) >= 5.0:
-            return "Discharging" if float(metrics.battery_power) >= 0 else "Charging"
+        p0 = float(metrics.battery_power) if metrics.battery_power is not None else None
+        p1 = float(metrics.battery_charging_power) if getattr(metrics, "battery_charging_power", None) is not None else None
+
+        if p0 is not None and p1 is not None:
+            if p1 >= 5.0:
+                return "Charging"
+            if p0 >= 5.0:
+                return "Discharging"
+            return "Holding"
+
+        if p1 is not None:
+            return "Charging" if p1 >= 5.0 else "Holding"
+
+        if p0 is not None and abs(p0) >= 5.0:
+            return "Discharging" if p0 >= 0 else "Charging"
 
         if metrics.battery_current is not None and abs(float(metrics.battery_current)) >= 0.05:
             return "Discharging" if float(metrics.battery_current) >= 0 else "Charging"
 
-        if metrics.battery_power is not None or metrics.battery_current is not None:
+        if p0 is not None or metrics.battery_current is not None:
             return "Holding"
 
         if getattr(metrics, "battery_flow_state", None) is not None:
@@ -185,6 +199,8 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 if metrics.battery_power is not None:
                     self.data.battery_power = float(metrics.battery_power)
                     _LOGGER.debug("[%s] Battery Power: %.1f W", self._name, self.data.battery_power)
+                if metrics.battery_charging_power is not None:
+                    self.data.battery_charging_power = float(metrics.battery_charging_power)
                 if metrics.battery_temperature is not None:
                     self.data.battery_temperature = float(metrics.battery_temperature)
                 if metrics.system_state is not None:
