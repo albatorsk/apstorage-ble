@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import logging
 import re
@@ -649,18 +650,15 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
         metrics.battery_power,
     )
 
-    # Prefer live flow inferred from instantaneous battery telemetry.
-    # essStatus can reflect control mode and may remain stale relative to
-    # actual charge/discharge direction.
-    if derived_flow_state in {"Charging", "Discharging"}:
-        if ess_flow_state is not None and ess_flow_state != derived_flow_state:
+    # Match EMA app behavior: prefer essStatus when present.
+    # Fallback to derived power/current direction only when essStatus is absent.
+    if ess_flow_state is not None:
+        if derived_flow_state in {"Charging", "Discharging"} and derived_flow_state != ess_flow_state:
             _LOGGER.debug(
-                "Battery flow mismatch (essStatus=%s, derived=%s); using derived flow",
+                "Battery flow mismatch (essStatus=%s, derived=%s); using essStatus",
                 ess_flow_state,
                 derived_flow_state,
             )
-        metrics.battery_flow_state = derived_flow_state
-    elif ess_flow_state is not None:
         metrics.battery_flow_state = ess_flow_state
     else:
         metrics.battery_flow_state = derived_flow_state
@@ -1049,6 +1047,31 @@ class APstorageSocClient:
         self._frame_cursor = 0
         self._preferred_storage_id: str | None = None
 
+    async def _ensure_services_ready(self, client: BleakClient) -> None:
+        """Ensure GATT service discovery has completed before I/O.
+
+        Some backend/proxy combinations connect successfully but defer
+        discovery until explicitly requested, which causes first read/write
+        calls to fail with "Service Discovery has not been performed yet".
+        """
+        try:
+            _ = client.services
+            return
+        except Exception:  # noqa: BLE001
+            pass
+
+        backend = getattr(client, "_backend", None)
+        get_services = getattr(backend, "_get_services", None)
+        if callable(get_services):
+            params = inspect.signature(get_services).parameters
+            kwargs: dict[str, object] = {}
+            if "dangerous_use_bleak_cache" in params:
+                kwargs["dangerous_use_bleak_cache"] = False
+            await get_services(**kwargs)
+
+        # Re-check and raise the backend error if services are still unavailable.
+        _ = client.services
+
     async def async_query_metrics(
         self,
         ble_device: BLEDevice,
@@ -1071,6 +1094,30 @@ class APstorageSocClient:
                     max_attempts=3,
                     use_services_cache=True,
                 )
+
+                # Ensure service discovery is available before first GATT call.
+                try:
+                    await self._ensure_services_ready(client)
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.debug(
+                        "Initial service discovery failed for %s (%s); retrying without cache",
+                        ble_device.address,
+                        err,
+                    )
+                    try:
+                        await client.disconnect()
+                    except Exception:  # noqa: BLE001
+                        pass
+
+                    client = await establish_connection(
+                        BleakClientWithServiceCache,
+                        ble_device,
+                        ble_device.address,
+                        max_attempts=3,
+                        use_services_cache=False,
+                    )
+                    await self._ensure_services_ready(client)
+
                 _LOGGER.debug("Connected to %s, querying metrics", ble_device.address)
                 result = await self._query_soc_once(
                     client,

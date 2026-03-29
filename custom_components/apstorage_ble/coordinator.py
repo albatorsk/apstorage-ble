@@ -254,11 +254,13 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         """
         current_sign: float | None = None
         if metrics.battery_current is not None and abs(float(metrics.battery_current)) >= 0.05:
-            current_sign = 1.0 if float(metrics.battery_current) >= 0 else -1.0
+            # APstorage convention: positive current indicates discharging.
+            current_sign = -1.0 if float(metrics.battery_current) >= 0 else 1.0
 
         power_sign: float | None = None
         if metrics.battery_power is not None and abs(float(metrics.battery_power)) >= 5.0:
-            power_sign = 1.0 if float(metrics.battery_power) >= 0 else -1.0
+            # APstorage convention: positive power indicates discharging.
+            power_sign = -1.0 if float(metrics.battery_power) >= 0 else 1.0
 
         state_sign: float | None = None
         if getattr(metrics, "battery_flow_state", None) is not None:
@@ -315,6 +317,33 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             return current_sign
         if power_sign is not None:
             return power_sign
+        return None
+
+    def _resolve_battery_flow_state(self, metrics) -> str | None:
+        """Resolve user-facing battery flow state from live telemetry.
+
+        Priority:
+          1. Instantaneous battery power/current with APstorage sign convention
+          2. Parsed text state fallback from query metrics
+        """
+        if metrics.battery_power is not None and abs(float(metrics.battery_power)) >= 5.0:
+            return "Discharging" if float(metrics.battery_power) >= 0 else "Charging"
+
+        if metrics.battery_current is not None and abs(float(metrics.battery_current)) >= 0.05:
+            return "Discharging" if float(metrics.battery_current) >= 0 else "Charging"
+
+        if metrics.battery_power is not None or metrics.battery_current is not None:
+            return "Holding"
+
+        if getattr(metrics, "battery_flow_state", None) is not None:
+            flow_text = str(metrics.battery_flow_state).strip().lower()
+            if flow_text.startswith("discharg"):
+                return "Discharging"
+            if flow_text.startswith("charg"):
+                return "Charging"
+            if flow_text.startswith("hold") or flow_text.startswith("stand"):
+                return "Holding"
+
         return None
 
     # ------------------------------------------------------------------
@@ -420,8 +449,9 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 if metrics.system_state is not None:
                     self.data.system_state = metrics.system_state
                     _LOGGER.debug("[%s] System state: %s", self._name, metrics.system_state)
-                if metrics.battery_flow_state is not None:
-                    self.data.battery_flow_state = metrics.battery_flow_state
+                resolved_flow_state = self._resolve_battery_flow_state(metrics)
+                if resolved_flow_state is not None:
+                    self.data.battery_flow_state = resolved_flow_state
                 if metrics.grid_voltage is not None:
                     self.data.grid_voltage = float(metrics.grid_voltage)
                 if metrics.grid_current is not None:
