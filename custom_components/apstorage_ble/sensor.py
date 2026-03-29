@@ -1,6 +1,7 @@
 """Sensor platform for the APstorage BLE integration."""
 from __future__ import annotations
 
+from datetime import datetime
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -29,6 +30,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, MANUFACTURER, MODEL
 from .coordinator import APstorageCoordinator
@@ -135,15 +137,6 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         value_fn=lambda d: d.pv_energy_produced,
     ),
     # --- Grid ---
-    APstorageSensorDescription(
-        key="grid_voltage",
-        name="Grid Voltage",
-        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
-        device_class=SensorDeviceClass.VOLTAGE,
-        state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=1,
-        value_fn=lambda d: d.grid_voltage,
-    ),
     APstorageSensorDescription(
         key="grid_current",
         name="Grid Current",
@@ -375,6 +368,13 @@ class APstorageSensor(
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
         """Return optional extra attributes for selected sensors."""
+        if self.entity_description.key in {
+            "battery_charged_energy",
+            "battery_discharged_energy",
+        }:
+            now = dt_util.now()
+            last_reset = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            return {"last_reset": last_reset.isoformat()}
         return None
 
     @callback
