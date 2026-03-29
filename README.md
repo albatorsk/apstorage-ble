@@ -125,6 +125,12 @@ custom_components/apstorage_ble/
 
 ## Release Notes
 
+### v0.1.1
+
+- Fixed `Battery Flow State` in Home Assistant to reflect live APstorage battery direction.
+- Corrected APstorage sign convention handling: positive battery power/current now maps to `Discharging`, negative maps to `Charging`.
+- Updated coordinator flow-state resolution to prioritize live telemetry so the entity no longer stays on `Charging` while discharging.
+
 ### v0.1.0
 
 - Fixed `Battery Flow State` reporting being stuck on `Charging` for some devices.
