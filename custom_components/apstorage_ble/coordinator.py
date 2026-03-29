@@ -474,6 +474,18 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     self.data.load_power = float(metrics.load_power)
                 if metrics.inverter_temperature is not None:
                     self.data.inverter_temperature = float(metrics.inverter_temperature)
+                if metrics.buzzer is not None:
+                    self.data.buzzer = metrics.buzzer
+                if metrics.co2_reduction is not None:
+                    self.data.co2_reduction = float(metrics.co2_reduction)
+                if metrics.total_produced is not None:
+                    self.data.total_produced = float(metrics.total_produced)
+                if metrics.total_consumed is not None:
+                    self.data.total_consumed = float(metrics.total_consumed)
+                if metrics.daily_produced_energy is not None:
+                    self.data.daily_produced_energy = float(metrics.daily_produced_energy)
+                if metrics.daily_consumed_energy is not None:
+                    self.data.daily_consumed_energy = float(metrics.daily_consumed_energy)
 
                 # Daily energy counters: prefer direct cumulative totals when
                 # available, otherwise integrate battery power over time.

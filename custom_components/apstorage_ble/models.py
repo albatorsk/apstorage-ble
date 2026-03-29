@@ -27,6 +27,8 @@ class PCSData:
     battery_temperature: float | None = None  # °C
     battery_charged_energy: float | None = None      # kWh (total charged)
     battery_discharged_energy: float | None = None   # kWh (total discharged)
+    daily_produced_energy: float | None = None        # kWh (DE2)
+    daily_consumed_energy: float | None = None        # kWh (DE3)
 
     # --- Grid ---
     grid_voltage: float | None = None         # V
@@ -48,3 +50,7 @@ class PCSData:
     inverter_temperature: float | None = None  # °C
     system_state: str | None = None            # free-form state string
     battery_flow_state: str | None = None      # charging / discharging / holding
+    buzzer: int | None = None                  # 0=Silent, 1=Normal
+    co2_reduction: float | None = None            # kg
+    total_produced: float | None = None           # kWh (T2)
+    total_consumed: float | None = None           # kWh (T3)
