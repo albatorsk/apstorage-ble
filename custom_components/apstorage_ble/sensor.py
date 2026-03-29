@@ -358,19 +358,24 @@ class APstorageSensor(
         return self.entity_description.value_fn(self.coordinator.data)
 
     @property
+    def icon(self) -> str | None:
+        """Return a dynamic icon for selected sensors."""
+        value = self.native_value
+        key = self.entity_description.key
+        if key == "buzzer":
+            return "mdi:bell-off" if value == "Silent" else "mdi:bell"
+        if key == "battery_flow_state":
+            if value == "Charging":
+                return "mdi:battery-arrow-up"
+            if value == "Discharging":
+                return "mdi:battery-arrow-down"
+            return "mdi:battery"
+        return None
+
+    @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
         """Return optional extra attributes for selected sensors."""
-        if self.entity_description.key not in {
-            "battery_charged_energy",
-            "battery_discharged_energy",
-        }:
-            return None
-
-        last_reset = self.coordinator.daily_energy_last_reset
-        if last_reset is None:
-            return None
-
-        return {"last_reset": last_reset}
+        return None
 
     @callback
     def _handle_coordinator_update(self) -> None:

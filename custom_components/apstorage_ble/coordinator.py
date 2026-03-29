@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from typing import Any
 
 from homeassistant.components import bluetooth
@@ -19,8 +18,6 @@ from homeassistant.components.bluetooth.active_update_coordinator import (
     ActiveBluetoothDataUpdateCoordinator,
 )
 from homeassistant.core import CoreState, HomeAssistant, callback
-from homeassistant.helpers.storage import Store
-from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, POLL_INTERVAL_SECONDS
 from .models import PCSData
@@ -60,264 +57,12 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._name = name
         self._soc_client = APstorageSocClient()
         self._poll_lock = asyncio.Lock()
-        self._daily_charged_kwh = 0.0
-        self._daily_discharged_kwh = 0.0
-        self._daily_date: str | None = None
-        self._baseline_total_charged: float | None = None
-        self._baseline_total_discharged: float | None = None
-        self._last_total_charged: float | None = None
-        self._last_total_discharged: float | None = None
-        self._swap_energy_totals = False
-        store_key = f"{DOMAIN}_{address.replace(':', '').lower()}_energy_daily"
-        self._energy_store: Store[dict[str, Any]] = Store(hass, 1, store_key)
-        self._store_loaded = False
-        self._last_energy_ts: float | None = None
-        self._last_battery_soc: float | None = None
         self._last_poll: float | None = None
         # Most-recent successfully parsed data; also exposed as coordinator.data
         self.data: PCSData | None = None
 
     async def async_initialize(self) -> None:
-        """Load persisted daily energy state."""
-        if self._store_loaded:
-            return
-
-        stored = await self._energy_store.async_load()
-        if isinstance(stored, dict):
-            self._daily_date = str(stored.get("date") or "") or None
-            self._daily_charged_kwh = float(stored.get("charged", 0.0) or 0.0)
-            self._daily_discharged_kwh = float(stored.get("discharged", 0.0) or 0.0)
-            btc = stored.get("baseline_total_charged")
-            btd = stored.get("baseline_total_discharged")
-            self._baseline_total_charged = float(btc) if btc is not None else None
-            self._baseline_total_discharged = float(btd) if btd is not None else None
-            ltc = stored.get("last_total_charged")
-            ltd = stored.get("last_total_discharged")
-            self._last_total_charged = float(ltc) if ltc is not None else None
-            self._last_total_discharged = float(ltd) if ltd is not None else None
-            self._swap_energy_totals = bool(stored.get("swap_energy_totals", False))
-
-        self._store_loaded = True
-        self._rollover_daily_if_needed(force=True)
-
-    @property
-    def daily_energy_last_reset(self) -> str | None:
-        """Return the date (local) when daily energy counters were last reset."""
-        return self._daily_date
-
-    async def _async_save_daily_state(self) -> None:
-        """Persist daily counters so restart does not reset to zero."""
-        await self._energy_store.async_save(
-            {
-                "last_total_charged": self._last_total_charged,
-                "last_total_discharged": self._last_total_discharged,
-                "swap_energy_totals": self._swap_energy_totals,
-                "date": self._daily_date,
-                "charged": self._daily_charged_kwh,
-                "discharged": self._daily_discharged_kwh,
-                "baseline_total_charged": self._baseline_total_charged,
-                "baseline_total_discharged": self._baseline_total_discharged,
-            }
-        )
-
-    def _rollover_daily_if_needed(self, *, force: bool = False) -> bool:
-        """Reset daily counters when local date changes."""
-        today = dt_util.now().date().isoformat()
-        if self._daily_date == today:
-            return False
-
-        # Startup initialization path: if there is no prior date, set today's
-        # marker without resetting already-restored same-day values.
-        if self._daily_date is None and force:
-            self._daily_date = today
-            return True
-
-        if self._daily_date != today:
-            _LOGGER.debug("[%s] Daily energy rollover: %s -> %s", self._name, self._daily_date, today)
-
-        self._daily_date = today
-        self._daily_charged_kwh = 0.0
-        self._daily_discharged_kwh = 0.0
-        self._baseline_total_charged = None
-        self._baseline_total_discharged = None
-        self._last_total_charged = None
-        self._last_total_discharged = None
-        self._swap_energy_totals = False
-        self._last_energy_ts = None
-        return True
-
-    def _apply_direct_daily_totals(self, metrics) -> tuple[bool, bool, bool]:
-        """Use device-reported cumulative totals to calculate today's values.
-
-        Returns a tuple of:
-            (used_any_direct, used_direct_charged, used_direct_discharged)
-        """
-        charged_raw = metrics.battery_charged_energy
-        discharged_raw = metrics.battery_discharged_energy
-
-        charged_total = float(charged_raw) if charged_raw is not None else None
-        discharged_total = float(discharged_raw) if discharged_raw is not None else None
-
-        used_direct_charged = charged_total is not None
-        used_direct_discharged = discharged_total is not None
-
-        if not used_direct_charged and not used_direct_discharged:
-            return False, False, False
-
-        if self._swap_energy_totals and used_direct_charged and used_direct_discharged:
-            charged_total, discharged_total = discharged_total, charged_total
-
-        if (
-            used_direct_charged
-            and used_direct_discharged
-            and self._last_total_charged is not None
-            and self._last_total_discharged is not None
-            and charged_total is not None
-            and discharged_total is not None
-        ):
-            delta_charged = charged_total - self._last_total_charged
-            delta_discharged = discharged_total - self._last_total_discharged
-            direction_sign = self._resolve_battery_direction_sign(metrics)
-
-            # Some firmware variants appear to report these two counters swapped.
-            if (
-                not self._swap_energy_totals
-                and direction_sign is not None
-                and (
-                    (direction_sign < 0 and delta_charged > 0.001 and delta_discharged <= 0.0)
-                    or (direction_sign > 0 and delta_discharged > 0.001 and delta_charged <= 0.0)
-                )
-            ):
-                _LOGGER.warning(
-                    "[%s] Detected swapped battery energy totals from device; applying automatic correction",
-                    self._name,
-                )
-                self._swap_energy_totals = True
-                charged_total, discharged_total = discharged_total, charged_total
-
-        if used_direct_charged and charged_total is not None:
-            self._last_total_charged = charged_total
-            if self._baseline_total_charged is None or charged_total < self._baseline_total_charged:
-                self._baseline_total_charged = charged_total
-            self._daily_charged_kwh = max(0.0, charged_total - self._baseline_total_charged)
-
-        if used_direct_discharged and discharged_total is not None:
-            self._last_total_discharged = discharged_total
-            if self._baseline_total_discharged is None or discharged_total < self._baseline_total_discharged:
-                self._baseline_total_discharged = discharged_total
-            self._daily_discharged_kwh = max(0.0, discharged_total - self._baseline_total_discharged)
-
-        return True, used_direct_charged, used_direct_discharged
-
-    def _integrate_daily_from_power(
-        self,
-        metrics,
-        *,
-        integrate_charged: bool = True,
-        integrate_discharged: bool = True,
-    ) -> bool:
-        """Fallback daily counters by integrating battery power over time."""
-        now_ts = time.monotonic()
-        changed = False
-
-        if self._last_energy_ts is not None and metrics.battery_power is not None:
-            dt_hours = (now_ts - self._last_energy_ts) / 3600.0
-            if 0 < dt_hours < (POLL_INTERVAL_SECONDS * 4 / 3600.0):
-                delta_kwh = abs(float(metrics.battery_power)) * dt_hours / 1000.0
-                direction_sign = self._resolve_battery_direction_sign(metrics)
-                if direction_sign is None:
-                    _LOGGER.debug(
-                        "[%s] Skipping daily integration this cycle: unknown battery flow direction",
-                        self._name,
-                    )
-                elif direction_sign >= 0:
-                    if not integrate_charged:
-                        self._last_energy_ts = now_ts
-                        return changed
-                    self._daily_charged_kwh += delta_kwh
-                    changed = delta_kwh > 0
-                else:
-                    if not integrate_discharged:
-                        self._last_energy_ts = now_ts
-                        return changed
-                    self._daily_discharged_kwh += delta_kwh
-                    changed = delta_kwh > 0
-
-        self._last_energy_ts = now_ts
-        return changed
-
-    def _resolve_battery_direction_sign(self, metrics) -> float | None:
-        """Resolve battery flow direction sign.
-
-        Returns:
-            +1 for charging, -1 for discharging, None when unknown.
-        """
-        current_sign: float | None = None
-        if metrics.battery_current is not None and abs(float(metrics.battery_current)) >= 0.05:
-            # APstorage convention: positive current indicates discharging.
-            current_sign = -1.0 if float(metrics.battery_current) >= 0 else 1.0
-
-        power_sign: float | None = None
-        if metrics.battery_power is not None and abs(float(metrics.battery_power)) >= 5.0:
-            # APstorage convention: positive power indicates discharging.
-            power_sign = -1.0 if float(metrics.battery_power) >= 0 else 1.0
-
-        state_sign: float | None = None
-        if getattr(metrics, "battery_flow_state", None) is not None:
-            flow_text = str(metrics.battery_flow_state).lower()
-            if flow_text.startswith("discharg"):
-                state_sign = -1.0
-            elif flow_text.startswith("charg"):
-                state_sign = 1.0
-
-        if metrics.system_state is not None:
-            state_text = str(metrics.system_state).lower()
-            if any(token in state_text for token in ("discharge", "discharging", "battery discharge", "battery_discharge")):
-                state_sign = -1.0
-            elif any(token in state_text for token in ("charge", "charging", "battery charge", "battery_charge")):
-                state_sign = 1.0
-
-        soc_sign: float | None = None
-        if metrics.battery_soc is not None:
-            current_soc = float(metrics.battery_soc)
-            if self._last_battery_soc is not None:
-                delta_soc = current_soc - self._last_battery_soc
-                if abs(delta_soc) >= 0.02:
-                    soc_sign = 1.0 if delta_soc > 0 else -1.0
-            self._last_battery_soc = current_soc
-
-        # SoC trend best reflects actual energy movement over time.
-        if soc_sign is not None:
-            flow_sign = current_sign if current_sign is not None else power_sign
-            if flow_sign is not None and flow_sign != soc_sign:
-                _LOGGER.debug(
-                    "[%s] Battery flow sign mismatch (flow=%s, soc=%s); using SoC trend",
-                    self._name,
-                    flow_sign,
-                    soc_sign,
-                )
-            return soc_sign
-
-        # Next prefer explicit system state when it indicates charge/discharge.
-        if state_sign is not None:
-            return state_sign
-
-        # If current and power disagree and we have no tie-breaker,
-        # prefer power sign so daily counters continue to advance.
-        if current_sign is not None and power_sign is not None and current_sign != power_sign:
-            _LOGGER.debug(
-                "[%s] Battery current/power sign conflict (current=%s, power=%s); using power sign",
-                self._name,
-                current_sign,
-                power_sign,
-            )
-            return power_sign
-
-        if current_sign is not None:
-            return current_sign
-        if power_sign is not None:
-            return power_sign
-        return None
+        """No-op; retained for caller compatibility."""
 
     def _resolve_battery_flow_state(self, metrics) -> str | None:
         """Resolve user-facing battery flow state from live telemetry.
@@ -385,9 +130,6 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
     async def _async_poll(self) -> None:
         """Connect to the device via GATT and update coordinator data."""
         async with self._poll_lock:
-            if not self._store_loaded:
-                await self.async_initialize()
-
             service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
             # Prefer the connectable device from the most recent advertisement;
@@ -426,7 +168,6 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             if metrics is None:
                 _LOGGER.info("[%s] SoC query returned no metrics", self._name)
             else:
-                store_dirty = self._rollover_daily_if_needed()
                 _LOGGER.debug(
                     "[%s] Received metrics: soc=%s, state=%s, flow=%s",
                     self._name,
@@ -486,25 +227,10 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     self.data.daily_produced_energy = float(metrics.daily_produced_energy)
                 if metrics.daily_consumed_energy is not None:
                     self.data.daily_consumed_energy = float(metrics.daily_consumed_energy)
-
-                # Daily energy counters: prefer direct cumulative totals when
-                # available, otherwise integrate battery power over time.
-                used_direct, used_direct_charged, used_direct_discharged = self._apply_direct_daily_totals(metrics)
-                if used_direct:
-                    store_dirty = True
-
-                if self._integrate_daily_from_power(
-                    metrics,
-                    integrate_charged=not used_direct_charged,
-                    integrate_discharged=not used_direct_discharged,
-                ):
-                    store_dirty = True
-
-                self.data.battery_charged_energy = self._daily_charged_kwh
-                self.data.battery_discharged_energy = self._daily_discharged_kwh
-
-                if store_dirty:
-                    await self._async_save_daily_state()
+                if metrics.battery_charged_energy is not None:
+                    self.data.battery_charged_energy = float(metrics.battery_charged_energy)
+                if metrics.battery_discharged_energy is not None:
+                    self.data.battery_discharged_energy = float(metrics.battery_discharged_energy)
 
             # Push the update to all subscribed entities.
             self.async_update_listeners()
