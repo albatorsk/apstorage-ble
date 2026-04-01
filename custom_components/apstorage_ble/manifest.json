@@ -14,7 +14,7 @@
   "documentation": "https://github.com/perbs/apstorage-ble",
   "iot_class": "local_polling",
   "requirements": [
-    "bleak-retry-connector==4.4.3",
+    "bleak-retry-connector",
     "pycryptodome==3.20.0"
   ]
 }
