@@ -95,7 +95,8 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         name="Daily Charged Energy",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.MEASUREMENT,
+        # Daily counter that resets at midnight.
+        state_class=SensorStateClass.TOTAL,
         suggested_display_precision=2,
         value_fn=lambda d: d.battery_charged_energy,
     ),
@@ -104,7 +105,8 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         name="Daily Discharged Energy",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.MEASUREMENT,
+        # Daily counter that resets at midnight.
+        state_class=SensorStateClass.TOTAL,
         suggested_display_precision=2,
         value_fn=lambda d: d.battery_discharged_energy,
     ),
