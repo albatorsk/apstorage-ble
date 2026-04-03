@@ -149,6 +149,15 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda d: d.pv_power,
     ),
+    # --- Load / Output ---
+    APstorageSensorDescription(
+        key="load_power",
+        name="Load Power",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda d: d.load_power,
+    ),
     # --- System ---
     APstorageSensorDescription(
         key="system_state",
@@ -156,6 +165,13 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         device_class=None,
         state_class=None,
         value_fn=lambda d: _format_system_state(d.system_state),
+    ),
+    APstorageSensorDescription(
+        key="battery_flow_state",
+        name="Battery Flow State",
+        device_class=None,
+        state_class=None,
+        value_fn=lambda d: d.battery_flow_state,
     ),
     APstorageSensorDescription(
         key="co2_reduction",
