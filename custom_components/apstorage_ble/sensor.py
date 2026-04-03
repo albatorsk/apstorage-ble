@@ -1,23 +1,4 @@
-    # --- PV / Solar ---
-    APstorageSensorDescription(
-        key="pv_current",
-        name="PV Current",
-        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
-        device_class=SensorDeviceClass.CURRENT,
-        state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=2,
-        value_fn=lambda d: (d.pv_power / 230.0) if d.pv_power is not None else None,
-    ),
-    # --- Grid ---
-    APstorageSensorDescription(
-        key="grid_current",
-        name="Grid Current (Derived)",
-        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
-        device_class=SensorDeviceClass.CURRENT,
-        state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=2,
-        value_fn=lambda d: (d.grid_power / d.grid_voltage) if (d.grid_power is not None and d.grid_voltage not in (None, 0.0)) else None,
-    ),
+    # ...existing code...
 """Sensor platform for the APstorage BLE integration."""
 from __future__ import annotations
 
