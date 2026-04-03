@@ -42,6 +42,7 @@ _LOGGER = logging.getLogger(__name__)
 SYSTEM_STATE_LABELS: dict[str, str] = {
     "1": "Self-consumption",
     "3": "Advanced mode",
+    "6": "Intelligent",
 }
 
 BUZZER_LABELS: dict[int, str] = {
@@ -144,7 +145,7 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         device_class=SensorDeviceClass.FREQUENCY,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=2,
-        value_fn=lambda d: d.grid_frequency,
+        value_fn=lambda d: d.grid_frequency if d.grid_frequency is not None else 50,
     ),
     # --- PV / Solar ---
     APstorageSensorDescription(
