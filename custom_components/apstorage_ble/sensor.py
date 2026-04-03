@@ -1,12 +1,14 @@
-        APstorageSensorDescription(
-            key="pv_current",
-            name="PV Current",
-            native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
-            device_class=SensorDeviceClass.CURRENT,
-            state_class=SensorStateClass.MEASUREMENT,
-            suggested_display_precision=2,
-            value_fn=lambda d: (d.pv_power / 230.0) if d.pv_power is not None else None,
-        ),
+    # --- PV / Solar ---
+    APstorageSensorDescription(
+        key="pv_current",
+        name="PV Current",
+        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
+        device_class=SensorDeviceClass.CURRENT,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=2,
+        value_fn=lambda d: (d.pv_power / 230.0) if d.pv_power is not None else None,
+    ),
+    # --- Grid ---
     APstorageSensorDescription(
         key="grid_current",
         name="Grid Current (Derived)",
