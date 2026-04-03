@@ -1,3 +1,21 @@
+        APstorageSensorDescription(
+            key="pv_current",
+            name="PV Current",
+            native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
+            device_class=SensorDeviceClass.CURRENT,
+            state_class=SensorStateClass.MEASUREMENT,
+            suggested_display_precision=2,
+            value_fn=lambda d: (d.pv_power / 230.0) if d.pv_power is not None else None,
+        ),
+    APstorageSensorDescription(
+        key="grid_current",
+        name="Grid Current (Derived)",
+        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
+        device_class=SensorDeviceClass.CURRENT,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=2,
+        value_fn=lambda d: (d.grid_power / d.grid_voltage) if (d.grid_power is not None and d.grid_voltage not in (None, 0.0)) else None,
+    ),
 """Sensor platform for the APstorage BLE integration."""
 from __future__ import annotations
 
@@ -121,15 +139,7 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         value_fn=lambda d: d.pv_energy_produced,
     ),
     # --- Grid ---
-    APstorageSensorDescription(
-        key="grid_current",
-        name="Grid Current",
-        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
-        device_class=SensorDeviceClass.CURRENT,
-        state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=1,
-        value_fn=lambda d: d.grid_current,
-    ),
+    # Grid Current entity removed (not available or derivable)
     APstorageSensorDescription(
         key="grid_power",
         name="Grid Power",
@@ -157,24 +167,6 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         value_fn=lambda d: d.pv_power,
     ),
     # --- Load / Output ---
-    APstorageSensorDescription(
-        key="load_voltage",
-        name="Load Voltage",
-        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
-        device_class=SensorDeviceClass.VOLTAGE,
-        state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=1,
-        value_fn=lambda d: d.load_voltage,
-    ),
-    APstorageSensorDescription(
-        key="load_current",
-        name="Load Current",
-        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
-        device_class=SensorDeviceClass.CURRENT,
-        state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=1,
-        value_fn=lambda d: d.load_current,
-    ),
     APstorageSensorDescription(
         key="load_power",
         name="Load Power",
