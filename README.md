@@ -27,6 +27,7 @@ The following sensors are implemented in the integration.
 
 ### Entities
 
+
 #### Battery
 - Battery State of Charge (`%`)
 - Battery Discharging Power (`W`)
@@ -39,19 +40,15 @@ The following sensors are implemented in the integration.
 - PV Power (`W`)
 
 #### Grid
-- Grid Current (`A`)
 - Grid Power (`W`)
 - Grid Frequency (`Hz`)
 
 #### Load / Output
-- Load Voltage (`V`)
-- Load Current (`A`)
 - Load Power (`W`)
 
 #### System
 - System State (enum)
 - Battery Flow State (enum: Charging, Discharging, Holding)
-- Buzzer (enum: Silent, Normal)
 - CO2 Reduction (`kg`)
 - Total Produced (`kWh`)
 - Total Consumed (`kWh`)
