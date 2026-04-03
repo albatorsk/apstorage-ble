@@ -158,6 +158,8 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         value_fn=lambda d: _format_system_state(d.system_state),
     ),
     APstorageSensorDescription(
+        key="co2_reduction",
+        name="CO2 Reduction",
         native_unit_of_measurement=UnitOfMass.KILOGRAMS,
         device_class=SensorDeviceClass.WEIGHT,
         state_class=SensorStateClass.MEASUREMENT,
