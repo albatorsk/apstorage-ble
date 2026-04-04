@@ -63,7 +63,9 @@ class APstorageConfigFlow(ConfigFlow, domain=DOMAIN):
     @callback
     def async_get_options_flow(config_entry: ConfigEntry) -> APstorageOptionsFlow:
         """Get the options flow for this handler."""
-        return APstorageOptionsFlow(config_entry)
+        flow = APstorageOptionsFlow()
+        flow._config_entry = config_entry
+        return flow
 
     def __init__(self) -> None:
         self._discovery_info: BluetoothServiceInfoBleak | None = None
@@ -231,15 +233,22 @@ class APstorageConfigFlow(ConfigFlow, domain=DOMAIN):
 class APstorageOptionsFlow(OptionsFlow):
     """Handle APstorage BLE options."""
 
+    def __init__(self) -> None:
+        """Initialize the options flow."""
+        self._config_entry: ConfigEntry | None = None
+
     async def async_step_init(
         self, user_input: dict | None = None
     ) -> ConfigFlowResult:
         """Manage integration options."""
+        if self._config_entry is None:
+            raise RuntimeError("Options flow missing config entry")
+
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
         current_interval = int(
-            self.config_entry.options.get(
+            self._config_entry.options.get(
                 CONF_POLL_INTERVAL_SECONDS,
                 POLL_INTERVAL_SECONDS,
             )
