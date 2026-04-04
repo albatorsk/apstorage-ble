@@ -784,21 +784,13 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
             metrics.pv_current = pv_i
             break
 
-    # Search for PV metrics (APstorage field: P5/P4 might be PV)
+    # Use APstorage field P2 exclusively for PV Power.
     for root in roots:
-        pp_raw = _deep_find_key(root, {"pp", "pvpow", "pv_power"})
+        pp_raw = _deep_find_key(root, {"p2"})
         pp = _to_float(pp_raw)
         if pp is not None:
             metrics.pv_power = pp
             break
-    # Do not use p5 for PV Power (per user request)
-    if metrics.pv_power is None:
-        for root in roots:
-            pp_raw = _deep_find_key(root, {"p4"})
-            pp = _to_float(pp_raw)
-            if pp is not None:
-                metrics.pv_power = pp
-                break
 
     if (
         metrics.pv_current is None
@@ -843,14 +835,6 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
         if lp is not None:
             metrics.load_power = lp
             break
-    if metrics.load_power is None:
-        for root in roots:
-            lp_raw = _deep_find_key(root, {"p2"})
-            lp = _to_float(lp_raw)
-            if lp is not None:
-                metrics.load_power = lp
-                break
-
     # Last-resort derived load current from load power and load voltage.
     if (
         metrics.load_current is None
