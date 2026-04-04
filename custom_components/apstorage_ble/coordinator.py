@@ -3,7 +3,7 @@
 Uses HA's ActiveBluetoothDataUpdateCoordinator so that:
   - Bluetooth advertisements from the PCS are tracked to know when the device
     is reachable (including via the ESPHome Bluetooth proxy).
-  - A GATT poll is triggered at most once per POLL_INTERVAL_SECONDS.
+    - A GATT poll is triggered at most once per configured polling interval.
   - The device is marked as unavailable automatically when advertisements stop.
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ from homeassistant.components.bluetooth.active_update_coordinator import (
 )
 from homeassistant.core import CoreState, HomeAssistant, callback
 
-from .const import DOMAIN, POLL_INTERVAL_SECONDS
+from .const import DOMAIN
 from .models import PCSData
 from .soc_client import APstorageSocClient
 
@@ -35,6 +35,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         logger: logging.Logger,
         address: str,
         name: str,
+        poll_interval_seconds: int,
     ) -> None:
         """Initialise the coordinator.
 
@@ -55,6 +56,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         )
         self._address = address
         self._name = name
+        self._poll_interval_seconds = poll_interval_seconds
         self._soc_client = APstorageSocClient()
         self._poll_lock = asyncio.Lock()
         self._last_poll: float | None = None
@@ -127,7 +129,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
 
         if (
             seconds_since_last_poll is not None
-            and seconds_since_last_poll < POLL_INTERVAL_SECONDS
+            and seconds_since_last_poll < self._poll_interval_seconds
         ):
             return False
 

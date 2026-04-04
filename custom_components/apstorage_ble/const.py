@@ -34,6 +34,8 @@ BLE_NOTIFY_CHAR_UUID = "0000ff06-0000-1000-8000-00805f9b34fb"
 # How often (seconds) to poll the device via an active GATT connection when
 # its advertisement is seen.  30 s is a sensible default for a storage system.
 POLL_INTERVAL_SECONDS = 30
+POLL_INTERVAL_MIN_SECONDS = 10
+POLL_INTERVAL_MAX_SECONDS = 300
 
 # Maximum seconds to wait for a response notification after sending a request
 RESPONSE_TIMEOUT_SECONDS = 10
@@ -42,3 +44,4 @@ RESPONSE_TIMEOUT_SECONDS = 10
 # Config-entry keys
 # ---------------------------------------------------------------------------
 CONF_ADDRESS = "address"
+CONF_POLL_INTERVAL_SECONDS = "poll_interval_seconds"
