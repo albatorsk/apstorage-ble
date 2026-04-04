@@ -231,9 +231,6 @@ class APstorageConfigFlow(ConfigFlow, domain=DOMAIN):
 class APstorageOptionsFlow(OptionsFlow):
     """Handle APstorage BLE options."""
 
-    def __init__(self, config_entry: ConfigEntry) -> None:
-        super().__init__(config_entry)
-
     async def async_step_init(
         self, user_input: dict | None = None
     ) -> ConfigFlowResult:
