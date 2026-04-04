@@ -117,7 +117,8 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         name="Daily PV Energy Produced",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.MEASUREMENT,
+        # Daily counter that resets at midnight.
+        state_class=SensorStateClass.TOTAL,
         suggested_display_precision=2,
         value_fn=lambda d: d.pv_energy_produced,
     ),
@@ -205,7 +206,8 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         name="Daily Total Consumed",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.MEASUREMENT,
+        # Daily counter that resets at midnight.
+        state_class=SensorStateClass.TOTAL,
         suggested_display_precision=2,
         value_fn=lambda d: d.total_consumed_daily,
     ),
