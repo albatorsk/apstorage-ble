@@ -12,7 +12,15 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers import device_registry as dr
 
-from .const import DOMAIN, MANUFACTURER, MODEL, POLL_INTERVAL_SECONDS
+from .const import (
+    CONF_POLL_INTERVAL_SECONDS,
+    DOMAIN,
+    MANUFACTURER,
+    MODEL,
+    POLL_INTERVAL_MAX_SECONDS,
+    POLL_INTERVAL_MIN_SECONDS,
+    POLL_INTERVAL_SECONDS,
+)
 from .coordinator import APstorageCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -24,6 +32,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up APstorage BLE from a config entry."""
     address: str = entry.data[CONF_ADDRESS]
     name: str = entry.title
+    poll_interval = int(entry.options.get(CONF_POLL_INTERVAL_SECONDS, POLL_INTERVAL_SECONDS))
+    poll_interval = max(POLL_INTERVAL_MIN_SECONDS, min(POLL_INTERVAL_MAX_SECONDS, poll_interval))
 
     # Verify that HA can see the device (or a proxy for it) before proceeding.
     # This prevents ConfigEntryNotReady loops when the device is temporarily
@@ -42,6 +52,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         logger=_LOGGER,
         address=address,
         name=name,
+        poll_interval_seconds=poll_interval,
     )
     await coordinator.async_initialize()
 
@@ -75,7 +86,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         async_track_time_interval(
             hass,
             _periodic_poll,
-            timedelta(seconds=POLL_INTERVAL_SECONDS),
+            timedelta(seconds=poll_interval),
         )
     )
 

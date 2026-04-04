@@ -32,5 +32,15 @@
       "already_configured": "This device is already configured.",
       "no_devices_found": "No APstorage PCS devices found in Bluetooth range."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "APstorage BLE options",
+        "data": {
+          "poll_interval_seconds": "Polling interval (seconds)"
+        }
+      }
+    }
   }
 }

@@ -26,9 +26,19 @@ from homeassistant.components.bluetooth import (
     async_process_advertisements,
 )
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import ConfigEntry, OptionsFlow
 from homeassistant.const import CONF_ADDRESS
+from homeassistant.core import callback
 
-from .const import DOMAIN, MANUFACTURER, MODEL
+from .const import (
+    CONF_POLL_INTERVAL_SECONDS,
+    DOMAIN,
+    MANUFACTURER,
+    MODEL,
+    POLL_INTERVAL_MAX_SECONDS,
+    POLL_INTERVAL_MIN_SECONDS,
+    POLL_INTERVAL_SECONDS,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -48,6 +58,12 @@ class APstorageConfigFlow(ConfigFlow, domain=DOMAIN):
     """Config flow for APstorage BLE."""
 
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> APstorageOptionsFlow:
+        """Get the options flow for this handler."""
+        return APstorageOptionsFlow(config_entry)
 
     def __init__(self) -> None:
         self._discovery_info: BluetoothServiceInfoBleak | None = None
@@ -209,4 +225,43 @@ class APstorageConfigFlow(ConfigFlow, domain=DOMAIN):
                 }
             ),
             errors=errors,
+        )
+
+
+class APstorageOptionsFlow(OptionsFlow):
+    """Handle APstorage BLE options."""
+
+    def __init__(self, config_entry: ConfigEntry) -> None:
+        self.config_entry = config_entry
+
+    async def async_step_init(
+        self, user_input: dict | None = None
+    ) -> ConfigFlowResult:
+        """Manage integration options."""
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        current_interval = int(
+            self.config_entry.options.get(
+                CONF_POLL_INTERVAL_SECONDS,
+                POLL_INTERVAL_SECONDS,
+            )
+        )
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_POLL_INTERVAL_SECONDS,
+                        default=current_interval,
+                    ): vol.All(
+                        vol.Coerce(int),
+                        vol.Range(
+                            min=POLL_INTERVAL_MIN_SECONDS,
+                            max=POLL_INTERVAL_MAX_SECONDS,
+                        ),
+                    )
+                }
+            ),
         )
