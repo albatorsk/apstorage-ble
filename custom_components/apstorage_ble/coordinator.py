@@ -9,6 +9,7 @@ Uses HA's ActiveBluetoothDataUpdateCoordinator so that:
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import logging
 from typing import Any
 
@@ -60,6 +61,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._soc_client = APstorageSocClient()
         self._poll_lock = asyncio.Lock()
         self._last_poll: float | None = None
+        self._last_system_mode_write: dict[str, Any] | None = None
         # Most-recent successfully parsed data; also exposed as coordinator.data
         self.data: PCSData | None = None
 
@@ -208,6 +210,8 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 if metrics.system_state is not None:
                     self.data.system_state = metrics.system_state
                     _LOGGER.debug("[%s] System state: %s", self._name, metrics.system_state)
+                if metrics.system_mode is not None:
+                    self.data.system_mode = metrics.system_mode
                 resolved_flow_state = self._resolve_battery_flow_state(metrics)
                 if resolved_flow_state is not None:
                     self.data.battery_flow_state = resolved_flow_state
@@ -252,6 +256,64 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
 
             # Push the update to all subscribed entities.
             self.async_update_listeners()
+
+    async def async_set_system_mode(self, mode: int) -> None:
+        """Set storage system mode over BLE and refresh coordinator data.
+
+        Mode values follow EMA app conventions:
+          0 Peak-Valley, 1 Redundant, 2 Manual, 3 Mixed,
+          4 Backup, 5 Peak-Shaving, 6 Intelligent.
+        """
+        if mode < 0 or mode > 6:
+            raise ValueError(f"Invalid system mode: {mode}")
+
+        async with self._poll_lock:
+            service_info: BluetoothServiceInfoBleak | None = self._last_service_info
+
+            if service_info is not None and service_info.connectable:
+                ble_device = service_info.device
+            elif service_info is not None:
+                ble_device = bluetooth.async_ble_device_from_address(
+                    self.hass,
+                    service_info.device.address,
+                    connectable=True,
+                )
+            else:
+                ble_device = bluetooth.async_ble_device_from_address(
+                    self.hass,
+                    self._address,
+                    connectable=True,
+                )
+
+            if ble_device is None:
+                raise RuntimeError("No connectable BLE device found for system mode write")
+
+            _LOGGER.debug("[%s] Setting system mode to %s", self._name, mode)
+            result = await self._soc_client.async_set_system_mode(
+                ble_device,
+                mode=mode,
+                device_name_hint=self._name,
+            )
+            self._last_system_mode_write = {
+                "ok": bool(result.get("ok", False)),
+                "code": result.get("code"),
+                "message": result.get("message"),
+                "requested_mode": str(mode),
+                "at": datetime.now(timezone.utc).isoformat(),
+            }
+            if not bool(result.get("ok", False)):
+                raise RuntimeError(
+                    "System mode write failed"
+                    f" (code={result.get('code')}, message={result.get('message')})"
+                )
+
+            # Refresh immediately so entities reflect new state.
+            await self._async_poll()
+
+    @property
+    def last_system_mode_write(self) -> dict[str, Any] | None:
+        """Return the most recent write attempt result for diagnostics."""
+        return self._last_system_mode_write
 
     async def async_periodic_poll(self) -> None:
         """Run a fallback poll independent of advertisement event timing."""
