@@ -1308,6 +1308,23 @@ def _derive_storage_ids_from_name(device_name: str | None) -> list[str]:
     return normalized
 
 
+def _response_is_success(resp: dict[str, Any]) -> bool:
+    """Return True when EMA-style response clearly indicates success."""
+    code = str(resp.get("code", "")).strip().lower()
+    if code in {"1", "200"}:
+        return True
+
+    result = str(resp.get("result", "")).strip().lower()
+    if result in {"true", "1", "success", "ok"}:
+        return True
+
+    status = str(resp.get("status", "")).strip().lower()
+    if status in {"success", "ok"}:
+        return True
+
+    return False
+
+
 class APstorageSocClient:
     """Query APstorage battery SoC via Blufi encrypted custom payload."""
 
@@ -1530,7 +1547,7 @@ class APstorageSocClient:
                     if isinstance(set_resp, dict):
                         code = set_resp.get("code")
                         message = str(set_resp.get("msg") or set_resp.get("message") or "")
-                        if str(code) in {"1", "0", "200"}:
+                        if _response_is_success(set_resp):
                             self._preferred_storage_id = storage_id
                             return {"ok": True, "code": code, "message": message}
 
@@ -1670,7 +1687,7 @@ class APstorageSocClient:
                     if isinstance(set_resp, dict):
                         code = set_resp.get("code")
                         message = str(set_resp.get("msg") or set_resp.get("message") or "")
-                        if str(code) in {"1", "0", "200"}:
+                        if _response_is_success(set_resp):
                             self._preferred_storage_id = storage_id
                             return {"ok": True, "code": code, "message": message}
 
@@ -1843,7 +1860,7 @@ class APstorageSocClient:
                     if isinstance(set_resp, dict):
                         code = set_resp.get("code")
                         message = str(set_resp.get("msg") or set_resp.get("message") or "")
-                        if str(code) in {"1", "0", "200"}:
+                        if _response_is_success(set_resp):
                             self._preferred_storage_id = storage_id
                             return {"ok": True, "code": code, "message": message}
 
