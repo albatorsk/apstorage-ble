@@ -16,6 +16,8 @@ Designed to work with an **ESPHome Bluetooth proxy** placed near the PCS.
 | Blufi handshake + encrypted local-data query | ✅ **Working** |
 | Active + fallback periodic polling | ✅ **Working** |
 | Sensor entity platform | ✅ **Working** |
+| System mode select (write) | ✅ **Working** |
+| Service call for mode changes | ✅ **Working** |
 
 ---
 
@@ -53,6 +55,22 @@ The following sensors are implemented in the integration.
 - Total Produced (`kWh`)
 - Total Consumed (`kWh`)
 - Daily Total Consumed (`kWh`)
+
+#### Controls
+- System Mode (`select` entity)
+    - Peak-Valley
+    - Redundant Energy Control
+    - Manual Control
+    - Mixed
+    - Backup Battery
+    - Peak-Shaving
+    - Intelligent
+
+Service:
+- `apstorage_ble.set_system_mode`
+    - `mode`: required (`0..6` or mode label)
+    - `entry_id`: optional (target config entry)
+    - `address`: optional (target device MAC)
 
 ---
 
