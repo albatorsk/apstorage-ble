@@ -3,12 +3,15 @@ from __future__ import annotations
 
 from datetime import timedelta
 import logging
+from typing import Any
 
+import voluptuous as vol
 from homeassistant.components.bluetooth import async_ble_device_from_address
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS, Platform
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.core import HomeAssistant, ServiceCall, callback
+from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers import device_registry as dr
 
@@ -25,7 +28,83 @@ from .coordinator import APstorageCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.SENSOR]
+PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.SELECT]
+
+SERVICE_SET_SYSTEM_MODE = "set_system_mode"
+ATTR_MODE = "mode"
+ATTR_ENTRY_ID = "entry_id"
+ATTR_ADDRESS = "address"
+
+_MODE_LABEL_TO_CODE: dict[str, int] = {
+    "peak-valley": 0,
+    "redundant energy control": 1,
+    "manual control": 2,
+    "mixed": 3,
+    "backup battery": 4,
+    "peak-shaving": 5,
+    "intelligent": 6,
+}
+
+SERVICE_SET_SYSTEM_MODE_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_MODE): vol.Any(vol.Coerce(int), cv.string),
+        vol.Optional(ATTR_ENTRY_ID): cv.string,
+        vol.Optional(ATTR_ADDRESS): cv.string,
+    }
+)
+
+
+def _parse_mode(value: Any) -> int:
+    """Parse a mode value from int/code or human label."""
+    if isinstance(value, int):
+        mode = value
+    else:
+        text = str(value).strip()
+        if text.isdigit():
+            mode = int(text)
+        else:
+            label_key = text.lower()
+            if label_key not in _MODE_LABEL_TO_CODE:
+                raise HomeAssistantError(
+                    f"Invalid mode {value!r}. Use 0-6 or a known label."
+                )
+            mode = _MODE_LABEL_TO_CODE[label_key]
+
+    if mode < 0 or mode > 6:
+        raise HomeAssistantError("mode must be in range 0..6")
+    return mode
+
+
+def _resolve_target_coordinator(
+    hass: HomeAssistant,
+    *,
+    entry_id: str | None,
+    address: str | None,
+) -> APstorageCoordinator:
+    """Resolve a single target coordinator for a service call."""
+    coordinators: dict[str, APstorageCoordinator] = hass.data.get(DOMAIN, {})
+    if not coordinators:
+        raise HomeAssistantError("No APstorage BLE config entries are loaded")
+
+    if entry_id is not None:
+        coordinator = coordinators.get(entry_id)
+        if coordinator is None:
+            raise HomeAssistantError(f"Unknown entry_id: {entry_id}")
+        return coordinator
+
+    if address is not None:
+        wanted = address.upper()
+        for coordinator in coordinators.values():
+            if coordinator._address.upper() == wanted:  # pylint: disable=protected-access
+                return coordinator
+        raise HomeAssistantError(f"No APstorage BLE entry found for address: {address}")
+
+    if len(coordinators) == 1:
+        return next(iter(coordinators.values()))
+
+    raise HomeAssistantError(
+        "Multiple APstorage BLE entries loaded; provide entry_id or address"
+    )
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -69,6 +148,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+
+    if not hass.services.has_service(DOMAIN, SERVICE_SET_SYSTEM_MODE):
+
+        async def _async_handle_set_system_mode(call: ServiceCall) -> None:
+            mode = _parse_mode(call.data[ATTR_MODE])
+            target = _resolve_target_coordinator(
+                hass,
+                entry_id=call.data.get(ATTR_ENTRY_ID),
+                address=call.data.get(ATTR_ADDRESS),
+            )
+            await target.async_set_system_mode(mode)
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_SET_SYSTEM_MODE,
+            _async_handle_set_system_mode,
+            schema=SERVICE_SET_SYSTEM_MODE_SCHEMA,
+        )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 

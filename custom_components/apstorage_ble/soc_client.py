@@ -467,6 +467,11 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
 
     ess_flow_state: str | None = None
 
+    # Preserve explicit system mode code when present.
+    mode_raw = _deep_find_key(parsed, {"mode"}) if isinstance(parsed, dict) else None
+    if mode_raw is not None:
+        metrics.system_mode = str(mode_raw)
+
     roots: list[Any] = []
     data_root = parsed.get("data")
     if isinstance(data_root, (dict, list)):
@@ -994,6 +999,7 @@ class SocMetrics:
     battery_discharged_energy: float | None = None   # kWh (total discharged)
     pv_energy_produced: float | None = None           # kWh (DE2)
     # System state
+    system_mode: str | None = None             # mode code: 0..6
     system_state: str | None = None            # free-form state string
     battery_flow_state: str | None = None      # Charging / Discharging / Holding
     buzzer: int | None = None                  # 0=Silent, 1=Normal
@@ -1413,6 +1419,137 @@ class APstorageSocClient:
             return None
         return int(metrics.battery_soc)
 
+    async def async_set_system_mode(
+        self,
+        ble_device: BLEDevice,
+        *,
+        mode: int,
+        device_name_hint: str | None = None,
+    ) -> dict[str, Any]:
+        """Set system mode using EMA-compatible getsysmode -> setsysmode flow."""
+        if not HAS_CRYPTO:
+            _LOGGER.error("pycryptodome required; install with: pip install pycryptodome")
+            return {"ok": False, "code": None, "message": "pycryptodome missing"}
+
+        if mode < 0 or mode > 6:
+            _LOGGER.error("Invalid system mode: %s", mode)
+            return {"ok": False, "code": None, "message": f"invalid mode {mode}"}
+
+        client: BleakClient | None = None
+        try:
+            async with asyncio.timeout(CONNECT_TIMEOUT_SECONDS):
+                client = await establish_connection(
+                    BleakClientWithServiceCache,
+                    ble_device,
+                    ble_device.address,
+                    max_attempts=3,
+                    use_services_cache=True,
+                )
+                await self._ensure_services_ready(client)
+
+                device_name = ""
+                try:
+                    name_raw = await client.read_gatt_char(DEVICE_NAME_CHAR)
+                    device_name = bytes(name_raw).decode("utf-8", errors="ignore").strip("\x00\r\n ")
+                except Exception:  # noqa: BLE001
+                    device_name = ""
+
+                if not device_name:
+                    device_name = device_name_hint or ""
+                if not device_name:
+                    device_name = ble_device.name or ""
+
+                storage_ids: list[str] = []
+                if self._preferred_storage_id:
+                    storage_ids.append(self._preferred_storage_id)
+
+                for source in (device_name, device_name_hint, ble_device.name):
+                    for candidate in _derive_storage_ids_from_name(source):
+                        if candidate not in storage_ids:
+                            storage_ids.append(candidate)
+
+                if not storage_ids:
+                    _LOGGER.warning("Could not derive storage ID for system mode write")
+                    return {
+                        "ok": False,
+                        "code": None,
+                        "message": "could not derive storage id",
+                    }
+
+                await self._establish_blufi_session(client)
+
+                last_code: Any = None
+                last_message: str | None = None
+
+                for storage_id in storage_ids:
+                    get_resp = await self._send_property_request(
+                        client,
+                        method="get",
+                        identifier="getsysmode",
+                        storage_id=storage_id,
+                        params_extra={},
+                        system_id="",
+                    )
+                    if not isinstance(get_resp, dict):
+                        continue
+
+                    last_code = get_resp.get("code")
+                    last_message = str(get_resp.get("msg") or get_resp.get("message") or "")
+
+                    mode_data = get_resp.get("data")
+                    if not isinstance(mode_data, dict):
+                        continue
+
+                    payload = dict(mode_data)
+                    payload["mode"] = str(mode)
+
+                    # Defaults from app ViewModel for missing keys.
+                    payload.setdefault("valleycharge", "1")
+                    payload.setdefault("backupSOC", "50")
+                    payload.setdefault("peakPower", "5000")
+                    payload.setdefault("sellingFirst", "0")
+
+                    set_resp = await self._send_property_request(
+                        client,
+                        method="set",
+                        identifier="setsysmode",
+                        storage_id=storage_id,
+                        params_extra=payload,
+                        system_id="",
+                    )
+
+                    if isinstance(set_resp, dict):
+                        code = set_resp.get("code")
+                        message = str(set_resp.get("msg") or set_resp.get("message") or "")
+                        if str(code) in {"1", "0", "200"}:
+                            self._preferred_storage_id = storage_id
+                            return {"ok": True, "code": code, "message": message}
+
+                        last_code = code
+                        last_message = message
+
+                return {
+                    "ok": False,
+                    "code": last_code,
+                    "message": last_message or "no successful setsysmode response",
+                }
+
+        except asyncio.TimeoutError:
+            _LOGGER.warning("System mode write timed out for %s", ble_device.address)
+            return {"ok": False, "code": "timeout", "message": "connection/write timeout"}
+        except BleakError as err:
+            _LOGGER.warning("BLE error during system mode write for %s: %s", ble_device.address, err)
+            return {"ok": False, "code": "ble_error", "message": str(err)}
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("Unexpected system mode write error for %s: %s", ble_device.address, err, exc_info=True)
+            return {"ok": False, "code": "exception", "message": str(err)}
+        finally:
+            if client and client.is_connected:
+                try:
+                    await client.disconnect()
+                except Exception:  # noqa: BLE001
+                    pass
+
     async def _query_soc_once(
         self,
         client: BleakClient,
@@ -1643,6 +1780,70 @@ class APstorageSocClient:
             _LOGGER.debug("Local-data response was non-dict for storage_id=%s", storage_id)
             return None
 
+        finally:
+            await client.stop_notify(NOTIFY_CHAR)
+
+    async def _send_property_request(
+        self,
+        client: BleakClient,
+        *,
+        method: str,
+        identifier: str,
+        storage_id: str,
+        params_extra: dict[str, Any],
+        system_id: str = "",
+    ) -> dict[str, Any] | None:
+        """Send encrypted property request and parse JSON response."""
+        request = {
+            "company": "apsystems",
+            "companyKey": "AmS4SV9oy3gk",
+            "productKey": "PCS",
+            "version": "1.0",
+            "id": storage_id,
+            "deviceId": storage_id,
+            "type": "property",
+            "eid": "2972245456",
+            "method": method,
+            "identifier": identifier,
+            "params": {
+                "T": "APS",
+                "V": "1",
+                "EID": storage_id,
+                "systemId": system_id,
+                "storageId": storage_id,
+                **params_extra,
+            },
+        }
+
+        request_json = json.dumps(request, separators=(",", ":"))
+        payload = _ema_encrypt_json_hexascii(request_json)
+
+        cmd_custom = _make_cmd(1, 19)
+        packets = self._codec.build_packets(
+            cmd_custom,
+            payload,
+            encrypt=True,
+            checksum=True,
+            aes_key=self.session_key,
+        )
+
+        self.parsed_frames = []
+        self._frame_cursor = 0
+        await client.start_notify(NOTIFY_CHAR, self._on_notify_impl)
+
+        try:
+            for pkt in packets:
+                await client.write_gatt_char(WRITE_CHAR, pkt, response=True)
+                await asyncio.sleep(0.01)
+
+            frame = await self._wait_frame(1, 19, RESPONSE_TIMEOUT_SECONDS)
+            decrypted = _ema_decrypt_payload(frame.payload)
+            try:
+                parsed = json.loads(decrypted)
+            except json.JSONDecodeError:
+                _LOGGER.debug("Response for identifier=%s was not valid JSON", identifier)
+                return None
+            return parsed if isinstance(parsed, dict) else None
         finally:
             await client.stop_notify(NOTIFY_CHAR)
 

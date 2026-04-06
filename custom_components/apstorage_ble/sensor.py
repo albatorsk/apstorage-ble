@@ -41,8 +41,12 @@ _LOGGER = logging.getLogger(__name__)
 
 
 SYSTEM_STATE_LABELS: dict[str, str] = {
+    "0": "Peak-Valley",
     "1": "Self-consumption",
+    "2": "Manual Control",
     "3": "Advanced mode",
+    "4": "Backup Battery",
+    "5": "Peak-Shaving",
     "6": "Intelligent",
 }
 

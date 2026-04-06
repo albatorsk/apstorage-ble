@@ -48,6 +48,7 @@ class PCSData:
 
     # --- System ---
     inverter_temperature: float | None = None  # °C
+    system_mode: str | None = None             # mode code: 0..6
     system_state: str | None = None            # free-form state string
     battery_flow_state: str | None = None      # charging / discharging / holding
     buzzer: int | None = None                  # 0=Silent, 1=Normal
