@@ -311,6 +311,10 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     f" (code={result.get('code')}, message={result.get('message')})"
                 )
 
+            if self.data is not None:
+                self.data.system_mode = str(mode)
+                self.async_update_listeners()
+
             # Refresh immediately so entities reflect new state.
             await self._async_poll()
 

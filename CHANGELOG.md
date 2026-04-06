@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.10.6 - 2026-04-06
+
+### Fixed
+- System Mode dropdown writes are now more reliable.
+- Tightened response success detection for `setsysmode` writes:
+  - no longer treats ambiguous `code=0` as success
+  - accepts explicit success indicators (`code=1/200`, `result=true`, `status=success`)
+
+### Changed
+- After a successful mode write, the coordinator now updates `system_mode` immediately so the select entity reflects the new mode without waiting for telemetry lag.
+- Applied the same stricter success detection helper to system mode, backup SOC, and advanced schedule writes.
+
+### Notes
+- `manifest.json` version bumped to `0.10.6`.
+
 ## v0.10.5 - 2026-04-06
 
 ### Added
