@@ -39,7 +39,7 @@ _MODE_LABEL_TO_CODE: dict[str, int] = {
     "peak valley": 0,
     "self-consumption": 1,
     "manual control": 2,
-    "advanced mode": 3,
+    "advanced": 3,
     "backup power supply": 4,
     "peak-shaving": 5,
     "intelligent": 6,

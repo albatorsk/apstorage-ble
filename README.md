@@ -61,7 +61,7 @@ The following sensors are implemented in the integration.
     - Peak Valley
     - Self-Consumption
     - Manual Control
-    - Advanced mode
+    - Advanced
     - Backup power supply
     - Peak-Shaving
     - Intelligent
