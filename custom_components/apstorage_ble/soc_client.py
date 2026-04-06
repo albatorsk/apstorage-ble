@@ -1699,6 +1699,179 @@ class APstorageSocClient:
                 except Exception:  # noqa: BLE001
                     pass
 
+    async def async_set_advanced_schedule(
+        self,
+        ble_device: BLEDevice,
+        *,
+        peak_time: list[str],
+        valley_time: list[str],
+        schedule: list[Any] | None = None,
+        device_name_hint: str | None = None,
+    ) -> dict[str, Any]:
+        """Set Advanced mode schedule using EMA-compatible setsysmode flow.
+
+        The EMA app writes mode=3 with `peakTime` / `valleyTime` arrays where
+        each entry is a compact `HHMMSSHHMMSS` time range string.
+        """
+        if not HAS_CRYPTO:
+            _LOGGER.error("pycryptodome required; install with: pip install pycryptodome")
+            return {"ok": False, "code": None, "message": "pycryptodome missing"}
+
+        schedule_items = list(schedule or [])
+
+        if schedule_items and (peak_time or valley_time):
+            return {
+                "ok": False,
+                "code": None,
+                "message": "use either schedule or peak_time/valley_time, not both",
+            }
+
+        if not schedule_items and not peak_time and not valley_time:
+            return {
+                "ok": False,
+                "code": None,
+                "message": "missing schedule payload",
+            }
+
+        if len(peak_time) > 5 or len(valley_time) > 5:
+            return {
+                "ok": False,
+                "code": None,
+                "message": "peak_time and valley_time support at most 5 ranges each",
+            }
+
+        range_re = re.compile(r"^\d{12}$")
+        for value in peak_time + valley_time:
+            if not range_re.fullmatch(str(value)):
+                return {
+                    "ok": False,
+                    "code": None,
+                    "message": f"invalid range format: {value!r} (expected HHMMSSHHMMSS)",
+                }
+
+        client: BleakClient | None = None
+        try:
+            async with asyncio.timeout(CONNECT_TIMEOUT_SECONDS):
+                client = await establish_connection(
+                    BleakClientWithServiceCache,
+                    ble_device,
+                    ble_device.address,
+                    max_attempts=3,
+                    use_services_cache=True,
+                )
+                await self._ensure_services_ready(client)
+
+                device_name = ""
+                try:
+                    name_raw = await client.read_gatt_char(DEVICE_NAME_CHAR)
+                    device_name = bytes(name_raw).decode("utf-8", errors="ignore").strip("\x00\r\n ")
+                except Exception:  # noqa: BLE001
+                    device_name = ""
+
+                if not device_name:
+                    device_name = device_name_hint or ""
+                if not device_name:
+                    device_name = ble_device.name or ""
+
+                storage_ids: list[str] = []
+                if self._preferred_storage_id:
+                    storage_ids.append(self._preferred_storage_id)
+
+                for source in (device_name, device_name_hint, ble_device.name):
+                    for candidate in _derive_storage_ids_from_name(source):
+                        if candidate not in storage_ids:
+                            storage_ids.append(candidate)
+
+                if not storage_ids:
+                    _LOGGER.warning("Could not derive storage ID for advanced schedule write")
+                    return {
+                        "ok": False,
+                        "code": None,
+                        "message": "could not derive storage id",
+                    }
+
+                await self._establish_blufi_session(client)
+
+                last_code: Any = None
+                last_message: str | None = None
+
+                for storage_id in storage_ids:
+                    get_resp = await self._send_property_request(
+                        client,
+                        method="get",
+                        identifier="getsysmode",
+                        storage_id=storage_id,
+                        params_extra={},
+                        system_id="",
+                    )
+                    if not isinstance(get_resp, dict):
+                        continue
+
+                    last_code = get_resp.get("code")
+                    last_message = str(get_resp.get("msg") or get_resp.get("message") or "")
+
+                    mode_data = get_resp.get("data")
+                    if not isinstance(mode_data, dict):
+                        continue
+
+                    payload = dict(mode_data)
+                    payload["mode"] = "3"
+
+                    if schedule_items:
+                        payload["peakTime"] = None
+                        payload["valleyTime"] = None
+                        payload["schedule"] = schedule_items
+                    else:
+                        payload["peakTime"] = list(peak_time)
+                        payload["valleyTime"] = list(valley_time)
+
+                    # Defaults from app ViewModel for missing keys.
+                    payload.setdefault("valleycharge", "1")
+                    payload.setdefault("backupSOC", "50")
+                    payload.setdefault("peakPower", "5000")
+                    payload.setdefault("sellingFirst", "0")
+
+                    set_resp = await self._send_property_request(
+                        client,
+                        method="set",
+                        identifier="setsysmode",
+                        storage_id=storage_id,
+                        params_extra=payload,
+                        system_id="",
+                    )
+
+                    if isinstance(set_resp, dict):
+                        code = set_resp.get("code")
+                        message = str(set_resp.get("msg") or set_resp.get("message") or "")
+                        if str(code) in {"1", "0", "200"}:
+                            self._preferred_storage_id = storage_id
+                            return {"ok": True, "code": code, "message": message}
+
+                        last_code = code
+                        last_message = message
+
+                return {
+                    "ok": False,
+                    "code": last_code,
+                    "message": last_message or "no successful setsysmode response",
+                }
+
+        except asyncio.TimeoutError:
+            _LOGGER.warning("Advanced schedule write timed out for %s", ble_device.address)
+            return {"ok": False, "code": "timeout", "message": "connection/write timeout"}
+        except BleakError as err:
+            _LOGGER.warning("BLE error during advanced schedule write for %s: %s", ble_device.address, err)
+            return {"ok": False, "code": "ble_error", "message": str(err)}
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("Unexpected advanced schedule write error for %s: %s", ble_device.address, err, exc_info=True)
+            return {"ok": False, "code": "exception", "message": str(err)}
+        finally:
+            if client and client.is_connected:
+                try:
+                    await client.disconnect()
+                except Exception:  # noqa: BLE001
+                    pass
+
     async def _query_soc_once(
         self,
         client: BleakClient,
