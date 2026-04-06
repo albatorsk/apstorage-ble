@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.10.7 - 2026-04-06
+
+### Fixed
+- Mode and Backup SOC write flows now tolerate additional real-world payload shapes.
+- `getsysmode` response parsing now supports both dictionary and list-based `data` payloads when building `setsysmode` writes.
+- Backup SOC mode gating now normalizes mode values (e.g. `"1.0"` -> `"1"`), preventing false `not_applicable` results.
+
+### Changed
+- Added mode-code normalization in system mode select mapping so UI reflects numeric-like mode values consistently.
+- Added `userId` field to property request params for better parity with app requests.
+
+### Notes
+- `manifest.json` version bumped to `0.10.7`.
+
 ## v0.10.6 - 2026-04-06
 
 ### Fixed
