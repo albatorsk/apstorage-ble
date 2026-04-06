@@ -40,6 +40,29 @@ LEGACY_STATE_TO_CODE: dict[str, str] = {
 }
 
 
+def _normalize_mode_code(value: Any) -> str | None:
+    """Normalize mode value to a compact integer code string (e.g. '1')."""
+    if value is None:
+        return None
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    if text.isdigit():
+        return str(int(text))
+
+    try:
+        number = float(text)
+    except (TypeError, ValueError):
+        return text
+
+    if number.is_integer():
+        return str(int(number))
+
+    return text
+
+
 @dataclass(frozen=True, kw_only=True)
 class APstorageSelectDescription(SelectEntityDescription):
     """Description for APstorage select entities."""
@@ -113,12 +136,12 @@ class APstorageSystemModeSelect(
             return None
 
         if data.system_mode is not None:
-            option = MODE_CODE_TO_OPTION.get(str(data.system_mode))
+            option = MODE_CODE_TO_OPTION.get(_normalize_mode_code(data.system_mode) or "")
             if option is not None:
                 return option
 
         if data.system_state is not None:
-            state = str(data.system_state)
+            state = _normalize_mode_code(data.system_state) or ""
             option = MODE_CODE_TO_OPTION.get(state)
             if option is not None:
                 return option
@@ -193,7 +216,7 @@ class APstorageBackupSocSelect(
             return None
 
         if data.system_mode is not None:
-            return str(data.system_mode)
+            return _normalize_mode_code(data.system_mode)
 
         if data.system_state is not None:
             state = str(data.system_state)
