@@ -63,6 +63,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._last_poll: float | None = None
         self._last_system_mode_write: dict[str, Any] | None = None
         self._last_backup_soc_write: dict[str, Any] | None = None
+        self._last_advanced_schedule_write: dict[str, Any] | None = None
         # Most-recent successfully parsed data; also exposed as coordinator.data
         self.data: PCSData | None = None
 
@@ -374,6 +375,76 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
     def last_backup_soc_write(self) -> dict[str, Any] | None:
         """Return the most recent backup SOC write attempt for diagnostics."""
         return self._last_backup_soc_write
+
+    async def async_set_advanced_schedule(
+        self,
+        *,
+        peak_time: list[str],
+        valley_time: list[str],
+        schedule: list[Any] | None = None,
+    ) -> None:
+        """Set Advanced mode charge/discharge schedule over BLE.
+
+        This maps to EMA app `setsysmode` writes with mode=3 and
+        `peakTime`/`valleyTime` payload arrays.
+        """
+        async with self._poll_lock:
+            service_info: BluetoothServiceInfoBleak | None = self._last_service_info
+
+            if service_info is not None and service_info.connectable:
+                ble_device = service_info.device
+            elif service_info is not None:
+                ble_device = bluetooth.async_ble_device_from_address(
+                    self.hass,
+                    service_info.device.address,
+                    connectable=True,
+                )
+            else:
+                ble_device = bluetooth.async_ble_device_from_address(
+                    self.hass,
+                    self._address,
+                    connectable=True,
+                )
+
+            if ble_device is None:
+                raise RuntimeError("No connectable BLE device found for advanced schedule write")
+
+            _LOGGER.debug(
+                "[%s] Setting advanced schedule peak=%s valley=%s schedule_items=%s",
+                self._name,
+                peak_time,
+                valley_time,
+                0 if not schedule else len(schedule),
+            )
+            result = await self._soc_client.async_set_advanced_schedule(
+                ble_device,
+                peak_time=peak_time,
+                valley_time=valley_time,
+                schedule=schedule,
+                device_name_hint=self._name,
+            )
+            self._last_advanced_schedule_write = {
+                "ok": bool(result.get("ok", False)),
+                "code": result.get("code"),
+                "message": result.get("message"),
+                "requested_peak_time": list(peak_time),
+                "requested_valley_time": list(valley_time),
+                "requested_schedule": list(schedule or []),
+                "at": datetime.now(timezone.utc).isoformat(),
+            }
+            if not bool(result.get("ok", False)):
+                raise RuntimeError(
+                    "Advanced schedule write failed"
+                    f" (code={result.get('code')}, message={result.get('message')})"
+                )
+
+            # Refresh immediately so entities reflect new state.
+            await self._async_poll()
+
+    @property
+    def last_advanced_schedule_write(self) -> dict[str, Any] | None:
+        """Return the most recent advanced schedule write attempt."""
+        return self._last_advanced_schedule_write
 
     async def async_periodic_poll(self) -> None:
         """Run a fallback poll independent of advertisement event timing."""
