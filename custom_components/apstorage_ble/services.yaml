@@ -36,3 +36,52 @@ set_system_mode:
       required: false
       selector:
         text:
+
+set_advanced_schedule:
+  name: Set Advanced Schedule
+  description: Set Advanced mode (mode 3) charge/discharge schedule over BLE.
+  fields:
+    peak_time:
+      name: Peak Time Ranges
+      description: >-
+        Peak/discharge time ranges. Each item must be 'HH:MM-HH:MM' or
+        compact 'HHMMSSHHMMSS'. Max 5 ranges.
+      required: false
+      example:
+        - "16:00-21:00"
+      selector:
+        object:
+    valley_time:
+      name: Valley Time Ranges
+      description: >-
+        Valley/charge time ranges. Each item must be 'HH:MM-HH:MM' or
+        compact 'HHMMSSHHMMSS'. Max 5 ranges.
+      required: false
+      example:
+        - "00:00-06:00"
+      selector:
+        object:
+    schedule:
+      name: Raw Schedule
+      description: >-
+        Optional advanced Time-Of-Use schedule list as returned by the EMA app.
+        When provided, do not provide peak_time/valley_time.
+      required: false
+      example:
+        - startTime: "00:00"
+          endTime: "06:00"
+          mode: "charge"
+      selector:
+        object:
+    entry_id:
+      name: Config Entry ID
+      description: Optional target entry id. Required if multiple APstorage entries are loaded and address is not provided.
+      required: false
+      selector:
+        text:
+    address:
+      name: Bluetooth Address
+      description: Optional target device MAC address (AA:BB:CC:DD:EE:FF). Required if multiple entries are loaded and entry_id is not provided.
+      required: false
+      selector:
+        text:
