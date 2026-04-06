@@ -1325,6 +1325,38 @@ def _response_is_success(resp: dict[str, Any]) -> bool:
     return False
 
 
+def _normalize_mode_code(value: Any) -> str | None:
+    """Normalize mode value to a compact integer code string (e.g. '1')."""
+    if value is None:
+        return None
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    if text.isdigit():
+        return str(int(text))
+
+    number = _to_float(text)
+    if number is not None and float(number).is_integer():
+        return str(int(number))
+
+    return text
+
+
+def _extract_sysmode_payload(data: Any) -> dict[str, Any] | None:
+    """Extract system-mode payload dict from varying getsysmode shapes."""
+    if isinstance(data, dict):
+        return data
+
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict):
+                return item
+
+    return None
+
+
 class APstorageSocClient:
     """Query APstorage battery SoC via Blufi encrypted custom payload."""
 
@@ -1522,8 +1554,8 @@ class APstorageSocClient:
                     last_code = get_resp.get("code")
                     last_message = str(get_resp.get("msg") or get_resp.get("message") or "")
 
-                    mode_data = get_resp.get("data")
-                    if not isinstance(mode_data, dict):
+                    mode_data = _extract_sysmode_payload(get_resp.get("data"))
+                    if mode_data is None:
                         continue
 
                     payload = dict(mode_data)
@@ -1657,12 +1689,12 @@ class APstorageSocClient:
                     last_code = get_resp.get("code")
                     last_message = str(get_resp.get("msg") or get_resp.get("message") or "")
 
-                    mode_data = get_resp.get("data")
-                    if not isinstance(mode_data, dict):
+                    mode_data = _extract_sysmode_payload(get_resp.get("data"))
+                    if mode_data is None:
                         continue
 
                     payload = dict(mode_data)
-                    mode_value = str(payload.get("mode", "")).strip()
+                    mode_value = _normalize_mode_code(payload.get("mode")) or ""
                     if mode_value not in {"1", "3"}:
                         last_code = "not_applicable"
                         last_message = "backup SOC can only be changed in mode 1 or 3"
@@ -1827,8 +1859,8 @@ class APstorageSocClient:
                     last_code = get_resp.get("code")
                     last_message = str(get_resp.get("msg") or get_resp.get("message") or "")
 
-                    mode_data = get_resp.get("data")
-                    if not isinstance(mode_data, dict):
+                    mode_data = _extract_sysmode_payload(get_resp.get("data"))
+                    if mode_data is None:
                         continue
 
                     payload = dict(mode_data)
@@ -2147,6 +2179,7 @@ class APstorageSocClient:
             "params": {
                 "T": "APS",
                 "V": "1",
+                "userId": "",
                 "EID": storage_id,
                 "systemId": system_id,
                 "storageId": storage_id,
