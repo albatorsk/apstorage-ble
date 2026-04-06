@@ -20,11 +20,11 @@ from .coordinator import APstorageCoordinator
 _LOGGER = logging.getLogger(__name__)
 
 MODE_CODE_TO_OPTION: dict[str, str] = {
-    "0": "Peak-Valley",
+    "0": "Peak Valley",
     "1": "Self-Consumption",
     "2": "Manual Control",
-    "3": "Mixed",
-    "4": "Backup Battery",
+    "3": "Advanced mode",
+    "4": "Backup power supply",
     "5": "Peak-Shaving",
     "6": "Intelligent",
 }
