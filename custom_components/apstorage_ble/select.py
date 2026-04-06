@@ -30,6 +30,7 @@ MODE_CODE_TO_OPTION: dict[str, str] = {
 }
 
 OPTION_TO_MODE_CODE: dict[str, str] = {v: k for k, v in MODE_CODE_TO_OPTION.items()}
+BACKUP_SOC_OPTIONS: list[str] = [str(value) for value in range(20, 91, 10)]
 
 # Accept labels that may already be exposed by system-state sensor formatting.
 LEGACY_STATE_TO_CODE: dict[str, str] = {
@@ -50,6 +51,12 @@ SYSTEM_MODE_SELECT = APstorageSelectDescription(
     options=list(OPTION_TO_MODE_CODE.keys()),
 )
 
+BACKUP_SOC_SELECT = APstorageSelectDescription(
+    key="backup_soc",
+    name="Backup SOC",
+    options=BACKUP_SOC_OPTIONS,
+)
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -58,7 +65,12 @@ async def async_setup_entry(
 ) -> None:
     """Set up APstorage select entities."""
     coordinator: APstorageCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([APstorageSystemModeSelect(coordinator, entry, SYSTEM_MODE_SELECT)])
+    async_add_entities(
+        [
+            APstorageSystemModeSelect(coordinator, entry, SYSTEM_MODE_SELECT),
+            APstorageBackupSocSelect(coordinator, entry, BACKUP_SOC_SELECT),
+        ]
+    )
 
 
 class APstorageSystemModeSelect(
@@ -142,6 +154,103 @@ class APstorageSystemModeSelect(
             attrs["last_write_code"] = write.get("code")
             attrs["last_write_message"] = write.get("message")
             attrs["last_write_requested_mode"] = write.get("requested_mode")
+            attrs["last_write_at"] = write.get("at")
+
+        return attrs or None
+
+
+class APstorageBackupSocSelect(
+    CoordinatorEntity[APstorageCoordinator],
+    SelectEntity,
+):
+    """Writable backup SOC selector for supported APstorage modes."""
+
+    entity_description: APstorageSelectDescription
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: APstorageCoordinator,
+        entry: ConfigEntry,
+        description: APstorageSelectDescription,
+    ) -> None:
+        super().__init__(coordinator)
+        self.entity_description = description
+        address: str = entry.data[CONF_ADDRESS]
+        self._attr_unique_id = f"{address}-{description.key}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, address)},
+            connections={(dr.CONNECTION_BLUETOOTH, address)},
+            name=entry.title,
+            manufacturer=MANUFACTURER,
+            model=MODEL,
+        )
+
+    def _current_mode_code(self) -> str | None:
+        """Return current mode code from decoded fields."""
+        data = self.coordinator.data
+        if data is None:
+            return None
+
+        if data.system_mode is not None:
+            return str(data.system_mode)
+
+        if data.system_state is not None:
+            state = str(data.system_state)
+            if state in MODE_CODE_TO_OPTION:
+                return state
+            return LEGACY_STATE_TO_CODE.get(state)
+
+        return None
+
+    @property
+    def available(self) -> bool:
+        """Only available when connected and mode supports backup SOC."""
+        if not self.coordinator.available:
+            return False
+        return self._current_mode_code() in {"1", "3"}
+
+    @property
+    def current_option(self) -> str | None:
+        """Return current backup SOC as string percent without percent sign."""
+        data = self.coordinator.data
+        if data is not None and data.backup_soc is not None:
+            current = str(int(round(float(data.backup_soc))))
+            if current in BACKUP_SOC_OPTIONS:
+                return current
+
+        write = self.coordinator.last_backup_soc_write
+        if write is not None:
+            requested = str(write.get("requested_backup_soc") or "")
+            if requested in BACKUP_SOC_OPTIONS:
+                return requested
+
+        return None
+
+    async def async_select_option(self, option: str) -> None:
+        """Set backup SOC on the device."""
+        if option not in BACKUP_SOC_OPTIONS:
+            raise ValueError(f"Unknown backup SOC option: {option}")
+
+        _LOGGER.debug("Setting APstorage backup SOC to %s", option)
+        await self.coordinator.async_set_backup_soc(int(option))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Expose backup SOC write diagnostics for automations/debugging."""
+        attrs: dict[str, Any] = {}
+
+        mode_code = self._current_mode_code()
+        if mode_code is not None:
+            attrs["mode_code"] = mode_code
+            attrs["mode_name"] = MODE_CODE_TO_OPTION.get(mode_code)
+
+        write = self.coordinator.last_backup_soc_write
+        if write is not None:
+            attrs["last_write_ok"] = write.get("ok")
+            attrs["last_write_code"] = write.get("code")
+            attrs["last_write_message"] = write.get("message")
+            attrs["last_write_requested_backup_soc"] = write.get("requested_backup_soc")
             attrs["last_write_at"] = write.get("at")
 
         return attrs or None
