@@ -23,7 +23,7 @@ MODE_CODE_TO_OPTION: dict[str, str] = {
     "0": "Peak Valley",
     "1": "Self-Consumption",
     "2": "Manual Control",
-    "3": "Advanced mode",
+    "3": "Advanced",
     "4": "Backup power supply",
     "5": "Peak-Shaving",
     "6": "Intelligent",
@@ -34,7 +34,7 @@ OPTION_TO_MODE_CODE: dict[str, str] = {v: k for k, v in MODE_CODE_TO_OPTION.item
 # Accept labels that may already be exposed by system-state sensor formatting.
 LEGACY_STATE_TO_CODE: dict[str, str] = {
     "Self-consumption": "1",
-    "Advanced mode": "3",
+    "Advanced": "3",
     "Intelligent": "6",
 }
 

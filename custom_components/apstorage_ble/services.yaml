@@ -4,7 +4,7 @@ set_system_mode:
   fields:
     mode:
       name: Mode
-      description: "Target mode code (0-6) or label (e.g. Advanced mode, Backup power supply)."
+      description: "Target mode code (0-6) or label (e.g. Advanced, Backup power supply)."
       required: true
       example: 3
       selector:
@@ -16,7 +16,7 @@ set_system_mode:
               value: 1
             - label: "2 - Manual Control"
               value: 2
-            - label: "3 - Advanced mode"
+            - label: "3 - Advanced"
               value: 3
             - label: "4 - Backup power supply"
               value: 4

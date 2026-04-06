@@ -44,7 +44,7 @@ SYSTEM_STATE_LABELS: dict[str, str] = {
     "0": "Peak Valley",
     "1": "Self-consumption",
     "2": "Manual Control",
-    "3": "Advanced mode",
+    "3": "Advanced",
     "4": "Backup power supply",
     "5": "Peak-Shaving",
     "6": "Intelligent",
