@@ -4,21 +4,21 @@ set_system_mode:
   fields:
     mode:
       name: Mode
-      description: "Target mode code (0-6) or label (e.g. Mixed, Backup Battery)."
+      description: "Target mode code (0-6) or label (e.g. Advanced mode, Backup power supply)."
       required: true
       example: 3
       selector:
         select:
           options:
-            - label: "0 - Peak-Valley"
+            - label: "0 - Peak Valley"
               value: 0
             - label: "1 - Self-Consumption"
               value: 1
             - label: "2 - Manual Control"
               value: 2
-            - label: "3 - Mixed"
+            - label: "3 - Advanced mode"
               value: 3
-            - label: "4 - Backup Battery"
+            - label: "4 - Backup power supply"
               value: 4
             - label: "5 - Peak-Shaving"
               value: 5

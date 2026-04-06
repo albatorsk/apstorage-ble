@@ -58,11 +58,11 @@ The following sensors are implemented in the integration.
 
 #### Controls
 - System Mode (`select` entity)
-    - Peak-Valley
+    - Peak Valley
     - Self-Consumption
     - Manual Control
-    - Mixed
-    - Backup Battery
+    - Advanced mode
+    - Backup power supply
     - Peak-Shaving
     - Intelligent
 

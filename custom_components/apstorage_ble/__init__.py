@@ -36,11 +36,11 @@ ATTR_ENTRY_ID = "entry_id"
 ATTR_ADDRESS = "address"
 
 _MODE_LABEL_TO_CODE: dict[str, int] = {
-    "peak-valley": 0,
+    "peak valley": 0,
     "self-consumption": 1,
     "manual control": 2,
-    "mixed": 3,
-    "backup battery": 4,
+    "advanced mode": 3,
+    "backup power supply": 4,
     "peak-shaving": 5,
     "intelligent": 6,
 }
