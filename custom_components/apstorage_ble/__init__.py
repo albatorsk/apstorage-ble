@@ -37,7 +37,7 @@ ATTR_ADDRESS = "address"
 
 _MODE_LABEL_TO_CODE: dict[str, int] = {
     "peak-valley": 0,
-    "redundant energy control": 1,
+    "self-consumption": 1,
     "manual control": 2,
     "mixed": 3,
     "backup battery": 4,

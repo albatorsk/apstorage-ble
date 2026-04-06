@@ -12,7 +12,7 @@ set_system_mode:
           options:
             - label: "0 - Peak-Valley"
               value: 0
-            - label: "1 - Redundant Energy Control"
+            - label: "1 - Self-Consumption"
               value: 1
             - label: "2 - Manual Control"
               value: 2

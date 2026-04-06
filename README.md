@@ -59,7 +59,7 @@ The following sensors are implemented in the integration.
 #### Controls
 - System Mode (`select` entity)
     - Peak-Valley
-    - Redundant Energy Control
+    - Self-Consumption
     - Manual Control
     - Mixed
     - Backup Battery
