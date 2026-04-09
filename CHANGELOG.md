@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.11.5 - 2026-04-09
+
+### Fixed
+- Removed `T2` and `T3` as battery and inverter temperature aliases.
+- Reserved `T2` and `T3` for their energy-counter meanings so temperature entities are no longer populated from the wrong fields.
+- Temperature extraction now relies on explicit temperature keys and `RT*` runtime temperature channels instead of overloaded total-energy keys.
+
+### Notes
+- `manifest.json` version bumped to `0.11.5`.
+
 ## v0.11.4 - 2026-04-09
 
 ### Fixed
