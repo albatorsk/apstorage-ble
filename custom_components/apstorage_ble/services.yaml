@@ -85,3 +85,126 @@ set_advanced_schedule:
       required: false
       selector:
         text:
+
+set_buzzer_mode:
+  name: Set Buzzer Mode
+  description: Set PCS buzzer mode over BLE.
+  fields:
+    buzzer_mode:
+      name: Buzzer Mode
+      description: "Target buzzer mode code (0/1) or label (Silent/Normal)."
+      required: true
+      example: 1
+      selector:
+        select:
+          options:
+            - label: "0 - Silent"
+              value: 0
+            - label: "1 - Normal"
+              value: 1
+    entry_id:
+      name: Config Entry ID
+      description: Optional target entry id. Required if multiple APstorage entries are loaded and address is not provided.
+      required: false
+      selector:
+        text:
+    address:
+      name: Bluetooth Address
+      description: Optional target device MAC address (AA:BB:CC:DD:EE:FF). Required if multiple entries are loaded and entry_id is not provided.
+      required: false
+      selector:
+        text:
+
+clear_buzzer:
+  name: Clear Buzzer Alarm
+  description: Clear active PCS buzzer alarm over BLE.
+  fields:
+    entry_id:
+      name: Config Entry ID
+      description: Optional target entry id. Required if multiple APstorage entries are loaded and address is not provided.
+      required: false
+      selector:
+        text:
+    address:
+      name: Bluetooth Address
+      description: Optional target device MAC address (AA:BB:CC:DD:EE:FF). Required if multiple entries are loaded and entry_id is not provided.
+      required: false
+      selector:
+        text:
+
+set_selling_first:
+  name: Set Selling First
+  description: Set the EMA app sellingFirst flag over BLE via setsysmode.
+  fields:
+    enabled:
+      name: Enabled
+      description: Enable or disable selling-first behavior.
+      required: true
+      example: true
+      selector:
+        boolean:
+    entry_id:
+      name: Config Entry ID
+      description: Optional target entry id. Required if multiple APstorage entries are loaded and address is not provided.
+      required: false
+      selector:
+        text:
+    address:
+      name: Bluetooth Address
+      description: Optional target device MAC address (AA:BB:CC:DD:EE:FF). Required if multiple entries are loaded and entry_id is not provided.
+      required: false
+      selector:
+        text:
+
+set_valley_charge:
+  name: Set Valley Charge
+  description: Set the EMA app valleycharge flag over BLE via setsysmode.
+  fields:
+    enabled:
+      name: Enabled
+      description: Enable or disable valley charge behavior.
+      required: true
+      example: true
+      selector:
+        boolean:
+    entry_id:
+      name: Config Entry ID
+      description: Optional target entry id. Required if multiple APstorage entries are loaded and address is not provided.
+      required: false
+      selector:
+        text:
+    address:
+      name: Bluetooth Address
+      description: Optional target device MAC address (AA:BB:CC:DD:EE:FF). Required if multiple entries are loaded and entry_id is not provided.
+      required: false
+      selector:
+        text:
+
+set_peak_power:
+  name: Set Peak Power
+  description: Set peak-shaving power over BLE via setsysmode (mode 5 only).
+  fields:
+    peak_power:
+      name: Peak Power
+      description: Peak-shaving power setpoint in watts (100-50000).
+      required: true
+      example: 5000
+      selector:
+        number:
+          min: 100
+          max: 50000
+          step: 1
+          unit_of_measurement: W
+          mode: box
+    entry_id:
+      name: Config Entry ID
+      description: Optional target entry id. Required if multiple APstorage entries are loaded and address is not provided.
+      required: false
+      selector:
+        text:
+    address:
+      name: Bluetooth Address
+      description: Optional target device MAC address (AA:BB:CC:DD:EE:FF). Required if multiple entries are loaded and entry_id is not provided.
+      required: false
+      selector:
+        text:
