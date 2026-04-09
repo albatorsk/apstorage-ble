@@ -311,6 +311,39 @@ def _to_celsius(value: Any) -> float | None:
     return min(candidates, key=lambda x: abs(x - 25.0))
 
 
+def _to_celsius_from_any(value: Any) -> float | None:
+    """Convert scalar/list temperature payloads to Celsius.
+
+    Some firmware variants expose temperatures as arrays (historical samples)
+    while others expose scalar T2/T3-like fields.
+    """
+    raw: float | None
+    if isinstance(value, list):
+        raw = _last_nonzero_from_array(value)
+    else:
+        raw = _to_float(value)
+
+    if raw is None:
+        return None
+
+    candidates: list[float] = []
+    for candidate in (
+        raw,
+        raw / 10.0,
+        raw / 100.0,
+        raw / 1000.0,
+        raw - 100.0,
+        (raw - 100.0) / 10.0,
+    ):
+        if -40.0 <= candidate <= 120.0:
+            candidates.append(candidate)
+
+    if not candidates:
+        return None
+
+    return min(candidates, key=lambda x: abs(x - 25.0))
+
+
 def _infer_temperature_from_numeric_fields(
     root: Any,
     *,
@@ -600,9 +633,19 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
     for root in roots:
         bt_raw = _deep_find_key(
             root,
-            {"bt", "battery_temperature", "batterytemp", "battery_temp", "bat_temp", "tbat"},
+            {
+                "bt",
+                "battery_temperature",
+                "batterytemp",
+                "battery_temp",
+                "bat_temp",
+                "tbat",
+                "t2",
+                "rt0",
+                "rt2",
+            },
         )
-        bt = _to_celsius(bt_raw)
+        bt = _to_celsius_from_any(bt_raw)
         if bt is not None:
             metrics.battery_temperature = bt
             break
@@ -997,8 +1040,22 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
 
     # Search for inverter temperature (APstorage field is typically T3).
     for root in roots:
-        it_raw = _deep_find_key(root, {"it", "inverter_temperature", "invertertemp", "inverter_temp", "tinv"})
-        it = _to_celsius(it_raw)
+        it_raw = _deep_find_key(
+            root,
+            {
+                "it",
+                "inverter_temperature",
+                "invertertemp",
+                "inverter_temp",
+                "tinv",
+                "t3",
+                "rt1",
+                "rt3",
+                "tpcs",
+                "pcs_temp",
+            },
+        )
+        it = _to_celsius_from_any(it_raw)
         if it is not None:
             metrics.inverter_temperature = it
             break
