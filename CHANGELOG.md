@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.11.4 - 2026-04-09
+
+### Fixed
+- Temperature extraction now supports scalar and historical-array payload variants through a unified Celsius conversion path.
+- Added direct key aliases for temperature fields observed in firmware variants (`T2`/`T3`, `RT0`/`RT1`/`RT2`/`RT3`, and PCS-specific aliases).
+- Added support for offset-encoded temperature values (e.g. raw minus 100) to avoid `Unknown` temperature sensors.
+
+### Notes
+- `manifest.json` version bumped to `0.11.4`.
+
 ## v0.11.3 - 2026-04-09
 
 ### Fixed
