@@ -50,6 +50,9 @@ class PCSData:
     inverter_temperature: float | None = None  # °C
     system_mode: str | None = None             # mode code: 0..6
     backup_soc: float | None = None            # % reserve SOC threshold
+    selling_first: bool | None = None          # 0/1 flag for selling-first behavior
+    valley_charge: bool | None = None          # 0/1 flag for valley-charge behavior
+    peak_power: int | None = None              # W peak-shaving setpoint (mode 5)
     system_state: str | None = None            # free-form state string
     battery_flow_state: str | None = None      # charging / discharging / holding
     buzzer: int | None = None                  # 0=Silent, 1=Normal
