@@ -17,6 +17,9 @@ Designed to work with an **ESPHome Bluetooth proxy** placed near the PCS.
 | Active + fallback periodic polling | ✅ **Working** |
 | Sensor entity platform | ✅ **Working** |
 | System mode select (write) | ✅ **Working** |
+| Buzzer mode select (write) | ✅ **Working** |
+| Clear buzzer alarm (button/service) | ✅ **Working** |
+| sellingFirst/valleycharge/peakPower services | ✅ **Working** |
 | Service call for mode changes | ✅ **Working** |
 
 ---
@@ -65,10 +68,37 @@ The following sensors are implemented in the integration.
     - Backup power supply
     - Peak-Shaving
     - Intelligent
+- Backup SOC (`select` entity)
+- Buzzer Mode (`select` entity)
+    - Silent
+    - Normal
+- Selling First (`switch` entity)
+- Valley Charge (`switch` entity)
+- Peak Power (`number` entity, mode 5 only)
+- Clear Buzzer Alarm (`button` entity)
 
 Service:
 - `apstorage_ble.set_system_mode`
     - `mode`: required (`0..6` or mode label)
+    - `entry_id`: optional (target config entry)
+    - `address`: optional (target device MAC)
+- `apstorage_ble.set_buzzer_mode`
+    - `buzzer_mode`: required (`0/1` or label `Silent/Normal`)
+    - `entry_id`: optional (target config entry)
+    - `address`: optional (target device MAC)
+- `apstorage_ble.clear_buzzer`
+    - `entry_id`: optional (target config entry)
+    - `address`: optional (target device MAC)
+- `apstorage_ble.set_selling_first`
+    - `enabled`: required (`true/false`)
+    - `entry_id`: optional (target config entry)
+    - `address`: optional (target device MAC)
+- `apstorage_ble.set_valley_charge`
+    - `enabled`: required (`true/false`)
+    - `entry_id`: optional (target config entry)
+    - `address`: optional (target device MAC)
+- `apstorage_ble.set_peak_power`
+    - `peak_power`: required (`100..50000`, mode 5 only)
     - `entry_id`: optional (target config entry)
     - `address`: optional (target device MAC)
 

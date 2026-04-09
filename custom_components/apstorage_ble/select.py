@@ -31,6 +31,13 @@ MODE_CODE_TO_OPTION: dict[str, str] = {
 
 OPTION_TO_MODE_CODE: dict[str, str] = {v: k for k, v in MODE_CODE_TO_OPTION.items()}
 BACKUP_SOC_OPTIONS: list[str] = [str(value) for value in range(20, 91, 10)]
+BUZZER_MODE_CODE_TO_OPTION: dict[int, str] = {
+    0: "Silent",
+    1: "Normal",
+}
+BUZZER_MODE_OPTION_TO_CODE: dict[str, int] = {
+    label: code for code, label in BUZZER_MODE_CODE_TO_OPTION.items()
+}
 
 # Accept labels that may already be exposed by system-state sensor formatting.
 LEGACY_STATE_TO_CODE: dict[str, str] = {
@@ -80,6 +87,12 @@ BACKUP_SOC_SELECT = APstorageSelectDescription(
     options=BACKUP_SOC_OPTIONS,
 )
 
+BUZZER_MODE_SELECT = APstorageSelectDescription(
+    key="buzzer_mode",
+    name="Buzzer Mode",
+    options=list(BUZZER_MODE_OPTION_TO_CODE.keys()),
+)
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -92,6 +105,7 @@ async def async_setup_entry(
         [
             APstorageSystemModeSelect(coordinator, entry, SYSTEM_MODE_SELECT),
             APstorageBackupSocSelect(coordinator, entry, BACKUP_SOC_SELECT),
+            APstorageBuzzerModeSelect(coordinator, entry, BUZZER_MODE_SELECT),
         ]
     )
 
@@ -277,3 +291,76 @@ class APstorageBackupSocSelect(
             attrs["last_write_at"] = write.get("at")
 
         return attrs or None
+
+
+class APstorageBuzzerModeSelect(
+    CoordinatorEntity[APstorageCoordinator],
+    SelectEntity,
+):
+    """Writable buzzer mode selector for APstorage storage device."""
+
+    entity_description: APstorageSelectDescription
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: APstorageCoordinator,
+        entry: ConfigEntry,
+        description: APstorageSelectDescription,
+    ) -> None:
+        super().__init__(coordinator)
+        self.entity_description = description
+        address: str = entry.data[CONF_ADDRESS]
+        self._attr_unique_id = f"{address}-{description.key}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, address)},
+            connections={(dr.CONNECTION_BLUETOOTH, address)},
+            name=entry.title,
+            manufacturer=MANUFACTURER,
+            model=MODEL,
+        )
+
+    @property
+    def available(self) -> bool:
+        """Return availability from Bluetooth coordinator reachability."""
+        return self.coordinator.available
+
+    @property
+    def current_option(self) -> str | None:
+        """Return the currently active buzzer mode option."""
+        data = self.coordinator.data
+        if data is not None and data.buzzer is not None:
+            return BUZZER_MODE_CODE_TO_OPTION.get(int(data.buzzer))
+
+        write = self.coordinator.last_buzzer_mode_write
+        if write is not None:
+            requested = str(write.get("requested_buzzer_mode") or "")
+            if requested.isdigit():
+                return BUZZER_MODE_CODE_TO_OPTION.get(int(requested))
+
+        return None
+
+    async def async_select_option(self, option: str) -> None:
+        """Set buzzer mode on the device."""
+        mode_code = BUZZER_MODE_OPTION_TO_CODE.get(option)
+        if mode_code is None:
+            raise ValueError(f"Unknown buzzer mode option: {option}")
+
+        _LOGGER.debug("Setting APstorage buzzer mode to %s (%s)", option, mode_code)
+        await self.coordinator.async_set_buzzer_mode(mode_code)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Expose write diagnostics for automation/debugging."""
+        attrs: dict[str, Any] = {}
+
+        write = self.coordinator.last_buzzer_mode_write
+        if write is not None:
+            attrs["last_write_ok"] = write.get("ok")
+            attrs["last_write_code"] = write.get("code")
+            attrs["last_write_message"] = write.get("message")
+            attrs["last_write_requested_buzzer_mode"] = write.get("requested_buzzer_mode")
+            attrs["last_write_at"] = write.get("at")
+
+        return attrs or None
+
