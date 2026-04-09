@@ -548,6 +548,20 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
             metrics.battery_temperature = bt
             break
 
+    # Local BLE storage payloads often expose runtime temperatures via RT arrays
+    # instead of named scalar fields. Prefer RT0 as the primary storage-side
+    # temperature channel and fall back to later RT channels if needed.
+    if metrics.battery_temperature is None:
+        for root in roots:
+            for key in ("rt0", "rt1", "rt2", "rt3", "rt4", "rt5"):
+                rt_raw = _deep_find_key(root, {key})
+                bt = _to_celsius(_last_nonzero_from_array(rt_raw))
+                if bt is not None:
+                    metrics.battery_temperature = bt
+                    break
+            if metrics.battery_temperature is not None:
+                break
+
     # Search for charged/discharged energy totals (kWh).
     # App data models use chargeTotal/dischargeTotal and sometimes
     # todayChargeEnergy/todayDischargeEnergy in home views.
@@ -919,6 +933,19 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
         if it is not None:
             metrics.inverter_temperature = it
             break
+
+    # Same local-data payload variant fallback for PCS-side temperature.
+    # RT1 is the best next candidate when a separate inverter/PCS temp is exposed.
+    if metrics.inverter_temperature is None:
+        for root in roots:
+            for key in ("rt1", "rt0", "rt2", "rt3", "rt4", "rt5"):
+                rt_raw = _deep_find_key(root, {key})
+                it = _to_celsius(_last_nonzero_from_array(rt_raw))
+                if it is not None:
+                    metrics.inverter_temperature = it
+                    break
+            if metrics.inverter_temperature is not None:
+                break
 
     # Log summary of extracted fields
     extracted_fields = []

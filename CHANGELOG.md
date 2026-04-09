@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.11.2 - 2026-04-09
+
+### Fixed
+- Temperature sensors now fall back to local BLE `RT0..RT5` telemetry arrays when named temperature fields are absent.
+- Battery Temperature and Inverter Temperature no longer stay `Unknown` on the common APstorage local-data payload variant.
+
+### Notes
+- `manifest.json` version bumped to `0.11.2`.
+
 ## v0.11.1 - 2026-04-09
 
 ### Added
