@@ -97,6 +97,15 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         value_fn=lambda d: d.battery_charging_power,
     ),
     APstorageSensorDescription(
+        key="battery_temperature",
+        name="Battery Temperature",
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=1,
+        value_fn=lambda d: d.battery_temperature,
+    ),
+    APstorageSensorDescription(
         key="battery_charged_energy",
         name="Daily Charged Energy",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
@@ -162,6 +171,15 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda d: d.load_power,
+    ),
+    APstorageSensorDescription(
+        key="inverter_temperature",
+        name="Inverter Temperature",
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=1,
+        value_fn=lambda d: d.inverter_temperature,
     ),
     # --- System ---
     APstorageSensorDescription(
