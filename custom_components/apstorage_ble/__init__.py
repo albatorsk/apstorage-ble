@@ -40,8 +40,10 @@ PLATFORMS: list[Platform] = [
 
 SERVICE_SET_SYSTEM_MODE = "set_system_mode"
 SERVICE_SET_ADVANCED_SCHEDULE = "set_advanced_schedule"
+SERVICE_SET_PEAK_VALLEY_SCHEDULE = "set_peak_valley_schedule"
 SERVICE_SET_BUZZER_MODE = "set_buzzer_mode"
 SERVICE_CLEAR_BUZZER = "clear_buzzer"
+SERVICE_REBOOT_PCS = "reboot_pcs"
 SERVICE_SET_SELLING_FIRST = "set_selling_first"
 SERVICE_SET_VALLEY_CHARGE = "set_valley_charge"
 SERVICE_SET_PEAK_POWER = "set_peak_power"
@@ -83,6 +85,15 @@ SERVICE_SET_ADVANCED_SCHEDULE_SCHEMA = vol.Schema(
     }
 )
 
+SERVICE_SET_PEAK_VALLEY_SCHEDULE_SCHEMA = vol.Schema(
+    {
+        vol.Optional(ATTR_PEAK_TIME): vol.Any(cv.string, [cv.string]),
+        vol.Optional(ATTR_VALLEY_TIME): vol.Any(cv.string, [cv.string]),
+        vol.Optional(ATTR_ENTRY_ID): cv.string,
+        vol.Optional(ATTR_ADDRESS): cv.string,
+    }
+)
+
 SERVICE_SET_BUZZER_MODE_SCHEMA = vol.Schema(
     {
         vol.Required(ATTR_BUZZER_MODE): vol.Any(vol.Coerce(int), cv.string),
@@ -92,6 +103,13 @@ SERVICE_SET_BUZZER_MODE_SCHEMA = vol.Schema(
 )
 
 SERVICE_CLEAR_BUZZER_SCHEMA = vol.Schema(
+    {
+        vol.Optional(ATTR_ENTRY_ID): cv.string,
+        vol.Optional(ATTR_ADDRESS): cv.string,
+    }
+)
+
+SERVICE_REBOOT_PCS_SCHEMA = vol.Schema(
     {
         vol.Optional(ATTR_ENTRY_ID): cv.string,
         vol.Optional(ATTR_ADDRESS): cv.string,
@@ -435,6 +453,36 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             schema=SERVICE_SET_ADVANCED_SCHEDULE_SCHEMA,
         )
 
+    if not hass.services.has_service(DOMAIN, SERVICE_SET_PEAK_VALLEY_SCHEDULE):
+
+        async def _async_handle_set_peak_valley_schedule(call: ServiceCall) -> None:
+            peak_time = _normalize_time_ranges(call.data.get(ATTR_PEAK_TIME), ATTR_PEAK_TIME)
+            valley_time = _normalize_time_ranges(call.data.get(ATTR_VALLEY_TIME), ATTR_VALLEY_TIME)
+
+            if not peak_time and not valley_time:
+                raise HomeAssistantError(
+                    "At least one of peak_time or valley_time must be provided"
+                )
+
+            _validate_no_overlap(peak_time, valley_time)
+
+            target = _resolve_target_coordinator(
+                hass,
+                entry_id=call.data.get(ATTR_ENTRY_ID),
+                address=call.data.get(ATTR_ADDRESS),
+            )
+            await target.async_set_peak_valley_schedule(
+                peak_time=peak_time,
+                valley_time=valley_time,
+            )
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_SET_PEAK_VALLEY_SCHEDULE,
+            _async_handle_set_peak_valley_schedule,
+            schema=SERVICE_SET_PEAK_VALLEY_SCHEDULE_SCHEMA,
+        )
+
     if not hass.services.has_service(DOMAIN, SERVICE_SET_BUZZER_MODE):
 
         async def _async_handle_set_buzzer_mode(call: ServiceCall) -> None:
@@ -468,6 +516,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             SERVICE_CLEAR_BUZZER,
             _async_handle_clear_buzzer,
             schema=SERVICE_CLEAR_BUZZER_SCHEMA,
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_REBOOT_PCS):
+
+        async def _async_handle_reboot_pcs(call: ServiceCall) -> None:
+            target = _resolve_target_coordinator(
+                hass,
+                entry_id=call.data.get(ATTR_ENTRY_ID),
+                address=call.data.get(ATTR_ADDRESS),
+            )
+            await target.async_reboot_pcs()
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_REBOOT_PCS,
+            _async_handle_reboot_pcs,
+            schema=SERVICE_REBOOT_PCS_SCHEMA,
         )
 
     if not hass.services.has_service(DOMAIN, SERVICE_SET_SELLING_FIRST):

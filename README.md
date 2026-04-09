@@ -16,9 +16,12 @@ Designed to work with an **ESPHome Bluetooth proxy** placed near the PCS.
 | Blufi handshake + encrypted local-data query | ✅ **Working** |
 | Active + fallback periodic polling | ✅ **Working** |
 | Sensor entity platform | ✅ **Working** |
+| Temperature sensors | ✅ **Working** |
 | System mode select (write) | ✅ **Working** |
 | Buzzer mode select (write) | ✅ **Working** |
 | Clear buzzer alarm (button/service) | ✅ **Working** |
+| PCS reboot (button/service) | ✅ **Working** |
+| Peak Valley schedule service (mode 0) | ✅ **Working** |
 | sellingFirst/valleycharge/peakPower services | ✅ **Working** |
 | Service call for mode changes | ✅ **Working** |
 
@@ -37,6 +40,7 @@ The following sensors are implemented in the integration.
 - Battery State of Charge (`%`)
 - Battery Discharging Power (`W`)
 - Battery Charging Power (`W`)
+- Battery Temperature (`°C`)
 - Daily Charged Energy (`kWh`)
 - Daily Discharged Energy (`kWh`)
 
@@ -50,6 +54,7 @@ The following sensors are implemented in the integration.
 
 #### Load / Output
 - Load Power (`W`)
+- Inverter Temperature (`°C`)
 
 #### System
 - System State (enum)
@@ -76,10 +81,17 @@ The following sensors are implemented in the integration.
 - Valley Charge (`switch` entity)
 - Peak Power (`number` entity, mode 5 only)
 - Clear Buzzer Alarm (`button` entity)
+- Reboot PCS (`button` entity)
 
 Service:
 - `apstorage_ble.set_system_mode`
     - `mode`: required (`0..6` or mode label)
+    - `entry_id`: optional (target config entry)
+    - `address`: optional (target device MAC)
+- `apstorage_ble.set_peak_valley_schedule`
+    - `peak_time`: optional (`HH:MM-HH:MM` or `HHMMSSHHMMSS`, max 5)
+    - `valley_time`: optional (`HH:MM-HH:MM` or `HHMMSSHHMMSS`, max 5)
+    - at least one of `peak_time` / `valley_time` is required
     - `entry_id`: optional (target config entry)
     - `address`: optional (target device MAC)
 - `apstorage_ble.set_buzzer_mode`
@@ -87,6 +99,9 @@ Service:
     - `entry_id`: optional (target config entry)
     - `address`: optional (target device MAC)
 - `apstorage_ble.clear_buzzer`
+    - `entry_id`: optional (target config entry)
+    - `address`: optional (target device MAC)
+- `apstorage_ble.reboot_pcs`
     - `entry_id`: optional (target config entry)
     - `address`: optional (target device MAC)
 - `apstorage_ble.set_selling_first`
