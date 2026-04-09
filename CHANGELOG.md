@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.11.3 - 2026-04-09
+
+### Fixed
+- Improved temperature parsing for firmware variants with non-standard key names and scales.
+- Added bounded fallback inference for battery/inverter temperature from temperature-like numeric fields when explicit keys are absent.
+- Improved Celsius normalization by evaluating multiple scale factors and selecting the most plausible value.
+
+### Notes
+- `manifest.json` version bumped to `0.11.3`.
+
 ## v0.11.2 - 2026-04-09
 
 ### Fixed
