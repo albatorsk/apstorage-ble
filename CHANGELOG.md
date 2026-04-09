@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.11.1 - 2026-04-09
+
+### Added
+- New telemetry entities:
+  - `Battery Temperature` sensor
+  - `Inverter Temperature` sensor
+- New PCS maintenance control:
+  - `Reboot PCS` button entity
+  - `apstorage_ble.reboot_pcs` service
+- New Peak Valley mode write support:
+  - `apstorage_ble.set_peak_valley_schedule` service for mode 0 peak/valley windows
+
+### Changed
+- Refactored simple BLE property writes to reuse a shared command helper for buzzer clear and PCS reboot actions.
+- Extended coordinator diagnostics to track peak-valley schedule and PCS reboot writes.
+- Updated documentation for new sensors, services, and controls.
+
+### Notes
+- `manifest.json` version bumped to `0.11.1`.
+
 ## v0.11.0 - 2026-04-09
 
 ### Added

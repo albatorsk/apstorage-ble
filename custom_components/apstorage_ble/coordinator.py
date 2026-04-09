@@ -64,8 +64,10 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._last_system_mode_write: dict[str, Any] | None = None
         self._last_backup_soc_write: dict[str, Any] | None = None
         self._last_advanced_schedule_write: dict[str, Any] | None = None
+        self._last_peak_valley_schedule_write: dict[str, Any] | None = None
         self._last_buzzer_mode_write: dict[str, Any] | None = None
         self._last_clear_buzzer_write: dict[str, Any] | None = None
+        self._last_pcs_reboot_write: dict[str, Any] | None = None
         self._last_selling_first_write: dict[str, Any] | None = None
         self._last_valley_charge_write: dict[str, Any] | None = None
         self._last_peak_power_write: dict[str, Any] | None = None
@@ -455,6 +457,71 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         """Return the most recent advanced schedule write attempt."""
         return self._last_advanced_schedule_write
 
+    async def async_set_peak_valley_schedule(
+        self,
+        *,
+        peak_time: list[str],
+        valley_time: list[str],
+    ) -> None:
+        """Set Peak Valley mode schedule over BLE using setsysmode."""
+        async with self._poll_lock:
+            service_info: BluetoothServiceInfoBleak | None = self._last_service_info
+
+            if service_info is not None and service_info.connectable:
+                ble_device = service_info.device
+            elif service_info is not None:
+                ble_device = bluetooth.async_ble_device_from_address(
+                    self.hass,
+                    service_info.device.address,
+                    connectable=True,
+                )
+            else:
+                ble_device = bluetooth.async_ble_device_from_address(
+                    self.hass,
+                    self._address,
+                    connectable=True,
+                )
+
+            if ble_device is None:
+                raise RuntimeError("No connectable BLE device found for peak-valley schedule write")
+
+            _LOGGER.debug(
+                "[%s] Setting peak-valley schedule peak=%s valley=%s",
+                self._name,
+                peak_time,
+                valley_time,
+            )
+            result = await self._soc_client.async_set_peak_valley_schedule(
+                ble_device,
+                peak_time=peak_time,
+                valley_time=valley_time,
+                device_name_hint=self._name,
+            )
+            self._last_peak_valley_schedule_write = {
+                "ok": bool(result.get("ok", False)),
+                "code": result.get("code"),
+                "message": result.get("message"),
+                "requested_peak_time": list(peak_time),
+                "requested_valley_time": list(valley_time),
+                "at": datetime.now(timezone.utc).isoformat(),
+            }
+            if not bool(result.get("ok", False)):
+                raise RuntimeError(
+                    "Peak-valley schedule write failed"
+                    f" (code={result.get('code')}, message={result.get('message')})"
+                )
+
+            if self.data is not None:
+                self.data.system_mode = "0"
+                self.async_update_listeners()
+
+            await self._async_poll()
+
+    @property
+    def last_peak_valley_schedule_write(self) -> dict[str, Any] | None:
+        """Return the most recent peak-valley schedule write attempt."""
+        return self._last_peak_valley_schedule_write
+
     async def async_set_buzzer_mode(self, mode: int) -> None:
         """Set buzzer mode over BLE and refresh coordinator data."""
         if mode not in {0, 1}:
@@ -557,6 +624,51 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
     def last_clear_buzzer_write(self) -> dict[str, Any] | None:
         """Return the most recent clear buzzer write attempt."""
         return self._last_clear_buzzer_write
+
+    async def async_reboot_pcs(self) -> None:
+        """Reboot the PCS over BLE."""
+        async with self._poll_lock:
+            service_info: BluetoothServiceInfoBleak | None = self._last_service_info
+
+            if service_info is not None and service_info.connectable:
+                ble_device = service_info.device
+            elif service_info is not None:
+                ble_device = bluetooth.async_ble_device_from_address(
+                    self.hass,
+                    service_info.device.address,
+                    connectable=True,
+                )
+            else:
+                ble_device = bluetooth.async_ble_device_from_address(
+                    self.hass,
+                    self._address,
+                    connectable=True,
+                )
+
+            if ble_device is None:
+                raise RuntimeError("No connectable BLE device found for PCS reboot")
+
+            _LOGGER.debug("[%s] Rebooting PCS", self._name)
+            result = await self._soc_client.async_reboot_pcs(
+                ble_device,
+                device_name_hint=self._name,
+            )
+            self._last_pcs_reboot_write = {
+                "ok": bool(result.get("ok", False)),
+                "code": result.get("code"),
+                "message": result.get("message"),
+                "at": datetime.now(timezone.utc).isoformat(),
+            }
+            if not bool(result.get("ok", False)):
+                raise RuntimeError(
+                    "PCS reboot failed"
+                    f" (code={result.get('code')}, message={result.get('message')})"
+                )
+
+    @property
+    def last_pcs_reboot_write(self) -> dict[str, Any] | None:
+        """Return the most recent PCS reboot write attempt."""
+        return self._last_pcs_reboot_write
 
     async def async_set_selling_first(self, enabled: bool) -> None:
         """Set sellingFirst over BLE and refresh coordinator data."""

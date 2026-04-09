@@ -1358,6 +1358,25 @@ def _extract_sysmode_payload(data: Any) -> dict[str, Any] | None:
     return None
 
 
+def _derive_storage_id_candidates(
+    preferred_storage_id: str | None,
+    device_name: str | None,
+    device_name_hint: str | None,
+    ble_device_name: str | None,
+) -> list[str]:
+    """Return storage ID candidates in app-compatible priority order."""
+    storage_ids: list[str] = []
+    if preferred_storage_id:
+        storage_ids.append(preferred_storage_id)
+
+    for source in (device_name, device_name_hint, ble_device_name):
+        for candidate in _derive_storage_ids_from_name(source):
+            if candidate not in storage_ids:
+                storage_ids.append(candidate)
+
+    return storage_ids
+
+
 class APstorageSocClient:
     """Query APstorage battery SoC via Blufi encrypted custom payload."""
 
@@ -1515,14 +1534,12 @@ class APstorageSocClient:
                 if not device_name:
                     device_name = ble_device.name or ""
 
-                storage_ids: list[str] = []
-                if self._preferred_storage_id:
-                    storage_ids.append(self._preferred_storage_id)
-
-                for source in (device_name, device_name_hint, ble_device.name):
-                    for candidate in _derive_storage_ids_from_name(source):
-                        if candidate not in storage_ids:
-                            storage_ids.append(candidate)
+                storage_ids = _derive_storage_id_candidates(
+                    self._preferred_storage_id,
+                    device_name,
+                    device_name_hint,
+                    ble_device.name,
+                )
 
                 if not storage_ids:
                     _LOGGER.warning("Could not derive storage ID for %s", op_name)
@@ -1592,6 +1609,109 @@ class APstorageSocClient:
                     "ok": False,
                     "code": last_code,
                     "message": last_message or f"no successful {op_name} response",
+                }
+
+        except asyncio.TimeoutError:
+            _LOGGER.warning("%s timed out for %s", op_name, ble_device.address)
+            return {"ok": False, "code": "timeout", "message": "connection/write timeout"}
+        except BleakError as err:
+            _LOGGER.warning("BLE error during %s for %s: %s", op_name, ble_device.address, err)
+            return {"ok": False, "code": "ble_error", "message": str(err)}
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("Unexpected %s error for %s: %s", op_name, ble_device.address, err, exc_info=True)
+            return {"ok": False, "code": "exception", "message": str(err)}
+        finally:
+            if client and client.is_connected:
+                try:
+                    await client.disconnect()
+                except Exception:  # noqa: BLE001
+                    pass
+
+    async def _async_send_simple_property_command(
+        self,
+        ble_device: BLEDevice,
+        *,
+        identifier: str,
+        op_name: str,
+        params_candidates: tuple[dict[str, Any], ...] = ({},),
+        device_name_hint: str | None = None,
+    ) -> dict[str, Any]:
+        """Send a simple property command that does not require a pre-read."""
+        if not HAS_CRYPTO:
+            _LOGGER.error("pycryptodome required; install with: pip install pycryptodome")
+            return {"ok": False, "code": None, "message": "pycryptodome missing"}
+
+        client: BleakClient | None = None
+        try:
+            async with asyncio.timeout(CONNECT_TIMEOUT_SECONDS):
+                client = await establish_connection(
+                    BleakClientWithServiceCache,
+                    ble_device,
+                    ble_device.address,
+                    max_attempts=3,
+                    use_services_cache=True,
+                )
+                await self._ensure_services_ready(client)
+
+                device_name = ""
+                try:
+                    name_raw = await client.read_gatt_char(DEVICE_NAME_CHAR)
+                    device_name = bytes(name_raw).decode("utf-8", errors="ignore").strip("\x00\r\n ")
+                except Exception:  # noqa: BLE001
+                    device_name = ""
+
+                if not device_name:
+                    device_name = device_name_hint or ""
+                if not device_name:
+                    device_name = ble_device.name or ""
+
+                storage_ids = _derive_storage_id_candidates(
+                    self._preferred_storage_id,
+                    device_name,
+                    device_name_hint,
+                    ble_device.name,
+                )
+
+                if not storage_ids:
+                    _LOGGER.warning("Could not derive storage ID for %s", op_name)
+                    return {
+                        "ok": False,
+                        "code": None,
+                        "message": "could not derive storage id",
+                    }
+
+                await self._establish_blufi_session(client)
+
+                last_code: Any = None
+                last_message: str | None = None
+
+                for storage_id in storage_ids:
+                    for params in params_candidates:
+                        set_resp = await self._send_property_request(
+                            client,
+                            method="set",
+                            identifier=identifier,
+                            storage_id=storage_id,
+                            params_extra=params,
+                            system_id="",
+                        )
+
+                        if not isinstance(set_resp, dict):
+                            continue
+
+                        code = set_resp.get("code")
+                        message = str(set_resp.get("msg") or set_resp.get("message") or "")
+                        if _response_is_success(set_resp):
+                            self._preferred_storage_id = storage_id
+                            return {"ok": True, "code": code, "message": message}
+
+                        last_code = code
+                        last_message = message
+
+                return {
+                    "ok": False,
+                    "code": last_code,
+                    "message": last_message or f"no successful {identifier} response",
                 }
 
         except asyncio.TimeoutError:
@@ -1950,6 +2070,45 @@ class APstorageSocClient:
             payload_mutator=_mutator,
         )
 
+    async def async_set_peak_valley_schedule(
+        self,
+        ble_device: BLEDevice,
+        *,
+        peak_time: list[str],
+        valley_time: list[str],
+        device_name_hint: str | None = None,
+    ) -> dict[str, Any]:
+        """Set mode-0 peak/valley schedule using app-compatible setsysmode flow."""
+        if len(peak_time) > 5 or len(valley_time) > 5:
+            return {
+                "ok": False,
+                "code": None,
+                "message": "peak_time and valley_time support at most 5 ranges each",
+            }
+
+        range_re = re.compile(r"^\d{12}$")
+        for value in peak_time + valley_time:
+            if not range_re.fullmatch(str(value)):
+                return {
+                    "ok": False,
+                    "code": None,
+                    "message": f"invalid range format: {value!r} (expected HHMMSSHHMMSS)",
+                }
+
+        def _mutator(payload: dict[str, Any]) -> tuple[bool, str | None]:
+            payload["mode"] = "0"
+            payload["peakTime"] = list(peak_time) if peak_time else None
+            payload["valleyTime"] = list(valley_time) if valley_time else None
+            payload["schedule"] = None
+            return True, None
+
+        return await self._async_patch_sysmode_payload(
+            ble_device,
+            op_name="set peak-valley schedule",
+            device_name_hint=device_name_hint,
+            payload_mutator=_mutator,
+        )
+
     async def async_set_advanced_schedule(
         self,
         ble_device: BLEDevice,
@@ -2243,105 +2402,28 @@ class APstorageSocClient:
         device_name_hint: str | None = None,
     ) -> dict[str, Any]:
         """Clear active buzzer alarm using app-compatible setClearBuzzer command."""
-        if not HAS_CRYPTO:
-            _LOGGER.error("pycryptodome required; install with: pip install pycryptodome")
-            return {"ok": False, "code": None, "message": "pycryptodome missing"}
+        return await self._async_send_simple_property_command(
+            ble_device,
+            identifier="setClearBuzzer",
+            op_name="clear buzzer",
+            params_candidates=({}, {"clear": "1"}, {"action": "1"}),
+            device_name_hint=device_name_hint,
+        )
 
-        client: BleakClient | None = None
-        try:
-            async with asyncio.timeout(CONNECT_TIMEOUT_SECONDS):
-                client = await establish_connection(
-                    BleakClientWithServiceCache,
-                    ble_device,
-                    ble_device.address,
-                    max_attempts=3,
-                    use_services_cache=True,
-                )
-                await self._ensure_services_ready(client)
-
-                device_name = ""
-                try:
-                    name_raw = await client.read_gatt_char(DEVICE_NAME_CHAR)
-                    device_name = bytes(name_raw).decode("utf-8", errors="ignore").strip("\x00\r\n ")
-                except Exception:  # noqa: BLE001
-                    device_name = ""
-
-                if not device_name:
-                    device_name = device_name_hint or ""
-                if not device_name:
-                    device_name = ble_device.name or ""
-
-                storage_ids: list[str] = []
-                if self._preferred_storage_id:
-                    storage_ids.append(self._preferred_storage_id)
-
-                for source in (device_name, device_name_hint, ble_device.name):
-                    for candidate in _derive_storage_ids_from_name(source):
-                        if candidate not in storage_ids:
-                            storage_ids.append(candidate)
-
-                if not storage_ids:
-                    _LOGGER.warning("Could not derive storage ID for clear buzzer")
-                    return {
-                        "ok": False,
-                        "code": None,
-                        "message": "could not derive storage id",
-                    }
-
-                await self._establish_blufi_session(client)
-
-                last_code: Any = None
-                last_message: str | None = None
-                params_candidates: tuple[dict[str, Any], ...] = (
-                    {},
-                    {"clear": "1"},
-                    {"action": "1"},
-                )
-
-                for storage_id in storage_ids:
-                    for params in params_candidates:
-                        set_resp = await self._send_property_request(
-                            client,
-                            method="set",
-                            identifier="setClearBuzzer",
-                            storage_id=storage_id,
-                            params_extra=params,
-                            system_id="",
-                        )
-
-                        if not isinstance(set_resp, dict):
-                            continue
-
-                        code = set_resp.get("code")
-                        message = str(set_resp.get("msg") or set_resp.get("message") or "")
-                        if _response_is_success(set_resp):
-                            self._preferred_storage_id = storage_id
-                            return {"ok": True, "code": code, "message": message}
-
-                        last_code = code
-                        last_message = message
-
-                return {
-                    "ok": False,
-                    "code": last_code,
-                    "message": last_message or "no successful setClearBuzzer response",
-                }
-
-        except asyncio.TimeoutError:
-            _LOGGER.warning("Clear buzzer timed out for %s", ble_device.address)
-            return {"ok": False, "code": "timeout", "message": "connection/write timeout"}
-        except BleakError as err:
-            _LOGGER.warning("BLE error during clear buzzer for %s: %s", ble_device.address, err)
-            return {"ok": False, "code": "ble_error", "message": str(err)}
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.error("Unexpected clear buzzer error for %s: %s", ble_device.address, err, exc_info=True)
-            return {"ok": False, "code": "exception", "message": str(err)}
-        finally:
-            if client and client.is_connected:
-                try:
-                    await client.disconnect()
-                except Exception:  # noqa: BLE001
-                    pass
+    async def async_reboot_pcs(
+        self,
+        ble_device: BLEDevice,
+        *,
+        device_name_hint: str | None = None,
+    ) -> dict[str, Any]:
+        """Reboot the PCS using app-compatible set/pcsReboot command."""
+        return await self._async_send_simple_property_command(
+            ble_device,
+            identifier="set/pcsReboot",
+            op_name="pcs reboot",
+            params_candidates=({}, {"action": "1"}, {"reboot": "1"}),
+            device_name_hint=device_name_hint,
+        )
 
     async def _query_soc_once(
         self,
@@ -2364,15 +2446,12 @@ class APstorageSocClient:
         if not device_name:
             device_name = ble_device.name or ""
 
-        storage_ids: list[str] = []
-
-        if self._preferred_storage_id:
-            storage_ids.append(self._preferred_storage_id)
-
-        for source in (device_name, device_name_hint, ble_device.name):
-            for candidate in _derive_storage_ids_from_name(source):
-                if candidate not in storage_ids:
-                    storage_ids.append(candidate)
+        storage_ids = _derive_storage_id_candidates(
+            self._preferred_storage_id,
+            device_name,
+            device_name_hint,
+            ble_device.name,
+        )
 
         if not storage_ids:
             _LOGGER.warning("Could not extract storage ID from device name: %s", device_name)
