@@ -290,16 +290,75 @@ def _last_nonzero_from_array(value: Any) -> float | None:
 def _to_celsius(value: Any) -> float | None:
     """Convert raw temperature-like values to Celsius.
 
-    APstorage payloads for this device family appear to encode temperatures
-    in hundredths of a degree (e.g. 328.1 -> 3.28 C). Some firmwares may
-    already report plain Celsius.
+    Firmware variants appear to use different scales for temperature-like
+    fields: plain Celsius, tenths, or hundredths. Choose the most plausible
+    Celsius value within an operational range.
     """
     temp = _to_float(value)
     if temp is None:
         return None
-    if temp > 100:
-        return temp / 100.0
-    return temp
+
+    candidates: list[float] = []
+    for div in (1.0, 10.0, 100.0, 1000.0):
+        candidate = temp / div
+        if -40.0 <= candidate <= 120.0:
+            candidates.append(candidate)
+
+    if not candidates:
+        return None
+
+    # Prefer realistic operating temperatures for PCS/battery equipment.
+    return min(candidates, key=lambda x: abs(x - 25.0))
+
+
+def _infer_temperature_from_numeric_fields(
+    root: Any,
+    *,
+    preferred_tokens: tuple[str, ...],
+) -> float | None:
+    """Infer a temperature value from numeric fields when keys vary by firmware."""
+    numeric_items = _deep_collect_numeric_items(root)
+    if not numeric_items:
+        return None
+
+    best_temp: float | None = None
+    best_score = float("inf")
+
+    for path, value in numeric_items:
+        kl = path.lower()
+
+        # Focus on temperature-ish paths only.
+        if not (
+            any(token in kl for token in preferred_tokens)
+            or "temp" in kl
+            or "tinv" in kl
+            or "tbat" in kl
+            or ".rt" in kl
+            or kl.startswith("rt")
+        ):
+            continue
+
+        # Skip obvious non-temperature metrics that happen to share a leading t.
+        if any(token in kl for token in ("total", "time", "timestamp", "count", "voltage", "current", "power", "energy", "soc", "freq")):
+            continue
+
+        temp = _to_celsius(value)
+        if temp is None:
+            continue
+
+        score = abs(temp - 25.0)
+        if any(token in kl for token in preferred_tokens):
+            score -= 3.0
+        if "temp" in kl or "tinv" in kl or "tbat" in kl:
+            score -= 2.0
+        if ".rt" in kl or kl.startswith("rt"):
+            score -= 1.0
+
+        if score < best_score:
+            best_score = score
+            best_temp = temp
+
+    return best_temp
 
 
 def _to_grid_frequency(value: Any) -> float | None:
@@ -560,6 +619,16 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
                     metrics.battery_temperature = bt
                     break
             if metrics.battery_temperature is not None:
+                break
+
+    if metrics.battery_temperature is None:
+        for root in roots:
+            bt = _infer_temperature_from_numeric_fields(
+                root,
+                preferred_tokens=("battery", "bat", "rt0", "rt1"),
+            )
+            if bt is not None:
+                metrics.battery_temperature = bt
                 break
 
     # Search for charged/discharged energy totals (kWh).
@@ -945,6 +1014,16 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
                     metrics.inverter_temperature = it
                     break
             if metrics.inverter_temperature is not None:
+                break
+
+    if metrics.inverter_temperature is None:
+        for root in roots:
+            it = _infer_temperature_from_numeric_fields(
+                root,
+                preferred_tokens=("inverter", "inv", "pcs", "ac", "tinv", "rt1"),
+            )
+            if it is not None:
+                metrics.inverter_temperature = it
                 break
 
     # Log summary of extracted fields
