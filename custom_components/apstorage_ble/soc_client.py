@@ -315,7 +315,7 @@ def _to_celsius_from_any(value: Any) -> float | None:
     """Convert scalar/list temperature payloads to Celsius.
 
     Some firmware variants expose temperatures as arrays (historical samples)
-    while others expose scalar T2/T3-like fields.
+    while others expose named scalar temperature fields.
     """
     raw: float | None
     if isinstance(value, list):
@@ -629,7 +629,7 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
             metrics.battery_charging_power = bcp
             break
 
-    # Search for battery temperature (APstorage field is typically T2).
+    # Search for battery temperature from explicit temperature fields.
     for root in roots:
         bt_raw = _deep_find_key(
             root,
@@ -640,7 +640,6 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
                 "battery_temp",
                 "bat_temp",
                 "tbat",
-                "t2",
                 "rt0",
                 "rt2",
             },
@@ -1038,7 +1037,7 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
             metrics.total_consumed_daily = de3
             break
 
-    # Search for inverter temperature (APstorage field is typically T3).
+    # Search for inverter temperature from explicit temperature fields.
     for root in roots:
         it_raw = _deep_find_key(
             root,
@@ -1048,7 +1047,6 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
                 "invertertemp",
                 "inverter_temp",
                 "tinv",
-                "t3",
                 "rt1",
                 "rt3",
                 "tpcs",
