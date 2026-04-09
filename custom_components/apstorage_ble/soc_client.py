@@ -9,6 +9,7 @@ the APstorage battery State of Charge (SoC) over BLE using:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 import hashlib
 import inspect
 import json
@@ -1477,6 +1478,138 @@ class APstorageSocClient:
             return None
         return int(metrics.battery_soc)
 
+    async def _async_patch_sysmode_payload(
+        self,
+        ble_device: BLEDevice,
+        *,
+        op_name: str,
+        device_name_hint: str | None,
+        payload_mutator: Callable[[dict[str, Any]], tuple[bool, str | None]],
+    ) -> dict[str, Any]:
+        """Apply a field patch to getsysmode payload, then write via setsysmode."""
+        if not HAS_CRYPTO:
+            _LOGGER.error("pycryptodome required; install with: pip install pycryptodome")
+            return {"ok": False, "code": None, "message": "pycryptodome missing"}
+
+        client: BleakClient | None = None
+        try:
+            async with asyncio.timeout(CONNECT_TIMEOUT_SECONDS):
+                client = await establish_connection(
+                    BleakClientWithServiceCache,
+                    ble_device,
+                    ble_device.address,
+                    max_attempts=3,
+                    use_services_cache=True,
+                )
+                await self._ensure_services_ready(client)
+
+                device_name = ""
+                try:
+                    name_raw = await client.read_gatt_char(DEVICE_NAME_CHAR)
+                    device_name = bytes(name_raw).decode("utf-8", errors="ignore").strip("\x00\r\n ")
+                except Exception:  # noqa: BLE001
+                    device_name = ""
+
+                if not device_name:
+                    device_name = device_name_hint or ""
+                if not device_name:
+                    device_name = ble_device.name or ""
+
+                storage_ids: list[str] = []
+                if self._preferred_storage_id:
+                    storage_ids.append(self._preferred_storage_id)
+
+                for source in (device_name, device_name_hint, ble_device.name):
+                    for candidate in _derive_storage_ids_from_name(source):
+                        if candidate not in storage_ids:
+                            storage_ids.append(candidate)
+
+                if not storage_ids:
+                    _LOGGER.warning("Could not derive storage ID for %s", op_name)
+                    return {
+                        "ok": False,
+                        "code": None,
+                        "message": "could not derive storage id",
+                    }
+
+                await self._establish_blufi_session(client)
+
+                last_code: Any = None
+                last_message: str | None = None
+
+                for storage_id in storage_ids:
+                    get_resp = await self._send_property_request(
+                        client,
+                        method="get",
+                        identifier="getsysmode",
+                        storage_id=storage_id,
+                        params_extra={},
+                        system_id="",
+                    )
+                    if not isinstance(get_resp, dict):
+                        continue
+
+                    last_code = get_resp.get("code")
+                    last_message = str(get_resp.get("msg") or get_resp.get("message") or "")
+
+                    mode_data = _extract_sysmode_payload(get_resp.get("data"))
+                    if mode_data is None:
+                        continue
+
+                    payload = dict(mode_data)
+                    should_write, skip_reason = payload_mutator(payload)
+                    if not should_write:
+                        last_code = "not_applicable"
+                        last_message = skip_reason or "operation not applicable for current mode"
+                        continue
+
+                    # Defaults from app ViewModel for missing keys.
+                    payload.setdefault("valleycharge", "1")
+                    payload.setdefault("backupSOC", "50")
+                    payload.setdefault("peakPower", "5000")
+                    payload.setdefault("sellingFirst", "0")
+
+                    set_resp = await self._send_property_request(
+                        client,
+                        method="set",
+                        identifier="setsysmode",
+                        storage_id=storage_id,
+                        params_extra=payload,
+                        system_id="",
+                    )
+
+                    if isinstance(set_resp, dict):
+                        code = set_resp.get("code")
+                        message = str(set_resp.get("msg") or set_resp.get("message") or "")
+                        if _response_is_success(set_resp):
+                            self._preferred_storage_id = storage_id
+                            return {"ok": True, "code": code, "message": message}
+
+                        last_code = code
+                        last_message = message
+
+                return {
+                    "ok": False,
+                    "code": last_code,
+                    "message": last_message or f"no successful {op_name} response",
+                }
+
+        except asyncio.TimeoutError:
+            _LOGGER.warning("%s timed out for %s", op_name, ble_device.address)
+            return {"ok": False, "code": "timeout", "message": "connection/write timeout"}
+        except BleakError as err:
+            _LOGGER.warning("BLE error during %s for %s: %s", op_name, ble_device.address, err)
+            return {"ok": False, "code": "ble_error", "message": str(err)}
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("Unexpected %s error for %s: %s", op_name, ble_device.address, err, exc_info=True)
+            return {"ok": False, "code": "exception", "message": str(err)}
+        finally:
+            if client and client.is_connected:
+                try:
+                    await client.disconnect()
+                except Exception:  # noqa: BLE001
+                    pass
+
     async def async_set_system_mode(
         self,
         ble_device: BLEDevice,
@@ -1748,6 +1881,75 @@ class APstorageSocClient:
                 except Exception:  # noqa: BLE001
                     pass
 
+    async def async_set_selling_first(
+        self,
+        ble_device: BLEDevice,
+        *,
+        enabled: bool,
+        device_name_hint: str | None = None,
+    ) -> dict[str, Any]:
+        """Set sellingFirst flag using EMA-compatible getsysmode -> setsysmode flow."""
+
+        def _mutator(payload: dict[str, Any]) -> tuple[bool, str | None]:
+            payload["sellingFirst"] = "1" if enabled else "0"
+            return True, None
+
+        return await self._async_patch_sysmode_payload(
+            ble_device,
+            op_name="set sellingFirst",
+            device_name_hint=device_name_hint,
+            payload_mutator=_mutator,
+        )
+
+    async def async_set_valley_charge(
+        self,
+        ble_device: BLEDevice,
+        *,
+        enabled: bool,
+        device_name_hint: str | None = None,
+    ) -> dict[str, Any]:
+        """Set valleycharge flag using EMA-compatible getsysmode -> setsysmode flow."""
+
+        def _mutator(payload: dict[str, Any]) -> tuple[bool, str | None]:
+            payload["valleycharge"] = "1" if enabled else "0"
+            return True, None
+
+        return await self._async_patch_sysmode_payload(
+            ble_device,
+            op_name="set valleycharge",
+            device_name_hint=device_name_hint,
+            payload_mutator=_mutator,
+        )
+
+    async def async_set_peak_power(
+        self,
+        ble_device: BLEDevice,
+        *,
+        peak_power: int,
+        device_name_hint: str | None = None,
+    ) -> dict[str, Any]:
+        """Set peak-shaving peakPower using EMA-compatible getsysmode -> setsysmode flow."""
+        if peak_power < 100 or peak_power > 50000:
+            return {
+                "ok": False,
+                "code": None,
+                "message": f"invalid peak_power {peak_power} (allowed: 100-50000)",
+            }
+
+        def _mutator(payload: dict[str, Any]) -> tuple[bool, str | None]:
+            mode_value = _normalize_mode_code(payload.get("mode")) or ""
+            if mode_value != "5":
+                return False, "peak power can only be changed in mode 5 (Peak-Shaving)"
+            payload["peakPower"] = str(int(peak_power))
+            return True, None
+
+        return await self._async_patch_sysmode_payload(
+            ble_device,
+            op_name="set peakPower",
+            device_name_hint=device_name_hint,
+            payload_mutator=_mutator,
+        )
+
     async def async_set_advanced_schedule(
         self,
         ble_device: BLEDevice,
@@ -1913,6 +2115,226 @@ class APstorageSocClient:
             return {"ok": False, "code": "ble_error", "message": str(err)}
         except Exception as err:  # noqa: BLE001
             _LOGGER.error("Unexpected advanced schedule write error for %s: %s", ble_device.address, err, exc_info=True)
+            return {"ok": False, "code": "exception", "message": str(err)}
+        finally:
+            if client and client.is_connected:
+                try:
+                    await client.disconnect()
+                except Exception:  # noqa: BLE001
+                    pass
+
+    async def async_set_buzzer_mode(
+        self,
+        ble_device: BLEDevice,
+        *,
+        mode: int,
+        device_name_hint: str | None = None,
+    ) -> dict[str, Any]:
+        """Set buzzer mode using app-compatible set/buzzerMode command."""
+        if not HAS_CRYPTO:
+            _LOGGER.error("pycryptodome required; install with: pip install pycryptodome")
+            return {"ok": False, "code": None, "message": "pycryptodome missing"}
+
+        if mode not in {0, 1}:
+            _LOGGER.error("Invalid buzzer mode: %s", mode)
+            return {"ok": False, "code": None, "message": f"invalid buzzer mode {mode}"}
+
+        client: BleakClient | None = None
+        try:
+            async with asyncio.timeout(CONNECT_TIMEOUT_SECONDS):
+                client = await establish_connection(
+                    BleakClientWithServiceCache,
+                    ble_device,
+                    ble_device.address,
+                    max_attempts=3,
+                    use_services_cache=True,
+                )
+                await self._ensure_services_ready(client)
+
+                device_name = ""
+                try:
+                    name_raw = await client.read_gatt_char(DEVICE_NAME_CHAR)
+                    device_name = bytes(name_raw).decode("utf-8", errors="ignore").strip("\x00\r\n ")
+                except Exception:  # noqa: BLE001
+                    device_name = ""
+
+                if not device_name:
+                    device_name = device_name_hint or ""
+                if not device_name:
+                    device_name = ble_device.name or ""
+
+                storage_ids: list[str] = []
+                if self._preferred_storage_id:
+                    storage_ids.append(self._preferred_storage_id)
+
+                for source in (device_name, device_name_hint, ble_device.name):
+                    for candidate in _derive_storage_ids_from_name(source):
+                        if candidate not in storage_ids:
+                            storage_ids.append(candidate)
+
+                if not storage_ids:
+                    _LOGGER.warning("Could not derive storage ID for buzzer mode write")
+                    return {
+                        "ok": False,
+                        "code": None,
+                        "message": "could not derive storage id",
+                    }
+
+                await self._establish_blufi_session(client)
+
+                last_code: Any = None
+                last_message: str | None = None
+                params_candidates: tuple[dict[str, Any], ...] = (
+                    {"mode": str(mode)},
+                    {"buzzerMode": str(mode)},
+                    {"buzzer": str(mode)},
+                    {"BUZ": str(mode)},
+                )
+
+                for storage_id in storage_ids:
+                    for params in params_candidates:
+                        set_resp = await self._send_property_request(
+                            client,
+                            method="set",
+                            identifier="set/buzzerMode",
+                            storage_id=storage_id,
+                            params_extra=params,
+                            system_id="",
+                        )
+
+                        if not isinstance(set_resp, dict):
+                            continue
+
+                        code = set_resp.get("code")
+                        message = str(set_resp.get("msg") or set_resp.get("message") or "")
+                        if _response_is_success(set_resp):
+                            self._preferred_storage_id = storage_id
+                            return {"ok": True, "code": code, "message": message}
+
+                        last_code = code
+                        last_message = message
+
+                return {
+                    "ok": False,
+                    "code": last_code,
+                    "message": last_message or "no successful set/buzzerMode response",
+                }
+
+        except asyncio.TimeoutError:
+            _LOGGER.warning("Buzzer mode write timed out for %s", ble_device.address)
+            return {"ok": False, "code": "timeout", "message": "connection/write timeout"}
+        except BleakError as err:
+            _LOGGER.warning("BLE error during buzzer mode write for %s: %s", ble_device.address, err)
+            return {"ok": False, "code": "ble_error", "message": str(err)}
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("Unexpected buzzer mode write error for %s: %s", ble_device.address, err, exc_info=True)
+            return {"ok": False, "code": "exception", "message": str(err)}
+        finally:
+            if client and client.is_connected:
+                try:
+                    await client.disconnect()
+                except Exception:  # noqa: BLE001
+                    pass
+
+    async def async_clear_buzzer(
+        self,
+        ble_device: BLEDevice,
+        *,
+        device_name_hint: str | None = None,
+    ) -> dict[str, Any]:
+        """Clear active buzzer alarm using app-compatible setClearBuzzer command."""
+        if not HAS_CRYPTO:
+            _LOGGER.error("pycryptodome required; install with: pip install pycryptodome")
+            return {"ok": False, "code": None, "message": "pycryptodome missing"}
+
+        client: BleakClient | None = None
+        try:
+            async with asyncio.timeout(CONNECT_TIMEOUT_SECONDS):
+                client = await establish_connection(
+                    BleakClientWithServiceCache,
+                    ble_device,
+                    ble_device.address,
+                    max_attempts=3,
+                    use_services_cache=True,
+                )
+                await self._ensure_services_ready(client)
+
+                device_name = ""
+                try:
+                    name_raw = await client.read_gatt_char(DEVICE_NAME_CHAR)
+                    device_name = bytes(name_raw).decode("utf-8", errors="ignore").strip("\x00\r\n ")
+                except Exception:  # noqa: BLE001
+                    device_name = ""
+
+                if not device_name:
+                    device_name = device_name_hint or ""
+                if not device_name:
+                    device_name = ble_device.name or ""
+
+                storage_ids: list[str] = []
+                if self._preferred_storage_id:
+                    storage_ids.append(self._preferred_storage_id)
+
+                for source in (device_name, device_name_hint, ble_device.name):
+                    for candidate in _derive_storage_ids_from_name(source):
+                        if candidate not in storage_ids:
+                            storage_ids.append(candidate)
+
+                if not storage_ids:
+                    _LOGGER.warning("Could not derive storage ID for clear buzzer")
+                    return {
+                        "ok": False,
+                        "code": None,
+                        "message": "could not derive storage id",
+                    }
+
+                await self._establish_blufi_session(client)
+
+                last_code: Any = None
+                last_message: str | None = None
+                params_candidates: tuple[dict[str, Any], ...] = (
+                    {},
+                    {"clear": "1"},
+                    {"action": "1"},
+                )
+
+                for storage_id in storage_ids:
+                    for params in params_candidates:
+                        set_resp = await self._send_property_request(
+                            client,
+                            method="set",
+                            identifier="setClearBuzzer",
+                            storage_id=storage_id,
+                            params_extra=params,
+                            system_id="",
+                        )
+
+                        if not isinstance(set_resp, dict):
+                            continue
+
+                        code = set_resp.get("code")
+                        message = str(set_resp.get("msg") or set_resp.get("message") or "")
+                        if _response_is_success(set_resp):
+                            self._preferred_storage_id = storage_id
+                            return {"ok": True, "code": code, "message": message}
+
+                        last_code = code
+                        last_message = message
+
+                return {
+                    "ok": False,
+                    "code": last_code,
+                    "message": last_message or "no successful setClearBuzzer response",
+                }
+
+        except asyncio.TimeoutError:
+            _LOGGER.warning("Clear buzzer timed out for %s", ble_device.address)
+            return {"ok": False, "code": "timeout", "message": "connection/write timeout"}
+        except BleakError as err:
+            _LOGGER.warning("BLE error during clear buzzer for %s: %s", ble_device.address, err)
+            return {"ok": False, "code": "ble_error", "message": str(err)}
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("Unexpected clear buzzer error for %s: %s", ble_device.address, err, exc_info=True)
             return {"ok": False, "code": "exception", "message": str(err)}
         finally:
             if client and client.is_connected:

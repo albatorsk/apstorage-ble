@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.11.0 - 2026-04-09
+
+### Added
+- New PCS control entities for key app-parity settings:
+  - `Selling First` switch
+  - `Valley Charge` switch
+  - `Peak Power` number (W)
+- New buzzer controls:
+  - Writable buzzer mode select
+  - Clear buzzer button
+- New integration services:
+  - `apstorage_ble.set_selling_first`
+  - `apstorage_ble.set_valley_charge`
+  - `apstorage_ble.set_peak_power`
+  - `apstorage_ble.set_buzzer_mode`
+  - `apstorage_ble.clear_buzzer`
+
+### Changed
+- Added mode-aware availability logic for Peak Power (mode 5 only), matching app behavior.
+- Added optimistic coordinator state updates after successful writes so UI updates immediately.
+- Extended model and coordinator tracking for new writable PCS fields and write diagnostics.
+- Updated documentation for newly added controls and services.
+
+### Notes
+- `manifest.json` version bumped to `0.11.0`.
+
 ## v0.10.7 - 2026-04-06
 
 ### Fixed

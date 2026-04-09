@@ -64,6 +64,11 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._last_system_mode_write: dict[str, Any] | None = None
         self._last_backup_soc_write: dict[str, Any] | None = None
         self._last_advanced_schedule_write: dict[str, Any] | None = None
+        self._last_buzzer_mode_write: dict[str, Any] | None = None
+        self._last_clear_buzzer_write: dict[str, Any] | None = None
+        self._last_selling_first_write: dict[str, Any] | None = None
+        self._last_valley_charge_write: dict[str, Any] | None = None
+        self._last_peak_power_write: dict[str, Any] | None = None
         # Most-recent successfully parsed data; also exposed as coordinator.data
         self.data: PCSData | None = None
 
@@ -449,6 +454,271 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
     def last_advanced_schedule_write(self) -> dict[str, Any] | None:
         """Return the most recent advanced schedule write attempt."""
         return self._last_advanced_schedule_write
+
+    async def async_set_buzzer_mode(self, mode: int) -> None:
+        """Set buzzer mode over BLE and refresh coordinator data."""
+        if mode not in {0, 1}:
+            raise ValueError(f"Invalid buzzer mode: {mode}")
+
+        async with self._poll_lock:
+            service_info: BluetoothServiceInfoBleak | None = self._last_service_info
+
+            if service_info is not None and service_info.connectable:
+                ble_device = service_info.device
+            elif service_info is not None:
+                ble_device = bluetooth.async_ble_device_from_address(
+                    self.hass,
+                    service_info.device.address,
+                    connectable=True,
+                )
+            else:
+                ble_device = bluetooth.async_ble_device_from_address(
+                    self.hass,
+                    self._address,
+                    connectable=True,
+                )
+
+            if ble_device is None:
+                raise RuntimeError("No connectable BLE device found for buzzer mode write")
+
+            _LOGGER.debug("[%s] Setting buzzer mode to %s", self._name, mode)
+            result = await self._soc_client.async_set_buzzer_mode(
+                ble_device,
+                mode=mode,
+                device_name_hint=self._name,
+            )
+            self._last_buzzer_mode_write = {
+                "ok": bool(result.get("ok", False)),
+                "code": result.get("code"),
+                "message": result.get("message"),
+                "requested_buzzer_mode": str(mode),
+                "at": datetime.now(timezone.utc).isoformat(),
+            }
+            if not bool(result.get("ok", False)):
+                raise RuntimeError(
+                    "Buzzer mode write failed"
+                    f" (code={result.get('code')}, message={result.get('message')})"
+                )
+
+            if self.data is not None:
+                self.data.buzzer = int(mode)
+                self.async_update_listeners()
+
+            await self._async_poll()
+
+    @property
+    def last_buzzer_mode_write(self) -> dict[str, Any] | None:
+        """Return the most recent buzzer mode write attempt."""
+        return self._last_buzzer_mode_write
+
+    async def async_clear_buzzer(self) -> None:
+        """Clear active buzzer alarm over BLE and refresh coordinator data."""
+        async with self._poll_lock:
+            service_info: BluetoothServiceInfoBleak | None = self._last_service_info
+
+            if service_info is not None and service_info.connectable:
+                ble_device = service_info.device
+            elif service_info is not None:
+                ble_device = bluetooth.async_ble_device_from_address(
+                    self.hass,
+                    service_info.device.address,
+                    connectable=True,
+                )
+            else:
+                ble_device = bluetooth.async_ble_device_from_address(
+                    self.hass,
+                    self._address,
+                    connectable=True,
+                )
+
+            if ble_device is None:
+                raise RuntimeError("No connectable BLE device found for clear buzzer")
+
+            _LOGGER.debug("[%s] Clearing buzzer alarm", self._name)
+            result = await self._soc_client.async_clear_buzzer(
+                ble_device,
+                device_name_hint=self._name,
+            )
+            self._last_clear_buzzer_write = {
+                "ok": bool(result.get("ok", False)),
+                "code": result.get("code"),
+                "message": result.get("message"),
+                "at": datetime.now(timezone.utc).isoformat(),
+            }
+            if not bool(result.get("ok", False)):
+                raise RuntimeError(
+                    "Clear buzzer failed"
+                    f" (code={result.get('code')}, message={result.get('message')})"
+                )
+
+            await self._async_poll()
+
+    @property
+    def last_clear_buzzer_write(self) -> dict[str, Any] | None:
+        """Return the most recent clear buzzer write attempt."""
+        return self._last_clear_buzzer_write
+
+    async def async_set_selling_first(self, enabled: bool) -> None:
+        """Set sellingFirst over BLE and refresh coordinator data."""
+        async with self._poll_lock:
+            service_info: BluetoothServiceInfoBleak | None = self._last_service_info
+
+            if service_info is not None and service_info.connectable:
+                ble_device = service_info.device
+            elif service_info is not None:
+                ble_device = bluetooth.async_ble_device_from_address(
+                    self.hass,
+                    service_info.device.address,
+                    connectable=True,
+                )
+            else:
+                ble_device = bluetooth.async_ble_device_from_address(
+                    self.hass,
+                    self._address,
+                    connectable=True,
+                )
+
+            if ble_device is None:
+                raise RuntimeError("No connectable BLE device found for sellingFirst write")
+
+            _LOGGER.debug("[%s] Setting sellingFirst to %s", self._name, enabled)
+            result = await self._soc_client.async_set_selling_first(
+                ble_device,
+                enabled=enabled,
+                device_name_hint=self._name,
+            )
+            self._last_selling_first_write = {
+                "ok": bool(result.get("ok", False)),
+                "code": result.get("code"),
+                "message": result.get("message"),
+                "requested_selling_first": bool(enabled),
+                "at": datetime.now(timezone.utc).isoformat(),
+            }
+            if not bool(result.get("ok", False)):
+                raise RuntimeError(
+                    "sellingFirst write failed"
+                    f" (code={result.get('code')}, message={result.get('message')})"
+                )
+
+            if self.data is not None:
+                self.data.selling_first = bool(enabled)
+                self.async_update_listeners()
+
+            await self._async_poll()
+
+    @property
+    def last_selling_first_write(self) -> dict[str, Any] | None:
+        """Return the most recent sellingFirst write attempt."""
+        return self._last_selling_first_write
+
+    async def async_set_valley_charge(self, enabled: bool) -> None:
+        """Set valleycharge over BLE and refresh coordinator data."""
+        async with self._poll_lock:
+            service_info: BluetoothServiceInfoBleak | None = self._last_service_info
+
+            if service_info is not None and service_info.connectable:
+                ble_device = service_info.device
+            elif service_info is not None:
+                ble_device = bluetooth.async_ble_device_from_address(
+                    self.hass,
+                    service_info.device.address,
+                    connectable=True,
+                )
+            else:
+                ble_device = bluetooth.async_ble_device_from_address(
+                    self.hass,
+                    self._address,
+                    connectable=True,
+                )
+
+            if ble_device is None:
+                raise RuntimeError("No connectable BLE device found for valleycharge write")
+
+            _LOGGER.debug("[%s] Setting valleycharge to %s", self._name, enabled)
+            result = await self._soc_client.async_set_valley_charge(
+                ble_device,
+                enabled=enabled,
+                device_name_hint=self._name,
+            )
+            self._last_valley_charge_write = {
+                "ok": bool(result.get("ok", False)),
+                "code": result.get("code"),
+                "message": result.get("message"),
+                "requested_valley_charge": bool(enabled),
+                "at": datetime.now(timezone.utc).isoformat(),
+            }
+            if not bool(result.get("ok", False)):
+                raise RuntimeError(
+                    "valleycharge write failed"
+                    f" (code={result.get('code')}, message={result.get('message')})"
+                )
+
+            if self.data is not None:
+                self.data.valley_charge = bool(enabled)
+                self.async_update_listeners()
+
+            await self._async_poll()
+
+    @property
+    def last_valley_charge_write(self) -> dict[str, Any] | None:
+        """Return the most recent valleycharge write attempt."""
+        return self._last_valley_charge_write
+
+    async def async_set_peak_power(self, peak_power: int) -> None:
+        """Set peakPower over BLE and refresh coordinator data."""
+        if peak_power < 100 or peak_power > 50000:
+            raise ValueError(f"Invalid peak power: {peak_power}")
+
+        async with self._poll_lock:
+            service_info: BluetoothServiceInfoBleak | None = self._last_service_info
+
+            if service_info is not None and service_info.connectable:
+                ble_device = service_info.device
+            elif service_info is not None:
+                ble_device = bluetooth.async_ble_device_from_address(
+                    self.hass,
+                    service_info.device.address,
+                    connectable=True,
+                )
+            else:
+                ble_device = bluetooth.async_ble_device_from_address(
+                    self.hass,
+                    self._address,
+                    connectable=True,
+                )
+
+            if ble_device is None:
+                raise RuntimeError("No connectable BLE device found for peakPower write")
+
+            _LOGGER.debug("[%s] Setting peakPower to %s", self._name, peak_power)
+            result = await self._soc_client.async_set_peak_power(
+                ble_device,
+                peak_power=peak_power,
+                device_name_hint=self._name,
+            )
+            self._last_peak_power_write = {
+                "ok": bool(result.get("ok", False)),
+                "code": result.get("code"),
+                "message": result.get("message"),
+                "requested_peak_power": int(peak_power),
+                "at": datetime.now(timezone.utc).isoformat(),
+            }
+            if not bool(result.get("ok", False)):
+                raise RuntimeError(
+                    "peakPower write failed"
+                    f" (code={result.get('code')}, message={result.get('message')})"
+                )
+
+            if self.data is not None:
+                self.data.peak_power = int(peak_power)
+                self.async_update_listeners()
+
+            await self._async_poll()
+
+    @property
+    def last_peak_power_write(self) -> dict[str, Any] | None:
+        """Return the most recent peakPower write attempt."""
+        return self._last_peak_power_write
 
     async def async_periodic_poll(self) -> None:
         """Run a fallback poll independent of advertisement event timing."""

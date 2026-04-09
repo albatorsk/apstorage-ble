@@ -30,11 +30,25 @@ from .coordinator import APstorageCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.SELECT]
+PLATFORMS: list[Platform] = [
+    Platform.SENSOR,
+    Platform.SELECT,
+    Platform.BUTTON,
+    Platform.SWITCH,
+    Platform.NUMBER,
+]
 
 SERVICE_SET_SYSTEM_MODE = "set_system_mode"
 SERVICE_SET_ADVANCED_SCHEDULE = "set_advanced_schedule"
+SERVICE_SET_BUZZER_MODE = "set_buzzer_mode"
+SERVICE_CLEAR_BUZZER = "clear_buzzer"
+SERVICE_SET_SELLING_FIRST = "set_selling_first"
+SERVICE_SET_VALLEY_CHARGE = "set_valley_charge"
+SERVICE_SET_PEAK_POWER = "set_peak_power"
 ATTR_MODE = "mode"
+ATTR_BUZZER_MODE = "buzzer_mode"
+ATTR_ENABLED = "enabled"
+ATTR_PEAK_POWER = "peak_power"
 ATTR_PEAK_TIME = "peak_time"
 ATTR_VALLEY_TIME = "valley_time"
 ATTR_SCHEDULE = "schedule"
@@ -64,6 +78,45 @@ SERVICE_SET_ADVANCED_SCHEDULE_SCHEMA = vol.Schema(
         vol.Optional(ATTR_PEAK_TIME): vol.Any(cv.string, [cv.string]),
         vol.Optional(ATTR_VALLEY_TIME): vol.Any(cv.string, [cv.string]),
         vol.Optional(ATTR_SCHEDULE): vol.Any(cv.string, list),
+        vol.Optional(ATTR_ENTRY_ID): cv.string,
+        vol.Optional(ATTR_ADDRESS): cv.string,
+    }
+)
+
+SERVICE_SET_BUZZER_MODE_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_BUZZER_MODE): vol.Any(vol.Coerce(int), cv.string),
+        vol.Optional(ATTR_ENTRY_ID): cv.string,
+        vol.Optional(ATTR_ADDRESS): cv.string,
+    }
+)
+
+SERVICE_CLEAR_BUZZER_SCHEMA = vol.Schema(
+    {
+        vol.Optional(ATTR_ENTRY_ID): cv.string,
+        vol.Optional(ATTR_ADDRESS): cv.string,
+    }
+)
+
+SERVICE_SET_SELLING_FIRST_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_ENABLED): cv.boolean,
+        vol.Optional(ATTR_ENTRY_ID): cv.string,
+        vol.Optional(ATTR_ADDRESS): cv.string,
+    }
+)
+
+SERVICE_SET_VALLEY_CHARGE_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_ENABLED): cv.boolean,
+        vol.Optional(ATTR_ENTRY_ID): cv.string,
+        vol.Optional(ATTR_ADDRESS): cv.string,
+    }
+)
+
+SERVICE_SET_PEAK_POWER_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_PEAK_POWER): vol.Coerce(int),
         vol.Optional(ATTR_ENTRY_ID): cv.string,
         vol.Optional(ATTR_ADDRESS): cv.string,
     }
@@ -216,6 +269,41 @@ def _parse_mode(value: Any) -> int:
     return mode
 
 
+def _parse_buzzer_mode(value: Any) -> int:
+    """Parse buzzer mode from int/code or human label."""
+    if isinstance(value, int):
+        mode = value
+    else:
+        text = str(value).strip().lower()
+        if text.isdigit():
+            mode = int(text)
+        elif text in {"silent", "off", "mute", "muted"}:
+            mode = 0
+        elif text in {"normal", "on", "enabled"}:
+            mode = 1
+        else:
+            raise HomeAssistantError(
+                f"Invalid buzzer_mode {value!r}. Use 0/1 or label (Silent/Normal)."
+            )
+
+    if mode not in {0, 1}:
+        raise HomeAssistantError("buzzer_mode must be 0 or 1")
+    return mode
+
+
+def _parse_peak_power(value: Any) -> int:
+    """Parse and validate peak-shaving power setpoint."""
+    try:
+        peak_power = int(value)
+    except (TypeError, ValueError) as err:
+        raise HomeAssistantError(f"Invalid peak_power {value!r}. Use an integer.") from err
+
+    if peak_power < 100 or peak_power > 50000:
+        raise HomeAssistantError("peak_power must be in range 100..50000")
+
+    return peak_power
+
+
 def _resolve_target_coordinator(
     hass: HomeAssistant,
     *,
@@ -345,6 +433,95 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             SERVICE_SET_ADVANCED_SCHEDULE,
             _async_handle_set_advanced_schedule,
             schema=SERVICE_SET_ADVANCED_SCHEDULE_SCHEMA,
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_SET_BUZZER_MODE):
+
+        async def _async_handle_set_buzzer_mode(call: ServiceCall) -> None:
+            mode = _parse_buzzer_mode(call.data[ATTR_BUZZER_MODE])
+            target = _resolve_target_coordinator(
+                hass,
+                entry_id=call.data.get(ATTR_ENTRY_ID),
+                address=call.data.get(ATTR_ADDRESS),
+            )
+            await target.async_set_buzzer_mode(mode)
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_SET_BUZZER_MODE,
+            _async_handle_set_buzzer_mode,
+            schema=SERVICE_SET_BUZZER_MODE_SCHEMA,
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_CLEAR_BUZZER):
+
+        async def _async_handle_clear_buzzer(call: ServiceCall) -> None:
+            target = _resolve_target_coordinator(
+                hass,
+                entry_id=call.data.get(ATTR_ENTRY_ID),
+                address=call.data.get(ATTR_ADDRESS),
+            )
+            await target.async_clear_buzzer()
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_CLEAR_BUZZER,
+            _async_handle_clear_buzzer,
+            schema=SERVICE_CLEAR_BUZZER_SCHEMA,
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_SET_SELLING_FIRST):
+
+        async def _async_handle_set_selling_first(call: ServiceCall) -> None:
+            enabled = bool(call.data[ATTR_ENABLED])
+            target = _resolve_target_coordinator(
+                hass,
+                entry_id=call.data.get(ATTR_ENTRY_ID),
+                address=call.data.get(ATTR_ADDRESS),
+            )
+            await target.async_set_selling_first(enabled)
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_SET_SELLING_FIRST,
+            _async_handle_set_selling_first,
+            schema=SERVICE_SET_SELLING_FIRST_SCHEMA,
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_SET_VALLEY_CHARGE):
+
+        async def _async_handle_set_valley_charge(call: ServiceCall) -> None:
+            enabled = bool(call.data[ATTR_ENABLED])
+            target = _resolve_target_coordinator(
+                hass,
+                entry_id=call.data.get(ATTR_ENTRY_ID),
+                address=call.data.get(ATTR_ADDRESS),
+            )
+            await target.async_set_valley_charge(enabled)
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_SET_VALLEY_CHARGE,
+            _async_handle_set_valley_charge,
+            schema=SERVICE_SET_VALLEY_CHARGE_SCHEMA,
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_SET_PEAK_POWER):
+
+        async def _async_handle_set_peak_power(call: ServiceCall) -> None:
+            peak_power = _parse_peak_power(call.data[ATTR_PEAK_POWER])
+            target = _resolve_target_coordinator(
+                hass,
+                entry_id=call.data.get(ATTR_ENTRY_ID),
+                address=call.data.get(ATTR_ADDRESS),
+            )
+            await target.async_set_peak_power(peak_power)
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_SET_PEAK_POWER,
+            _async_handle_set_peak_power,
+            schema=SERVICE_SET_PEAK_POWER_SCHEMA,
         )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
