@@ -42,8 +42,17 @@ BUZZER_MODE_OPTION_TO_CODE: dict[str, int] = {
 # Accept labels that may already be exposed by system-state sensor formatting.
 LEGACY_STATE_TO_CODE: dict[str, str] = {
     "Self-consumption": "1",
+    "Self-Consumption": "1",
+    "self consumption": "1",
+    "self-consumption": "1",
     "Advanced": "3",
     "Intelligent": "6",
+}
+
+LEGACY_STATE_TO_CODE_NORMALIZED: dict[str, str] = {
+    "selfconsumption": "1",
+    "advanced": "3",
+    "intelligent": "6",
 }
 
 
@@ -68,6 +77,25 @@ def _normalize_mode_code(value: Any) -> str | None:
         return str(int(number))
 
     return text
+
+
+def _normalize_label(value: Any) -> str:
+    """Normalize human-readable labels for tolerant matching."""
+    return "".join(ch for ch in str(value).strip().lower() if ch.isalnum())
+
+
+def _normalize_backup_soc_option(value: Any) -> str | None:
+    """Convert raw backup SoC into the nearest supported select option."""
+    try:
+        raw = int(round(float(value)))
+    except (TypeError, ValueError):
+        return None
+
+    # Device writes are constrained to 20..90 and select options are 10% steps.
+    clamped = max(20, min(90, raw))
+    snapped = int(round((clamped - 20) / 10.0) * 10 + 20)
+    option = str(snapped)
+    return option if option in BACKUP_SOC_OPTIONS else None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -233,10 +261,13 @@ class APstorageBackupSocSelect(
             return _normalize_mode_code(data.system_mode)
 
         if data.system_state is not None:
-            state = str(data.system_state)
+            state = _normalize_mode_code(data.system_state) or ""
             if state in MODE_CODE_TO_OPTION:
                 return state
-            return LEGACY_STATE_TO_CODE.get(state)
+            legacy = LEGACY_STATE_TO_CODE.get(state)
+            if legacy is not None:
+                return legacy
+            return LEGACY_STATE_TO_CODE_NORMALIZED.get(_normalize_label(state))
 
         return None
 
@@ -252,14 +283,14 @@ class APstorageBackupSocSelect(
         """Return current backup SOC as string percent without percent sign."""
         data = self.coordinator.data
         if data is not None and data.backup_soc is not None:
-            current = str(int(round(float(data.backup_soc))))
-            if current in BACKUP_SOC_OPTIONS:
+            current = _normalize_backup_soc_option(data.backup_soc)
+            if current is not None:
                 return current
 
         write = self.coordinator.last_backup_soc_write
         if write is not None:
-            requested = str(write.get("requested_backup_soc") or "")
-            if requested in BACKUP_SOC_OPTIONS:
+            requested = _normalize_backup_soc_option(write.get("requested_backup_soc"))
+            if requested is not None:
                 return requested
 
         return None
