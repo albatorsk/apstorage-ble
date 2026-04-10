@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.11.6 - 2026-04-10
+
+### Changed
+- Removed `Battery Temperature` and `Inverter Temperature` entities from the integration sensor platform.
+- Improved Backup SOC select robustness by normalizing mode-label variants (including `Self-Consumption` forms) when checking mode-gated availability.
+- Improved Backup SOC current-value handling by normalizing/snapping parsed values to supported option steps instead of exposing `Unknown` for minor format/value mismatches.
+
+### Notes
+- `manifest.json` version bumped to `0.11.6`.
+
 ## v0.11.5 - 2026-04-09
 
 ### Fixed
