@@ -60,7 +60,6 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._poll_interval_seconds = poll_interval_seconds
         self._soc_client = APstorageSocClient()
         self._poll_lock = asyncio.Lock()
-        self._last_poll: float | None = None
         self._last_system_mode_write: dict[str, Any] | None = None
         self._last_backup_soc_write: dict[str, Any] | None = None
         self._last_advanced_schedule_write: dict[str, Any] | None = None
