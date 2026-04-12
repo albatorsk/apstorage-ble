@@ -1,13 +1,17 @@
 # Changelog
 
+## v0.11.8 - 2026-04-12
+
+### Changed
+- Removed unused legacy BLE modules that were no longer used by the integration runtime.
+- Updated the probe-all-attributes helper script to use the active soc_client implementation path.
+- Removed unused internal symbols from coordinator and constants modules as part of dead-code cleanup.
+
 ## v0.11.7 - 2026-04-12
 
 ### Fixed
 - Prevented coordinator deadlocks after writable BLE actions (including `System Mode`) by avoiding lock re-entry when forcing post-write polls.
 - Restored continuous sensor updates after mode/setting writes so entities like `Battery Flow State` no longer get stuck until restart.
-
-### Notes
-- `manifest.json` version bumped to `0.11.7`.
 
 ## v0.11.6 - 2026-04-10
 
