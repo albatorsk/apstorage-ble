@@ -19,9 +19,6 @@ MODEL = "ELT-12"
 #   3. Replace the values below with the actual UUIDs
 # ---------------------------------------------------------------------------
 
-# Primary service UUID (vendor-specific)
-BLE_SERVICE_UUID = "0000ffec-0000-1000-8000-00805f9b34fb"
-
 # Characteristic to WRITE requests to (write-with-response)
 BLE_WRITE_CHAR_UUID = "0000ff07-0000-1000-8000-00805f9b34fb"
 
