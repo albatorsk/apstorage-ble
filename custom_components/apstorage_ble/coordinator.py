@@ -322,8 +322,8 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 self.data.system_mode = str(mode)
                 self.async_update_listeners()
 
-            # Refresh immediately so entities reflect new state.
-            await self._async_poll()
+        # Refresh immediately so entities reflect new state.
+        await self._async_poll()
 
     @property
     def last_system_mode_write(self) -> dict[str, Any] | None:
@@ -379,8 +379,8 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 self.data.backup_soc = float(backup_soc)
                 self.async_update_listeners()
 
-            # Refresh immediately so entities reflect new state.
-            await self._async_poll()
+        # Refresh immediately so entities reflect new state.
+        await self._async_poll()
 
     @property
     def last_backup_soc_write(self) -> dict[str, Any] | None:
@@ -449,8 +449,8 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     f" (code={result.get('code')}, message={result.get('message')})"
                 )
 
-            # Refresh immediately so entities reflect new state.
-            await self._async_poll()
+        # Refresh immediately so entities reflect new state.
+        await self._async_poll()
 
     @property
     def last_advanced_schedule_write(self) -> dict[str, Any] | None:
@@ -515,7 +515,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 self.data.system_mode = "0"
                 self.async_update_listeners()
 
-            await self._async_poll()
+        await self._async_poll()
 
     @property
     def last_peak_valley_schedule_write(self) -> dict[str, Any] | None:
@@ -571,7 +571,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 self.data.buzzer = int(mode)
                 self.async_update_listeners()
 
-            await self._async_poll()
+        await self._async_poll()
 
     @property
     def last_buzzer_mode_write(self) -> dict[str, Any] | None:
@@ -618,7 +618,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     f" (code={result.get('code')}, message={result.get('message')})"
                 )
 
-            await self._async_poll()
+        await self._async_poll()
 
     @property
     def last_clear_buzzer_write(self) -> dict[str, Any] | None:
@@ -716,7 +716,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 self.data.selling_first = bool(enabled)
                 self.async_update_listeners()
 
-            await self._async_poll()
+        await self._async_poll()
 
     @property
     def last_selling_first_write(self) -> dict[str, Any] | None:
@@ -769,7 +769,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 self.data.valley_charge = bool(enabled)
                 self.async_update_listeners()
 
-            await self._async_poll()
+        await self._async_poll()
 
     @property
     def last_valley_charge_write(self) -> dict[str, Any] | None:
@@ -825,7 +825,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 self.data.peak_power = int(peak_power)
                 self.async_update_listeners()
 
-            await self._async_poll()
+        await self._async_poll()
 
     @property
     def last_peak_power_write(self) -> dict[str, Any] | None:

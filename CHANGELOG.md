@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.11.7 - 2026-04-12
+
+### Fixed
+- Prevented coordinator deadlocks after writable BLE actions (including `System Mode`) by avoiding lock re-entry when forcing post-write polls.
+- Restored continuous sensor updates after mode/setting writes so entities like `Battery Flow State` no longer get stuck until restart.
+
+### Notes
+- `manifest.json` version bumped to `0.11.7`.
+
 ## v0.11.6 - 2026-04-10
 
 ### Changed
