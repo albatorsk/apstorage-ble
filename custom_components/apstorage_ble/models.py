@@ -60,10 +60,44 @@ class PCSData:
     total_produced: float | None = None           # kWh (T2)
     total_consumed: float | None = None           # kWh (T3)
     total_consumed_daily: float | None = None     # kWh (DE3)
-    pcs_firmware_version: str | None = None       # current PCS firmware version
-    pcs_latest_firmware_version: str | None = None  # latest available PCS firmware version
+    pcs_firmware_version: str | None = None       # current PCS firmware version (raw)
+    pcs_latest_firmware_version: str | None = None  # latest available PCS firmware version (raw)
     pcs_software_version: str | None = None       # reported PCS software version
     pcs_hardware_version: str | None = None       # reported PCS hardware version
+
+    def _split_version_parts(self, value: str | None) -> tuple[str | None, str | None, str | None]:
+        """Split underscore-delimited version strings into up to three parts."""
+        if value is None:
+            return (None, None, None)
+
+        parts = [part.strip() for part in str(value).split("_") if part.strip()]
+        while len(parts) < 3:
+            parts.append(None)
+        return (parts[0], parts[1], parts[2])
+
+    @property
+    def pcs_firmware_version_1(self) -> str | None:
+        return self._split_version_parts(self.pcs_firmware_version)[0]
+
+    @property
+    def pcs_firmware_version_2(self) -> str | None:
+        return self._split_version_parts(self.pcs_firmware_version)[1]
+
+    @property
+    def pcs_firmware_version_3(self) -> str | None:
+        return self._split_version_parts(self.pcs_firmware_version)[2]
+
+    @property
+    def pcs_latest_firmware_version_1(self) -> str | None:
+        return self._split_version_parts(self.pcs_latest_firmware_version)[0]
+
+    @property
+    def pcs_latest_firmware_version_2(self) -> str | None:
+        return self._split_version_parts(self.pcs_latest_firmware_version)[1]
+
+    @property
+    def pcs_latest_firmware_version_3(self) -> str | None:
+        return self._split_version_parts(self.pcs_latest_firmware_version)[2]
 
     @property
     def signed_battery_power(self) -> float | None:
