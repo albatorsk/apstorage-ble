@@ -23,8 +23,8 @@ class PCSData:
     battery_soc: float | None = None          # %  (0–100)
     battery_voltage: float | None = None      # V
     battery_current: float | None = None      # A
-    battery_power: float | None = None        # W  (derived or direct, P0)
-    battery_charging_power: float | None = None  # W  (P1)
+    battery_power: float | None = None        # W  (discharge/raw P0)
+    battery_charging_power: float | None = None  # W  (charging magnitude, P1)
     battery_temperature: float | None = None  # °C
     battery_charged_energy: float | None = None      # kWh (total charged)
     battery_discharged_energy: float | None = None   # kWh (total discharged)
@@ -60,3 +60,21 @@ class PCSData:
     total_produced: float | None = None           # kWh (T2)
     total_consumed: float | None = None           # kWh (T3)
     total_consumed_daily: float | None = None     # kWh (DE3)
+
+    @property
+    def signed_battery_power(self) -> float | None:
+        """Return net signed battery power in watts.
+
+        Positive values mean the battery is discharging.
+        Negative values mean the battery is charging.
+        """
+        if self.battery_power is None and self.battery_charging_power is None:
+            return None
+
+        discharging = float(self.battery_power or 0.0)
+        charging = float(self.battery_charging_power or 0.0)
+
+        if discharging < 0:
+            return discharging
+
+        return discharging - charging
