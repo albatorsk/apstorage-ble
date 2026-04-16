@@ -132,7 +132,9 @@ Service:
 
 ### Via HACS (recommended)
 
-1. Add this repository as a custom repository in HACS.
+[![Open your Home Assistant instance and show the add custom repository dialog with a specific repository URL pre-filled.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=albatorsk&repository=apstorage-ble&category=integration)
+
+1. Add this repository as a custom repository in HACS using the Integration category.
 2. Install "APstorage BLE".
 3. Restart Home Assistant.
 
