@@ -219,7 +219,7 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         key="pcs_firmware_version",
         name="PCS Firmware Version",
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda d: d.pcs_firmware_version,
+        value_fn=lambda d: d.pcs_firmware_version or d.pcs_software_version,
     ),
     APstorageSensorDescription(
         key="pcs_latest_firmware_version",
@@ -231,7 +231,7 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         key="pcs_software_version",
         name="PCS Software Version",
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda d: d.pcs_software_version,
+        value_fn=lambda d: d.pcs_software_version or d.pcs_firmware_version,
     ),
     APstorageSensorDescription(
         key="pcs_hardware_version",
