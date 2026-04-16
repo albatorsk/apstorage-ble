@@ -62,9 +62,12 @@ The following sensors are implemented in the integration.
 - Daily Total Consumed (`kWh`)
 
 #### Diagnostics
-- PCS Firmware Version
-- PCS Latest Firmware Version
-- PCS Software Version
+- PCS Firmware 1
+- PCS Firmware 2
+- PCS Firmware 3
+- PCS Latest Firmware 1
+- PCS Latest Firmware 2
+- PCS Latest Firmware 3
 - PCS Hardware Version
 
 #### Controls
