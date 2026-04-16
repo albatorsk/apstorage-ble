@@ -64,6 +64,9 @@ class PCSData:
     pcs_latest_firmware_version: str | None = None  # latest available PCS firmware version (raw)
     pcs_software_version: str | None = None       # reported PCS software version
     pcs_hardware_version: str | None = None       # reported PCS hardware version
+    battery_alarm: str | None = None              # battery/storage alarm summary
+    pcs_alarm: str | None = None                  # PCS/ESS alarm summary
+    alarm_summary: str | None = None              # combined alarm summary
 
     def _split_version_parts(self, value: str | None) -> tuple[str | None, str | None, str | None]:
         """Split underscore-delimited version strings into up to three parts."""
