@@ -313,12 +313,18 @@ def _extract_version_info(parsed: Any) -> dict[str, str]:
             _to_text(root.get("sw_version"))
             or _to_text(root.get("storageSoftwareVersion"))
             or _to_text(root.get("softVersion"))
-            or _to_text(_deep_find_key(root, {"sw_version", "swversion", "storagesoftwareversion", "softversion"}))
+            or _to_text(root.get("VS"))
+            or _to_text(_deep_find_key(root, {"sw_version", "swversion", "storagesoftwareversion", "softversion", "vs"}))
         )
         hardware = (
             _to_text(root.get("hw_version"))
             or _to_text(_deep_find_key(root, {"hw_version", "hwversion"}))
         )
+
+        if software is None and current is not None:
+            software = current
+        if current is None and software is not None:
+            current = software
 
         if current:
             info.setdefault("pcs_firmware_version", current)
@@ -2717,7 +2723,7 @@ class APstorageSocClient:
                 last_attempt = self._version_query_last_attempt.get(storage_id, 0.0)
                 now = asyncio.get_running_loop().time()
 
-                if version_info is None and (now - last_attempt) >= 3600:
+                if version_info is None and (now - last_attempt) >= 300:
                     self._version_query_last_attempt[storage_id] = now
                     version_info = await self._query_version_info(client, storage_id, system_id="")
                     if version_info:
