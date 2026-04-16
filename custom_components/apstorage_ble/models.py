@@ -60,6 +60,10 @@ class PCSData:
     total_produced: float | None = None           # kWh (T2)
     total_consumed: float | None = None           # kWh (T3)
     total_consumed_daily: float | None = None     # kWh (DE3)
+    pcs_firmware_version: str | None = None       # current PCS firmware version
+    pcs_latest_firmware_version: str | None = None  # latest available PCS firmware version
+    pcs_software_version: str | None = None       # reported PCS software version
+    pcs_hardware_version: str | None = None       # reported PCS hardware version
 
     @property
     def signed_battery_power(self) -> float | None:

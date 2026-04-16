@@ -28,6 +28,7 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
@@ -214,6 +215,30 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         suggested_display_precision=2,
         value_fn=lambda d: d.total_consumed_daily,
     ),
+    APstorageSensorDescription(
+        key="pcs_firmware_version",
+        name="PCS Firmware Version",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda d: d.pcs_firmware_version,
+    ),
+    APstorageSensorDescription(
+        key="pcs_latest_firmware_version",
+        name="PCS Latest Firmware Version",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda d: d.pcs_latest_firmware_version,
+    ),
+    APstorageSensorDescription(
+        key="pcs_software_version",
+        name="PCS Software Version",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda d: d.pcs_software_version,
+    ),
+    APstorageSensorDescription(
+        key="pcs_hardware_version",
+        name="PCS Hardware Version",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda d: d.pcs_hardware_version,
+    ),
 )
 
 
@@ -270,15 +295,27 @@ class APstorageSensor(
     ) -> None:
         super().__init__(coordinator)
         self.entity_description = description
-        address: str = entry.data[CONF_ADDRESS]
+        self._address: str = entry.data[CONF_ADDRESS]
+        self._device_name = entry.title
         # Unique ID: domain + MAC + sensor key so entities survive renames.
-        self._attr_unique_id = f"{address}-{description.key}"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, address)},
-            connections={(dr.CONNECTION_BLUETOOTH, address)},
-            name=entry.title,
+        self._attr_unique_id = f"{self._address}-{description.key}"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device metadata, including version information when available."""
+        data = self.coordinator.data
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._address)},
+            connections={(dr.CONNECTION_BLUETOOTH, self._address)},
+            name=self._device_name,
             manufacturer=MANUFACTURER,
             model=MODEL,
+            sw_version=(
+                data.pcs_firmware_version
+                if data and data.pcs_firmware_version is not None
+                else data.pcs_software_version if data else None
+            ),
+            hw_version=data.pcs_hardware_version if data else None,
         )
 
     @property
