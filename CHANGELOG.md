@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.12.5 - 2026-04-16
+
+### Changed
+- Split underscore-delimited PCS firmware strings into separate entities for Firmware 1/2/3 and Latest Firmware 1/2/3.
+- Simplified the diagnostic entity names by removing the word Version from the firmware labels.
+- Removed the redundant PCS Software Version entity.
+
+### Notes
+- manifest.json version bumped to 0.12.5.
+
 ## v0.12.4 - 2026-04-16
 
 ### Fixed
