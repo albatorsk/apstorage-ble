@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.12.1 - 2026-04-16
+
+### Fixed
+- Corrected the signed Battery Power calculation so charging now shows negative watt values instead of 0.
+- Kept Battery Charging Power and Battery Discharging Power as separate entities.
+
+### Notes
+- manifest.json version bumped to 0.12.1.
+
 ## v0.12.0 - 2026-04-16
 
 ### Fixed
