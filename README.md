@@ -16,7 +16,6 @@ Designed to work with an **ESPHome Bluetooth proxy** placed near the PCS.
 | Blufi handshake + encrypted local-data query | ✅ **Working** |
 | Active + fallback periodic polling | ✅ **Working** |
 | Sensor entity platform | ✅ **Working** |
-| Temperature sensors | ✅ **Working** |
 | System mode select (write) | ✅ **Working** |
 | Buzzer mode select (write) | ✅ **Working** |
 | Clear buzzer alarm (button/service) | ✅ **Working** |
@@ -40,7 +39,6 @@ The following sensors are implemented in the integration.
 - Battery State of Charge (`%`)
 - Battery Discharging Power (`W`)
 - Battery Charging Power (`W`)
-- Battery Temperature (`°C`)
 - Daily Charged Energy (`kWh`)
 - Daily Discharged Energy (`kWh`)
 
@@ -54,7 +52,6 @@ The following sensors are implemented in the integration.
 
 #### Load / Output
 - Load Power (`W`)
-- Inverter Temperature (`°C`)
 
 #### System
 - System State (enum)
