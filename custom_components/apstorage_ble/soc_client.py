@@ -270,6 +270,68 @@ def _to_float(value: Any) -> float | None:
         return None
 
 
+def _to_text(value: Any) -> str | None:
+    """Best-effort conversion to a clean non-empty string."""
+    if value is None or isinstance(value, (dict, list)):
+        return None
+
+    text = str(value).strip()
+    if not text or text.lower() in {"none", "null", "unknown", "nan"}:
+        return None
+
+    return text
+
+
+def _extract_version_info(parsed: Any) -> dict[str, str]:
+    """Extract PCS version details from a version/config response payload."""
+    if not isinstance(parsed, dict):
+        return {}
+
+    roots: list[dict[str, Any]] = []
+    for key in ("messagedata", "data"):
+        candidate = parsed.get(key)
+        if isinstance(candidate, dict):
+            roots.append(candidate)
+        elif isinstance(candidate, list):
+            roots.extend(item for item in candidate if isinstance(item, dict))
+
+    roots.append(parsed)
+
+    info: dict[str, str] = {}
+    for root in roots:
+        current = (
+            _to_text(root.get("current_version"))
+            or _to_text(root.get("CV"))
+            or _to_text(_deep_find_key(root, {"current_version", "currentversion"}))
+        )
+        latest = (
+            _to_text(root.get("latest_version"))
+            or _to_text(root.get("LV"))
+            or _to_text(_deep_find_key(root, {"latest_version", "latestversion"}))
+        )
+        software = (
+            _to_text(root.get("sw_version"))
+            or _to_text(root.get("storageSoftwareVersion"))
+            or _to_text(root.get("softVersion"))
+            or _to_text(_deep_find_key(root, {"sw_version", "swversion", "storagesoftwareversion", "softversion"}))
+        )
+        hardware = (
+            _to_text(root.get("hw_version"))
+            or _to_text(_deep_find_key(root, {"hw_version", "hwversion"}))
+        )
+
+        if current:
+            info.setdefault("pcs_firmware_version", current)
+        if latest:
+            info.setdefault("pcs_latest_firmware_version", latest)
+        if software:
+            info.setdefault("pcs_software_version", software)
+        if hardware:
+            info.setdefault("pcs_hardware_version", hardware)
+
+    return info
+
+
 def _last_nonzero_from_array(value: Any) -> float | None:
     """Extract the last non-zero numeric value from a list of strings/numbers.
 
@@ -1178,6 +1240,10 @@ class SocMetrics:
     total_produced: float | None = None           # kWh (T2)
     total_consumed: float | None = None           # kWh (T3)
     total_consumed_daily: float | None = None     # kWh (DE3)
+    pcs_firmware_version: str | None = None       # current PCS firmware version
+    pcs_latest_firmware_version: str | None = None  # latest available PCS firmware version
+    pcs_software_version: str | None = None       # reported PCS software version
+    pcs_hardware_version: str | None = None       # reported PCS hardware version
     # Grid metrics
     grid_voltage: float | None = None          # V
     grid_current: float | None = None          # A
@@ -1547,6 +1613,8 @@ class APstorageSocClient:
         self.parsed_frames: list[BlufiFrame] = []
         self._frame_cursor = 0
         self._preferred_storage_id: str | None = None
+        self._version_cache: dict[str, dict[str, str]] = {}
+        self._version_query_last_attempt: dict[str, float] = {}
 
     async def _ensure_services_ready(self, client: BleakClient) -> None:
         """Ensure GATT service discovery has completed before I/O.
@@ -2644,12 +2712,28 @@ class APstorageSocClient:
                         continue
 
                 metrics = _extract_metrics(parsed)
+
+                version_info = self._version_cache.get(storage_id)
+                last_attempt = self._version_query_last_attempt.get(storage_id, 0.0)
+                now = asyncio.get_running_loop().time()
+
+                if version_info is None and (now - last_attempt) >= 3600:
+                    self._version_query_last_attempt[storage_id] = now
+                    version_info = await self._query_version_info(client, storage_id, system_id="")
+                    if version_info:
+                        self._version_cache[storage_id] = version_info
+
+                if version_info:
+                    for field_name, field_value in version_info.items():
+                        setattr(metrics, field_name, field_value)
+
                 _LOGGER.debug(
-                    "Extracted metrics for storage_id=%s: soc=%s, power=%s, state=%s",
+                    "Extracted metrics for storage_id=%s: soc=%s, power=%s, state=%s, fw=%s",
                     storage_id,
                     metrics.battery_soc,
                     metrics.battery_power,
                     metrics.system_state,
+                    metrics.pcs_firmware_version,
                 )
                 # Return if we extracted any useful metric
                 if any(value is not None for value in (
@@ -2815,6 +2899,38 @@ class APstorageSocClient:
 
         finally:
             await client.stop_notify(NOTIFY_CHAR)
+
+    async def _query_version_info(
+        self,
+        client: BleakClient,
+        storage_id: str,
+        system_id: str = "",
+    ) -> dict[str, str]:
+        """Query PCS version-related information via app-compatible requests."""
+        combined: dict[str, str] = {}
+
+        for identifier in ("pcsVersion", "get/initializationInfo", "getStorageConfigurationInfo"):
+            try:
+                response = await self._send_property_request(
+                    client,
+                    method="get",
+                    identifier=identifier,
+                    storage_id=storage_id,
+                    params_extra={},
+                    system_id=system_id,
+                )
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.debug("Version query %s failed for %s: %s", identifier, storage_id, err)
+                continue
+
+            if not isinstance(response, dict):
+                continue
+
+            version_info = _extract_version_info(response)
+            for field_name, field_value in version_info.items():
+                combined.setdefault(field_name, field_value)
+
+        return combined
 
     async def _send_property_request(
         self,

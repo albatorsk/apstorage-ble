@@ -61,6 +61,12 @@ The following sensors are implemented in the integration.
 - Total Consumed (`kWh`)
 - Daily Total Consumed (`kWh`)
 
+#### Diagnostics
+- PCS Firmware Version
+- PCS Latest Firmware Version
+- PCS Software Version
+- PCS Hardware Version
+
 #### Controls
 - System Mode (`select` entity)
     - Peak Valley
