@@ -37,7 +37,6 @@ The following sensors are implemented in the integration.
 
 #### Battery
 - Battery State of Charge (`%`)
-- Battery Power (`W`, signed positive or negative)
 - Battery Discharging Power (`W`)
 - Battery Charging Power (`W`)
 - Daily Charged Energy (`kWh`)
