@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.12.4 - 2026-04-16
+
+### Fixed
+- Improved PCS software-version detection by accepting additional app-observed fields and falling back to the reported firmware version when only one version value is available.
+- Reduced the retry interval for version discovery so version entities populate sooner after reload.
+
+### Notes
+- manifest.json version bumped to 0.12.4.
+
 ## v0.12.3 - 2026-04-16
 
 ### Added
