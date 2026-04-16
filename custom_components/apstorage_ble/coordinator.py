@@ -257,6 +257,12 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     self.data.total_consumed = float(metrics.total_consumed)
                 if metrics.total_consumed_daily is not None:
                     self.data.total_consumed_daily = float(metrics.total_consumed_daily)
+                if metrics.battery_alarm is not None:
+                    self.data.battery_alarm = metrics.battery_alarm
+                if metrics.pcs_alarm is not None:
+                    self.data.pcs_alarm = metrics.pcs_alarm
+                if metrics.alarm_summary is not None:
+                    self.data.alarm_summary = metrics.alarm_summary
                 if metrics.pcs_firmware_version is not None:
                     self.data.pcs_firmware_version = metrics.pcs_firmware_version
                 if metrics.pcs_latest_firmware_version is not None:
