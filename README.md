@@ -54,14 +54,17 @@ The following sensors are implemented in the integration.
 - Load Power (`W`)
 
 #### System
-- System State (enum)
-- Battery Flow State (enum: Charging, Discharging, Holding)
+- System State (`enum`)
+- Battery Flow State (`enum`: Charging, Discharging, Holding)
 - CO2 Reduction (`kg`)
 - Total Produced (`kWh`)
 - Total Consumed (`kWh`)
 - Daily Total Consumed (`kWh`)
 
 #### Diagnostics
+- Alarm Summary
+- PCS Alarm
+- Battery Alarm
 - PCS Firmware 1
 - PCS Firmware 2
 - PCS Firmware 3
