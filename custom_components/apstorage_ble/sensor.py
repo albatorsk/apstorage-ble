@@ -26,7 +26,7 @@ from homeassistant.const import (
     UnitOfMass,
 )
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -81,11 +81,19 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
     ),
     APstorageSensorDescription(
         key="battery_power",
-        name="Battery Discharging Power",
+        name="Battery Power",
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda d: d.battery_power,
+    ),
+    APstorageSensorDescription(
+        key="battery_discharging_power",
+        name="Battery Discharging Power",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda d: max(d.battery_power, 0) if d.battery_power is not None else None,
     ),
     APstorageSensorDescription(
         key="battery_charging_power",
@@ -217,12 +225,29 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
 )
 
 
+async def _async_migrate_sensor_unique_ids(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Migrate renamed sensor unique IDs in the entity registry."""
+    address: str = entry.data[CONF_ADDRESS]
+    entity_registry = er.async_get(hass)
+
+    migrations = {
+        f"{address}-battery_power": f"{address}-battery_discharging_power",
+    }
+
+    for old_unique_id, new_unique_id in migrations.items():
+        entity_id = entity_registry.async_get_entity_id("sensor", DOMAIN, old_unique_id)
+        if entity_id and not entity_registry.async_get_entity_id("sensor", DOMAIN, new_unique_id):
+            entity_registry.async_update_entity(entity_id, new_unique_id=new_unique_id)
+            _LOGGER.debug("Migrated sensor unique ID from %s to %s", old_unique_id, new_unique_id)
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up APstorage BLE sensors from a config entry."""
+    await _async_migrate_sensor_unique_ids(hass, entry)
     coordinator: APstorageCoordinator = hass.data[DOMAIN][entry.entry_id]
 
     async_add_entities(

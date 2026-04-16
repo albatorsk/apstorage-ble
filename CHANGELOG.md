@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.12.0 - 2026-04-16
+
+### Fixed
+- Restored a separate signed Battery Power sensor entity.
+- Renamed Battery Discharging Power to use its own unique entity key so it no longer conflicts with Battery Power.
+- Removed broken temperature sensor references from the documentation.
+
+### Notes
+- manifest.json version bumped to 0.12.0.
+
 ## v0.11.8 - 2026-04-12
 
 ### Changed
