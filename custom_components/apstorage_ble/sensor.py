@@ -85,7 +85,7 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda d: d.battery_power,
+        value_fn=lambda d: d.signed_battery_power,
     ),
     APstorageSensorDescription(
         key="battery_discharging_power",
@@ -93,7 +93,7 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda d: max(d.battery_power, 0) if d.battery_power is not None else None,
+        value_fn=lambda d: max(d.signed_battery_power, 0) if d.signed_battery_power is not None else None,
     ),
     APstorageSensorDescription(
         key="battery_charging_power",
