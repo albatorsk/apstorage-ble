@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.12.2 - 2026-04-16
+
+### Changed
+- Removed the built-in Battery Power sensor entity from the integration.
+- Kept only Battery Charging Power and Battery Discharging Power for battery power reporting.
+- Added entity-registry cleanup for older Battery Power entries on upgrade.
+
+### Notes
+- manifest.json version bumped to 0.12.2.
+
 ## v0.12.1 - 2026-04-16
 
 ### Fixed
