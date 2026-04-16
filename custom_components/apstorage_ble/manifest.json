@@ -8,10 +8,11 @@
       "connectable": true
     }
   ],
-  "codeowners": [],
+  "codeowners": ["@albatorsk"],
   "config_flow": true,
   "dependencies": ["bluetooth"],
-  "documentation": "https://github.com/perbs/apstorage-ble",
+  "documentation": "https://github.com/albatorsk/apstorage-ble",
+  "issue_tracker": "https://github.com/albatorsk/apstorage-ble/issues",
   "iot_class": "local_polling",
   "requirements": [
     "bleak-retry-connector",
