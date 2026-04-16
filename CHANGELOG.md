@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.13.0 - 2026-04-16
+
+### Added
+- Added new diagnostic entities for Alarm Summary, PCS Alarm, and Battery Alarm.
+- Added alarm parsing support for app-style storage, inverter, and ESS alarm payloads.
+
+### Notes
+- manifest.json version bumped to 0.13.0.
+
 ## v0.12.5 - 2026-04-16
 
 ### Changed
