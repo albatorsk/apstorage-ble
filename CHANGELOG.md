@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.12.3 - 2026-04-16
+
+### Added
+- Added PCS version diagnostics to expose firmware, latest firmware, software, and hardware version information.
+- Populated Home Assistant device metadata with reported PCS software and hardware versions when available.
+
+### Notes
+- manifest.json version bumped to 0.12.3.
+
 ## v0.12.2 - 2026-04-16
 
 ### Changed
