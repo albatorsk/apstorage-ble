@@ -80,14 +80,6 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         value_fn=lambda d: d.battery_soc,
     ),
     APstorageSensorDescription(
-        key="battery_power",
-        name="Battery Power",
-        native_unit_of_measurement=UnitOfPower.WATT,
-        device_class=SensorDeviceClass.POWER,
-        state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda d: d.signed_battery_power,
-    ),
-    APstorageSensorDescription(
         key="battery_discharging_power",
         name="Battery Discharging Power",
         native_unit_of_measurement=UnitOfPower.WATT,
@@ -236,7 +228,12 @@ async def _async_migrate_sensor_unique_ids(hass: HomeAssistant, entry: ConfigEnt
 
     for old_unique_id, new_unique_id in migrations.items():
         entity_id = entity_registry.async_get_entity_id("sensor", DOMAIN, old_unique_id)
-        if entity_id and not entity_registry.async_get_entity_id("sensor", DOMAIN, new_unique_id):
+        new_entity_id = entity_registry.async_get_entity_id("sensor", DOMAIN, new_unique_id)
+
+        if entity_id and new_entity_id:
+            entity_registry.async_remove(entity_id)
+            _LOGGER.debug("Removed legacy sensor entity with unique ID %s", old_unique_id)
+        elif entity_id:
             entity_registry.async_update_entity(entity_id, new_unique_id=new_unique_id)
             _LOGGER.debug("Migrated sensor unique ID from %s to %s", old_unique_id, new_unique_id)
 
