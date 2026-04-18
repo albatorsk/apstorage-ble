@@ -70,11 +70,18 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._last_selling_first_write: dict[str, Any] | None = None
         self._last_valley_charge_write: dict[str, Any] | None = None
         self._last_peak_power_write: dict[str, Any] | None = None
+        self._shutdown = False
         # Most-recent successfully parsed data; also exposed as coordinator.data
         self.data: PCSData | None = None
 
     async def async_initialize(self) -> None:
         """No-op; retained for caller compatibility."""
+
+    async def async_shutdown(self) -> None:
+        """Block new BLE activity once the config entry is unloading."""
+        self._shutdown = True
+        async with self._poll_lock:
+            self._last_service_info = None
 
     def _resolve_battery_flow_state(self, metrics) -> str | None:
         """Resolve user-facing battery flow state from live telemetry.
@@ -134,6 +141,9 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
           2. Enough time has elapsed since the last poll.
           3. We have a connectable BLE device to use (may route through proxy).
         """
+        if self._shutdown:
+            return False
+
         if self.hass.state != CoreState.running:
             return False
 
@@ -155,7 +165,14 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
 
     async def _async_poll(self) -> None:
         """Connect to the device via GATT and update coordinator data."""
+        if self._shutdown:
+            _LOGGER.debug("[%s] Poll skipped because coordinator is shutting down", self._name)
+            return
+
         async with self._poll_lock:
+            if self._shutdown:
+                _LOGGER.debug("[%s] Poll aborted because coordinator is shutting down", self._name)
+                return
             service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
             # Prefer the connectable device from the most recent advertisement;
@@ -847,6 +864,8 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
 
     async def async_periodic_poll(self) -> None:
         """Run a fallback poll independent of advertisement event timing."""
+        if self._shutdown:
+            return
         await self._async_poll()
 
     @callback
@@ -861,6 +880,9 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         extract data from the advertisement payload here in the future if the
         PCS encodes any useful data in its manufacturer-specific data.
         """
+        if self._shutdown:
+            return
+
         _LOGGER.debug(
             "[%s] Advertisement received (RSSI %d dBm)",
             self._name,
