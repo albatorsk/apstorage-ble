@@ -226,6 +226,78 @@ class VersionParsingTests(unittest.TestCase):
         self.assertEqual(info.get("pcs_hardware_version"), "HW-ELT12")
 
 
+class VersionRefreshTests(unittest.TestCase):
+    def test_refreshes_cached_version_info_once_per_hour(self) -> None:
+        self.assertFalse(
+            SOC_CLIENT._should_refresh_version_info(
+                {"pcs_latest_firmware_version": "EZ1_1.2.4_20260420"},
+                now=3599,
+                last_attempt=0,
+            )
+        )
+        self.assertTrue(
+            SOC_CLIENT._should_refresh_version_info(
+                {"pcs_latest_firmware_version": "EZ1_1.2.4_20260420"},
+                now=3600,
+                last_attempt=0,
+            )
+        )
+
+    def test_retries_soon_when_latest_version_is_still_missing(self) -> None:
+        self.assertFalse(
+            SOC_CLIENT._should_refresh_version_info(
+                {"pcs_firmware_version": "EZ1_1.2.3_20260418"},
+                now=29,
+                last_attempt=0,
+            )
+        )
+        self.assertTrue(
+            SOC_CLIENT._should_refresh_version_info(
+                {"pcs_firmware_version": "EZ1_1.2.3_20260418"},
+                now=30,
+                last_attempt=0,
+            )
+        )
+
+
+
+class VersionQueryEfficiencyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_version_query_stops_after_first_useful_response(self) -> None:
+        client = SOC_CLIENT.APstorageSocClient()
+        calls: list[str] = []
+
+        async def _fake_send_property_request(
+            _ble_client,
+            *,
+            method,
+            identifier,
+            storage_id,
+            params_extra,
+            system_id="",
+            response_timeout_seconds=None,
+        ):
+            calls.append(identifier)
+            if identifier == "pcsVersion":
+                return {
+                    "data": {
+                        "currentVersion": "EZ1_1.2.3_20260418",
+                        "latestVersion": "EZ1_1.2.4_20260420",
+                    }
+                }
+            return {
+                "data": {
+                    "hardwareVersion": "HW-ELT12",
+                }
+            }
+
+        client._send_property_request = _fake_send_property_request
+
+        info = await client._query_version_info(object(), "B05000001878")
+
+        self.assertEqual(calls, ["pcsVersion"])
+        self.assertEqual(info.get("pcs_latest_firmware_version"), "EZ1_1.2.4_20260420")
+
+
 class CoordinatorShutdownTests(unittest.IsolatedAsyncioTestCase):
     async def test_periodic_poll_is_ignored_after_shutdown(self) -> None:
         coordinator = object.__new__(APstorageCoordinator)
