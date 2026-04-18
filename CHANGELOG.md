@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.13.4 - 2026-04-18
+
+### Fixed
+- Reduced the impact of firmware-version diagnostics on the main BLE telemetry poll.
+- Stopped redundant version endpoint requests after the first useful response.
+- Added shorter diagnostic timeouts so sensors no longer drift to Unknown during intermittent firmware lookups.
+
+### Notes
+- manifest.json version bumped to 0.13.4.
+
 ## v0.13.3 - 2026-04-18
 
 ### Fixed
