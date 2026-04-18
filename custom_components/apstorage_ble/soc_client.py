@@ -54,6 +54,8 @@ RESPONSE_TIMEOUT_SECONDS = 30
 NOTIFY_SETTLE_DELAY_SECONDS = 0.10
 PACKET_WRITE_DELAY_SECONDS = 0.05
 VERSION_DISCOVERY_RETRY_SECONDS = 30
+VERSION_REFRESH_INTERVAL_SECONDS = 60 * 60
+DIAGNOSTIC_QUERY_TIMEOUT_SECONDS = 8
 
 try:
     from Crypto.Cipher import AES
@@ -283,6 +285,34 @@ def _to_text(value: Any) -> str | None:
         return None
 
     return text
+
+
+def _should_refresh_version_info(
+    version_info: dict[str, str] | None,
+    *,
+    now: float,
+    last_attempt: float,
+) -> bool:
+    """Return True when cached version metadata should be queried again."""
+    elapsed = now - last_attempt
+
+    if version_info is None:
+        return elapsed >= VERSION_DISCOVERY_RETRY_SECONDS
+
+    if _to_text(version_info.get("pcs_latest_firmware_version")) is None:
+        return elapsed >= VERSION_DISCOVERY_RETRY_SECONDS
+
+    return elapsed >= VERSION_REFRESH_INTERVAL_SECONDS
+
+
+def _version_info_is_complete_enough(info: dict[str, str] | None) -> bool:
+    """Return True when the essential firmware metadata has been captured."""
+    if not info:
+        return False
+
+    current = _to_text(info.get("pcs_firmware_version")) or _to_text(info.get("pcs_software_version"))
+    latest = _to_text(info.get("pcs_latest_firmware_version"))
+    return current is not None and latest is not None
 
 
 def _extract_version_info(parsed: Any) -> dict[str, str]:
@@ -2905,14 +2935,28 @@ class APstorageSocClient:
                 last_attempt = self._version_query_last_attempt.get(storage_id, 0.0)
                 now = asyncio.get_running_loop().time()
 
-                if version_info is None and (now - last_attempt) >= VERSION_DISCOVERY_RETRY_SECONDS:
+                if _should_refresh_version_info(version_info, now=now, last_attempt=last_attempt):
                     self._version_query_last_attempt[storage_id] = now
-                    version_info = await self._query_version_info(client, storage_id, system_id="")
-                    if version_info:
+                    refreshed_version_info = await self._query_version_info(
+                        client,
+                        storage_id,
+                        system_id="",
+                        cached_info=version_info,
+                    )
+                    if refreshed_version_info:
+                        if version_info:
+                            version_info = {**version_info, **refreshed_version_info}
+                        else:
+                            version_info = refreshed_version_info
                         self._version_cache[storage_id] = version_info
-                    else:
+                    elif version_info is None:
                         _LOGGER.debug(
                             "No version info returned for storage_id=%s; will retry soon",
+                            storage_id,
+                        )
+                    else:
+                        _LOGGER.debug(
+                            "Version refresh returned no new data for storage_id=%s; keeping cached values",
                             storage_id,
                         )
 
@@ -3113,11 +3157,17 @@ class APstorageSocClient:
         client: BleakClient,
         storage_id: str,
         system_id: str = "",
+        cached_info: dict[str, str] | None = None,
     ) -> dict[str, str]:
         """Query PCS version-related information via app-compatible requests."""
-        combined: dict[str, str] = {}
+        combined: dict[str, str] = dict(cached_info or {})
+        identifiers = (
+            ("pcsVersion",)
+            if _version_info_is_complete_enough(cached_info)
+            else ("pcsVersion", "get/initializationInfo", "getStorageConfigurationInfo")
+        )
 
-        for identifier in ("pcsVersion", "get/initializationInfo", "getStorageConfigurationInfo"):
+        for identifier in identifiers:
             try:
                 response = await self._send_property_request(
                     client,
@@ -3126,6 +3176,7 @@ class APstorageSocClient:
                     storage_id=storage_id,
                     params_extra={},
                     system_id=system_id,
+                    response_timeout_seconds=DIAGNOSTIC_QUERY_TIMEOUT_SECONDS,
                 )
             except Exception as err:  # noqa: BLE001
                 _LOGGER.debug("Version query %s failed for %s: %s", identifier, storage_id, err)
@@ -3137,6 +3188,9 @@ class APstorageSocClient:
             version_info = _extract_version_info(response)
             for field_name, field_value in version_info.items():
                 combined.setdefault(field_name, field_value)
+
+            if _version_info_is_complete_enough(combined):
+                break
 
         return combined
 
@@ -3155,6 +3209,7 @@ class APstorageSocClient:
                 storage_id=storage_id,
                 params_extra={},
                 system_id=system_id,
+                response_timeout_seconds=DIAGNOSTIC_QUERY_TIMEOUT_SECONDS,
             )
         except Exception as err:  # noqa: BLE001
             _LOGGER.debug("Alarm query failed for %s: %s", storage_id, err)
@@ -3171,6 +3226,7 @@ class APstorageSocClient:
         storage_id: str,
         params_extra: dict[str, Any],
         system_id: str = "",
+        response_timeout_seconds: float = RESPONSE_TIMEOUT_SECONDS,
     ) -> dict[str, Any] | None:
         """Send encrypted property request and parse JSON response."""
         request = {
@@ -3214,7 +3270,7 @@ class APstorageSocClient:
             await client.write_gatt_char(WRITE_CHAR, pkt, response=True)
             await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
 
-        frame = await self._wait_frame(1, 19, RESPONSE_TIMEOUT_SECONDS)
+        frame = await self._wait_frame(1, 19, response_timeout_seconds)
         decrypted = _ema_decrypt_payload(frame.payload)
         try:
             parsed = json.loads(decrypted)
