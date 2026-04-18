@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.13.2 - 2026-04-18
+
+### Fixed
+- Restored PCS firmware-version entities on payload variants that return stringified JSON and camelCase version keys.
+- Retried version discovery more quickly when the first BLE version lookup returns no usable data.
+
+### Notes
+- manifest.json version bumped to 0.13.2.
+
 ## v0.13.1 - 2026-04-18
 
 ### Fixed

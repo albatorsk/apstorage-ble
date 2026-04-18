@@ -32,6 +32,7 @@ SOC_CLIENT = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = SOC_CLIENT
 SPEC.loader.exec_module(SOC_CLIENT)
 _extract_metrics = SOC_CLIENT._extract_metrics
+_extract_version_info = SOC_CLIENT._extract_version_info
 
 
 class _FakeNotifyClient:
@@ -103,6 +104,26 @@ class AlarmParsingTests(unittest.TestCase):
         self.assertEqual(metrics.battery_alarm, "Clear")
         self.assertEqual(metrics.pcs_alarm, "Clear")
         self.assertEqual(metrics.alarm_summary, "Clear")
+
+
+class VersionParsingTests(unittest.TestCase):
+    def test_extracts_versions_from_stringified_payload_and_camelcase_keys(self) -> None:
+        parsed = {
+            "data": json.dumps(
+                {
+                    "currentVersion": "EZ1_1.2.3_20260418",
+                    "latestVersion": "EZ1_1.2.4_20260420",
+                    "softwareVersion": "EZ1_1.2.3_20260418",
+                    "hardwareVersion": "HW-ELT12",
+                }
+            )
+        }
+
+        info = _extract_version_info(parsed)
+
+        self.assertEqual(info.get("pcs_firmware_version"), "EZ1_1.2.3_20260418")
+        self.assertEqual(info.get("pcs_latest_firmware_version"), "EZ1_1.2.4_20260420")
+        self.assertEqual(info.get("pcs_hardware_version"), "HW-ELT12")
 
 
 class NotifySessionRegressionTests(unittest.IsolatedAsyncioTestCase):
