@@ -25,6 +25,98 @@ retry_module.BleakClientWithServiceCache = object
 retry_module.establish_connection = lambda *args, **kwargs: None
 sys.modules.setdefault("bleak_retry_connector", retry_module)
 
+ha_module = types.ModuleType("homeassistant")
+sys.modules.setdefault("homeassistant", ha_module)
+
+ha_components_module = types.ModuleType("homeassistant.components")
+sys.modules.setdefault("homeassistant.components", ha_components_module)
+
+ha_bluetooth_module = types.ModuleType("homeassistant.components.bluetooth")
+
+class _DummyBluetoothScanningMode:
+    ACTIVE = "active"
+
+
+class _DummyBluetoothChange:
+    pass
+
+
+class _DummyBluetoothServiceInfoBleak:
+    def __init__(self, address: str = "AA:BB:CC:DD:EE:FF", connectable: bool = True) -> None:
+        self.connectable = connectable
+        self.device = types.SimpleNamespace(address=address)
+        self.rssi = -60
+
+
+ha_bluetooth_module.BluetoothScanningMode = _DummyBluetoothScanningMode
+ha_bluetooth_module.BluetoothChange = _DummyBluetoothChange
+ha_bluetooth_module.BluetoothServiceInfoBleak = _DummyBluetoothServiceInfoBleak
+ha_bluetooth_module.async_ble_device_from_address = lambda hass, address, connectable=True: object()
+sys.modules.setdefault("homeassistant.components.bluetooth", ha_bluetooth_module)
+
+ha_bluetooth_active_module = types.ModuleType("homeassistant.components.bluetooth.active_update_coordinator")
+
+class _DummyActiveBluetoothDataUpdateCoordinator:
+    def __init__(self, *args, **kwargs) -> None:
+        self.hass = kwargs.get("hass")
+        self.available = True
+        self._last_service_info = None
+
+    @classmethod
+    def __class_getitem__(cls, _item):
+        return cls
+
+    async def async_start(self) -> None:
+        return None
+
+    def async_update_listeners(self) -> None:
+        return None
+
+    def _async_handle_bluetooth_event(self, service_info, change) -> None:
+        return None
+
+    def _async_handle_unavailable(self, service_info) -> None:
+        return None
+
+
+ha_bluetooth_active_module.ActiveBluetoothDataUpdateCoordinator = _DummyActiveBluetoothDataUpdateCoordinator
+sys.modules.setdefault(
+    "homeassistant.components.bluetooth.active_update_coordinator",
+    ha_bluetooth_active_module,
+)
+
+ha_core_module = types.ModuleType("homeassistant.core")
+
+class _DummyCoreState:
+    running = "running"
+
+
+ha_core_module.CoreState = _DummyCoreState
+ha_core_module.HomeAssistant = object
+ha_core_module.callback = lambda func: func
+sys.modules.setdefault("homeassistant.core", ha_core_module)
+
+custom_components_module = types.ModuleType("custom_components")
+custom_components_module.__path__ = []
+sys.modules.setdefault("custom_components", custom_components_module)
+
+apstorage_pkg = types.ModuleType("custom_components.apstorage_ble")
+apstorage_pkg.__path__ = [str(Path(__file__).resolve().parents[1] / "custom_components" / "apstorage_ble")]
+sys.modules.setdefault("custom_components.apstorage_ble", apstorage_pkg)
+
+const_module = types.ModuleType("custom_components.apstorage_ble.const")
+const_module.DOMAIN = "apstorage_ble"
+sys.modules.setdefault("custom_components.apstorage_ble.const", const_module)
+
+models_module = types.ModuleType("custom_components.apstorage_ble.models")
+
+class _DummyPCSData:
+    pass
+
+
+models_module.PCSData = _DummyPCSData
+sys.modules.setdefault("custom_components.apstorage_ble.models", models_module)
+
 MODULE_PATH = Path(__file__).resolve().parents[1] / "custom_components" / "apstorage_ble" / "soc_client.py"
 SPEC = importlib.util.spec_from_file_location("apstorage_soc_client", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
@@ -33,6 +125,14 @@ sys.modules[SPEC.name] = SOC_CLIENT
 SPEC.loader.exec_module(SOC_CLIENT)
 _extract_metrics = SOC_CLIENT._extract_metrics
 _extract_version_info = SOC_CLIENT._extract_version_info
+
+COORDINATOR_PATH = Path(__file__).resolve().parents[1] / "custom_components" / "apstorage_ble" / "coordinator.py"
+COORDINATOR_SPEC = importlib.util.spec_from_file_location("custom_components.apstorage_ble.coordinator", COORDINATOR_PATH)
+assert COORDINATOR_SPEC is not None and COORDINATOR_SPEC.loader is not None
+COORDINATOR = importlib.util.module_from_spec(COORDINATOR_SPEC)
+sys.modules[COORDINATOR_SPEC.name] = COORDINATOR
+COORDINATOR_SPEC.loader.exec_module(COORDINATOR)
+APstorageCoordinator = COORDINATOR.APstorageCoordinator
 
 
 class _FakeNotifyClient:
@@ -124,6 +224,32 @@ class VersionParsingTests(unittest.TestCase):
         self.assertEqual(info.get("pcs_firmware_version"), "EZ1_1.2.3_20260418")
         self.assertEqual(info.get("pcs_latest_firmware_version"), "EZ1_1.2.4_20260420")
         self.assertEqual(info.get("pcs_hardware_version"), "HW-ELT12")
+
+
+class CoordinatorShutdownTests(unittest.IsolatedAsyncioTestCase):
+    async def test_periodic_poll_is_ignored_after_shutdown(self) -> None:
+        coordinator = object.__new__(APstorageCoordinator)
+        coordinator._shutdown = True
+
+        calls: list[str] = []
+
+        async def _fake_poll() -> None:
+            calls.append("poll")
+
+        coordinator._async_poll = _fake_poll
+
+        await coordinator.async_periodic_poll()
+
+        self.assertEqual(calls, [])
+
+    def test_needs_poll_returns_false_after_shutdown(self) -> None:
+        coordinator = object.__new__(APstorageCoordinator)
+        coordinator._shutdown = True
+        coordinator.hass = types.SimpleNamespace(state=COORDINATOR.CoreState.running)
+
+        result = coordinator._needs_poll(COORDINATOR.BluetoothServiceInfoBleak(), None)
+
+        self.assertFalse(result)
 
 
 class NotifySessionRegressionTests(unittest.IsolatedAsyncioTestCase):

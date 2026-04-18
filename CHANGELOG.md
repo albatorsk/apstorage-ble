@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.13.3 - 2026-04-18
+
+### Fixed
+- Stopped new BLE polls from being scheduled after the APstorage config entry is disabled or unloaded.
+- Added a shutdown guard so stale advertisement or timer callbacks no longer trigger proxy connections.
+
+### Notes
+- manifest.json version bumped to 0.13.3.
+
 ## v0.13.2 - 2026-04-18
 
 ### Fixed
