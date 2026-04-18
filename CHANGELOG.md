@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.13.1 - 2026-04-18
+
+### Fixed
+- Restored BLE polling reliability on setups where the PCS stopped replying after the Blufi handshake.
+- Kept the notification subscription active through the secure request flow and aligned packet pacing with the known-good probe timing.
+
+### Notes
+- manifest.json version bumped to 0.13.1.
+
 ## v0.13.0 - 2026-04-16
 
 ### Added
