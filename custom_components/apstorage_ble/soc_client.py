@@ -53,6 +53,7 @@ CONNECT_TIMEOUT_SECONDS = 90
 RESPONSE_TIMEOUT_SECONDS = 30
 NOTIFY_SETTLE_DELAY_SECONDS = 0.10
 PACKET_WRITE_DELAY_SECONDS = 0.05
+VERSION_DISCOVERY_RETRY_SECONDS = 30
 
 try:
     from Crypto.Cipher import AES
@@ -290,37 +291,56 @@ def _extract_version_info(parsed: Any) -> dict[str, str]:
         return {}
 
     roots: list[dict[str, Any]] = []
-    for key in ("messagedata", "data"):
-        candidate = parsed.get(key)
+    queue: list[Any] = [parsed]
+    seen: set[int] = set()
+
+    while queue:
+        candidate = _parse_jsonish(queue.pop(0))
+        candidate_id = id(candidate)
+        if candidate_id in seen:
+            continue
+        seen.add(candidate_id)
+
         if isinstance(candidate, dict):
             roots.append(candidate)
+            for key in ("messagedata", "messageData", "data", "result", "message"):
+                if key in candidate:
+                    queue.append(candidate.get(key))
         elif isinstance(candidate, list):
-            roots.extend(item for item in candidate if isinstance(item, dict))
-
-    roots.append(parsed)
+            queue.extend(candidate)
 
     info: dict[str, str] = {}
     for root in roots:
         current = (
             _to_text(root.get("current_version"))
+            or _to_text(root.get("currentVersion"))
+            or _to_text(root.get("firmwareVersion"))
+            or _to_text(root.get("fw_version"))
             or _to_text(root.get("CV"))
-            or _to_text(_deep_find_key(root, {"current_version", "currentversion"}))
+            or _to_text(_deep_find_key(root, {"current_version", "currentversion", "currentversionno", "firmwareversion", "fw_version", "fwversion", "cv"}))
         )
         latest = (
             _to_text(root.get("latest_version"))
+            or _to_text(root.get("latestVersion"))
+            or _to_text(root.get("firmwareLatestVersion"))
             or _to_text(root.get("LV"))
-            or _to_text(_deep_find_key(root, {"latest_version", "latestversion"}))
+            or _to_text(_deep_find_key(root, {"latest_version", "latestversion", "firmwarelatestversion", "lv"}))
         )
         software = (
             _to_text(root.get("sw_version"))
+            or _to_text(root.get("swVersion"))
+            or _to_text(root.get("softwareVersion"))
             or _to_text(root.get("storageSoftwareVersion"))
             or _to_text(root.get("softVersion"))
             or _to_text(root.get("VS"))
-            or _to_text(_deep_find_key(root, {"sw_version", "swversion", "storagesoftwareversion", "softversion", "vs"}))
+            or _to_text(_deep_find_key(root, {"sw_version", "swversion", "softwareversion", "storagesoftwareversion", "softversion", "vs"}))
         )
         hardware = (
             _to_text(root.get("hw_version"))
-            or _to_text(_deep_find_key(root, {"hw_version", "hwversion"}))
+            or _to_text(root.get("hwVersion"))
+            or _to_text(root.get("hardwareVersion"))
+            or _to_text(root.get("hardVersion"))
+            or _to_text(_deep_find_key(root, {"hw_version", "hwversion", "hardwareversion", "hardversion"}))
         )
 
         if software is None and current is not None:
@@ -2885,11 +2905,16 @@ class APstorageSocClient:
                 last_attempt = self._version_query_last_attempt.get(storage_id, 0.0)
                 now = asyncio.get_running_loop().time()
 
-                if version_info is None and (now - last_attempt) >= 300:
+                if version_info is None and (now - last_attempt) >= VERSION_DISCOVERY_RETRY_SECONDS:
                     self._version_query_last_attempt[storage_id] = now
                     version_info = await self._query_version_info(client, storage_id, system_id="")
                     if version_info:
                         self._version_cache[storage_id] = version_info
+                    else:
+                        _LOGGER.debug(
+                            "No version info returned for storage_id=%s; will retry soon",
+                            storage_id,
+                        )
 
                 if version_info:
                     for field_name, field_value in version_info.items():
