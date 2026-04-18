@@ -48,9 +48,11 @@ DEVICE_NAME_CHAR = "00002a00-0000-1000-8000-00805f9b34fb"
 # Keep this aligned with the known-good standalone script defaults.
 BLUFI_MTU = 20
 
-# Timeouts
+# Timeouts and BLE pacing tuned to the known-good standalone probe flow.
 CONNECT_TIMEOUT_SECONDS = 90
 RESPONSE_TIMEOUT_SECONDS = 30
+NOTIFY_SETTLE_DELAY_SECONDS = 0.10
+PACKET_WRITE_DELAY_SECONDS = 0.05
 
 try:
     from Crypto.Cipher import AES
@@ -2990,31 +2992,30 @@ class APstorageSocClient:
         self.parsed_frames = []
         self._frame_cursor = 0
         await client.start_notify(NOTIFY_CHAR, self._on_notify)
+        await asyncio.sleep(NOTIFY_SETTLE_DELAY_SECONDS)
 
-        try:
-            for pkt in packets_0 + packets_1:
-                await client.write_gatt_char(WRITE_CHAR, pkt, response=True)
-                await asyncio.sleep(0.01)
+        for pkt in packets_0 + packets_1:
+            await client.write_gatt_char(WRITE_CHAR, pkt, response=True)
+            await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
 
-            # Wait for device public key response
-            frame = await self._wait_frame(1, 0, RESPONSE_TIMEOUT_SECONDS)
-            dev_pub = int(frame.payload.hex(), 16)
-            shared = pow(dev_pub, priv, p)
-            shared_hex = format(shared, "x")
-            if len(shared_hex) % 2:
-                shared_hex = "0" + shared_hex
+        # Wait for device public key response
+        frame = await self._wait_frame(1, 0, RESPONSE_TIMEOUT_SECONDS)
+        dev_pub = int(frame.payload.hex(), 16)
+        shared = pow(dev_pub, priv, p)
+        shared_hex = format(shared, "x")
+        if len(shared_hex) % 2:
+            shared_hex = "0" + shared_hex
 
-            self.session_key = hashlib.md5(bytes.fromhex(shared_hex)).digest()
+        self.session_key = hashlib.md5(bytes.fromhex(shared_hex)).digest()
 
-            # Set security mode (checksum + encrypt)
-            cmd_sec = _make_cmd(0, 1)
-            sec_packets = self._codec.build_packets(cmd_sec, bytes([0x03]), encrypt=False, checksum=True, aes_key=self.session_key)
-            for pkt in sec_packets:
-                await client.write_gatt_char(WRITE_CHAR, pkt, response=True)
-                await asyncio.sleep(0.01)
-
-        finally:
-            await client.stop_notify(NOTIFY_CHAR)
+        # Keep notifications active for the remainder of the secured session.
+        # Some PCS/BlueZ combinations miss the first encrypted reply if the
+        # subscription is torn down and recreated between DH and the request.
+        cmd_sec = _make_cmd(0, 1)
+        sec_packets = self._codec.build_packets(cmd_sec, bytes([0x03]), encrypt=False, checksum=True, aes_key=self.session_key)
+        for pkt in sec_packets:
+            await client.write_gatt_char(WRITE_CHAR, pkt, response=True)
+            await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
 
     async def _send_soc_request(
         self,
@@ -3052,40 +3053,35 @@ class APstorageSocClient:
 
         self.parsed_frames = []
         self._frame_cursor = 0
-        await client.start_notify(NOTIFY_CHAR, self._on_notify_impl)
 
+        for pkt in packets:
+            await client.write_gatt_char(WRITE_CHAR, pkt, response=True)
+            await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
+
+        # Wait for custom data response on the existing notification session.
+        frame = await self._wait_frame(1, 19, RESPONSE_TIMEOUT_SECONDS)
+        decrypted = _ema_decrypt_payload(frame.payload)
         try:
-            for pkt in packets:
-                await client.write_gatt_char(WRITE_CHAR, pkt, response=True)
-                await asyncio.sleep(0.01)
-
-            # Wait for custom data response
-            frame = await self._wait_frame(1, 19, RESPONSE_TIMEOUT_SECONDS)
-            decrypted = _ema_decrypt_payload(frame.payload)
-            try:
-                parsed = json.loads(decrypted)
-            except json.JSONDecodeError:
-                _LOGGER.debug("SoC response was not valid JSON for storage_id=%s", storage_id)
-                return None
-
-            if isinstance(parsed, dict):
-                _LOGGER.debug(
-                    "Local-data response keys for storage_id=%s: %s",
-                    storage_id,
-                    list(parsed.keys()),
-                )
-                # Log the nested 'data' structure if present
-                data_root = parsed.get("data")
-                if isinstance(data_root, dict):
-                    _LOGGER.debug("Response 'data' field: %s", data_root)
-                elif isinstance(data_root, list):
-                    _LOGGER.debug("Response 'data' field (list): %s", data_root)
-                return parsed
-            _LOGGER.debug("Local-data response was non-dict for storage_id=%s", storage_id)
+            parsed = json.loads(decrypted)
+        except json.JSONDecodeError:
+            _LOGGER.debug("SoC response was not valid JSON for storage_id=%s", storage_id)
             return None
 
-        finally:
-            await client.stop_notify(NOTIFY_CHAR)
+        if isinstance(parsed, dict):
+            _LOGGER.debug(
+                "Local-data response keys for storage_id=%s: %s",
+                storage_id,
+                list(parsed.keys()),
+            )
+            # Log the nested 'data' structure if present
+            data_root = parsed.get("data")
+            if isinstance(data_root, dict):
+                _LOGGER.debug("Response 'data' field: %s", data_root)
+            elif isinstance(data_root, list):
+                _LOGGER.debug("Response 'data' field (list): %s", data_root)
+            return parsed
+        _LOGGER.debug("Local-data response was non-dict for storage_id=%s", storage_id)
+        return None
 
     async def _query_version_info(
         self,
@@ -3188,23 +3184,19 @@ class APstorageSocClient:
 
         self.parsed_frames = []
         self._frame_cursor = 0
-        await client.start_notify(NOTIFY_CHAR, self._on_notify_impl)
 
+        for pkt in packets:
+            await client.write_gatt_char(WRITE_CHAR, pkt, response=True)
+            await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
+
+        frame = await self._wait_frame(1, 19, RESPONSE_TIMEOUT_SECONDS)
+        decrypted = _ema_decrypt_payload(frame.payload)
         try:
-            for pkt in packets:
-                await client.write_gatt_char(WRITE_CHAR, pkt, response=True)
-                await asyncio.sleep(0.01)
-
-            frame = await self._wait_frame(1, 19, RESPONSE_TIMEOUT_SECONDS)
-            decrypted = _ema_decrypt_payload(frame.payload)
-            try:
-                parsed = json.loads(decrypted)
-            except json.JSONDecodeError:
-                _LOGGER.debug("Response for identifier=%s was not valid JSON", identifier)
-                return None
-            return parsed if isinstance(parsed, dict) else None
-        finally:
-            await client.stop_notify(NOTIFY_CHAR)
+            parsed = json.loads(decrypted)
+        except json.JSONDecodeError:
+            _LOGGER.debug("Response for identifier=%s was not valid JSON", identifier)
+            return None
+        return parsed if isinstance(parsed, dict) else None
 
     def _on_notify(self, _sender: Any, data: bytearray) -> None:
         """Notification callback used during DH/security setup."""
@@ -3234,4 +3226,11 @@ class APstorageSocClient:
 
             await asyncio.sleep(0.05)
 
-        raise TimeoutError(f"No frame type={frame_type} subtype={subtype} received")
+        observed = [
+            f"{frame.frame_type}/{frame.subtype}"
+            for frame in self.parsed_frames[max(0, self._frame_cursor - 5):]
+        ]
+        raise TimeoutError(
+            f"No frame type={frame_type} subtype={subtype} received"
+            f"; observed={observed or ['none']}"
+        )
