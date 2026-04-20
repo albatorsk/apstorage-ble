@@ -227,33 +227,38 @@ class VersionParsingTests(unittest.TestCase):
 
 
 class VersionRefreshTests(unittest.TestCase):
-    def test_refreshes_cached_version_info_once_per_hour(self) -> None:
+    def test_does_not_requery_when_version_info_is_already_complete(self) -> None:
         self.assertFalse(
             SOC_CLIENT._should_refresh_version_info(
-                {"pcs_latest_firmware_version": "EZ1_1.2.4_20260420"},
-                now=3599,
-                last_attempt=0,
-            )
-        )
-        self.assertTrue(
-            SOC_CLIENT._should_refresh_version_info(
-                {"pcs_latest_firmware_version": "EZ1_1.2.4_20260420"},
+                {
+                    "pcs_firmware_version": "EZ1_1.2.3_20260418",
+                    "pcs_latest_firmware_version": "EZ1_1.2.4_20260420",
+                },
                 now=3600,
                 last_attempt=0,
             )
         )
 
-    def test_retries_soon_when_latest_version_is_still_missing(self) -> None:
+    def test_does_not_keep_retrying_when_some_version_metadata_is_known(self) -> None:
         self.assertFalse(
             SOC_CLIENT._should_refresh_version_info(
                 {"pcs_firmware_version": "EZ1_1.2.3_20260418"},
+                now=30,
+                last_attempt=0,
+            )
+        )
+
+    def test_retries_soon_only_when_no_version_metadata_was_found(self) -> None:
+        self.assertFalse(
+            SOC_CLIENT._should_refresh_version_info(
+                None,
                 now=29,
                 last_attempt=0,
             )
         )
         self.assertTrue(
             SOC_CLIENT._should_refresh_version_info(
-                {"pcs_firmware_version": "EZ1_1.2.3_20260418"},
+                None,
                 now=30,
                 last_attempt=0,
             )
