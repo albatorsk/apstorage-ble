@@ -293,16 +293,30 @@ def _should_refresh_version_info(
     now: float,
     last_attempt: float,
 ) -> bool:
-    """Return True when cached version metadata should be queried again."""
+    """Return True only while version discovery has produced no useful data.
+
+    Firmware metadata is effectively static during a Home Assistant runtime.
+    Once any current/software/latest/hardware value has been captured, avoid
+    repeated diagnostic lookups that can destabilize long-running BLE sessions.
+    """
     elapsed = now - last_attempt
 
     if version_info is None:
         return elapsed >= VERSION_DISCOVERY_RETRY_SECONDS
 
-    if _to_text(version_info.get("pcs_latest_firmware_version")) is None:
+    has_any_version_metadata = any(
+        _to_text(version_info.get(field_name)) is not None
+        for field_name in (
+            "pcs_firmware_version",
+            "pcs_latest_firmware_version",
+            "pcs_software_version",
+            "pcs_hardware_version",
+        )
+    )
+    if not has_any_version_metadata:
         return elapsed >= VERSION_DISCOVERY_RETRY_SECONDS
 
-    return elapsed >= VERSION_REFRESH_INTERVAL_SECONDS
+    return False
 
 
 def _version_info_is_complete_enough(info: dict[str, str] | None) -> bool:

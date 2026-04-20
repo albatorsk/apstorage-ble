@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.13.5 - 2026-04-20
+
+### Fixed
+- Stopped aggressive repeated PCS firmware-version retries once any useful version metadata has been captured, reducing long-running BLE stalls.
+
+### Notes
+- manifest.json version bumped to 0.13.5.
+
 ## v0.13.4 - 2026-04-18
 
 ### Fixed
