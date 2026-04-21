@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.14.0 - 2026-04-21
+
+### Fixed
+- Restored the APstorage BLE client class structure and recovered the class-level query methods after a malformed section in `soc_client.py`.
+- Restored service-discovery readiness checks before BLE characteristic access to avoid intermittent connection-time attribute errors.
+- Improved long-run BLE reliability by adding a short post-security settle delay before encrypted local-data requests.
+- Added a one-time retry for local-data frame `type=1/subtype=19` timeouts to recover from transient missed replies without requiring restart.
+
+### Notes
+- `manifest.json` version bumped to `0.14.0`.
+
 ## v0.13.5 - 2026-04-20
 
 ### Fixed

@@ -53,6 +53,7 @@ CONNECT_TIMEOUT_SECONDS = 90
 RESPONSE_TIMEOUT_SECONDS = 30
 NOTIFY_SETTLE_DELAY_SECONDS = 0.10
 PACKET_WRITE_DELAY_SECONDS = 0.05
+POST_SECURITY_SETTLE_DELAY_SECONDS = 0.10
 VERSION_DISCOVERY_RETRY_SECONDS = 30
 VERSION_REFRESH_INTERVAL_SECONDS = 60 * 60
 DIAGNOSTIC_QUERY_TIMEOUT_SECONDS = 8
@@ -1848,100 +1849,102 @@ class APstorageSocClient:
         self._alarm_cache: dict[str, dict[str, str]] = {}
         self._alarm_query_last_attempt: dict[str, float] = {}
 
-    async def _ensure_services_ready(self, client: BleakClient) -> None:
-        """Ensure GATT service discovery has completed before I/O.
-
-        Some backend/proxy combinations connect successfully but defer
-        discovery until explicitly requested, which causes first read/write
-        calls to fail with "Service Discovery has not been performed yet".
-        """
-        try:
-            _ = client.services
-            return
-        except Exception:  # noqa: BLE001
-            pass
-
-        backend = getattr(client, "_backend", None)
-        get_services = getattr(backend, "_get_services", None)
-        if callable(get_services):
-            params = inspect.signature(get_services).parameters
-            kwargs: dict[str, object] = {}
-            if "dangerous_use_bleak_cache" in params:
-                kwargs["dangerous_use_bleak_cache"] = False
-            await get_services(**kwargs)
-
-        # Re-check and raise the backend error if services are still unavailable.
-        _ = client.services
-
     async def async_query_metrics(
         self,
         ble_device: BLEDevice,
         *,
         device_name_hint: str | None = None,
+        max_retries: int = 4,
+        initial_backoff: float = 1.0,
+        max_backoff: float = 10.0,
     ) -> SocMetrics | None:
-        """Connect to device and return extracted metrics or None on failure."""
+        """Connect to device and return extracted metrics or None on failure. Retries with exponential backoff."""
         if not HAS_CRYPTO:
             _LOGGER.error("pycryptodome required; install with: pip install pycryptodome")
             return None
 
-        client: BleakClient | None = None
-        try:
-            _LOGGER.debug("Connecting to BLE device %s (hint: %s)", ble_device.address, device_name_hint)
-            async with asyncio.timeout(CONNECT_TIMEOUT_SECONDS):
-                client = await establish_connection(
-                    BleakClientWithServiceCache,
-                    ble_device,
+        last_exception = None
+        for attempt in range(1, max_retries + 1):
+            client: BleakClient | None = None
+            try:
+                _LOGGER.debug(
+                    "[BLE] Attempt %d/%d: Connecting to %s (hint: %s)",
+                    attempt,
+                    max_retries,
                     ble_device.address,
-                    max_attempts=3,
-                    use_services_cache=True,
+                    device_name_hint,
                 )
-
-                # Ensure service discovery is available before first GATT call.
-                try:
-                    await self._ensure_services_ready(client)
-                except Exception as err:  # noqa: BLE001
-                    _LOGGER.debug(
-                        "Initial service discovery failed for %s (%s); retrying without cache",
-                        ble_device.address,
-                        err,
-                    )
-                    try:
-                        await client.disconnect()
-                    except Exception:  # noqa: BLE001
-                        pass
-
+                async with asyncio.timeout(CONNECT_TIMEOUT_SECONDS):
                     client = await establish_connection(
                         BleakClientWithServiceCache,
                         ble_device,
                         ble_device.address,
                         max_attempts=3,
-                        use_services_cache=False,
+                        use_services_cache=True,
                     )
-                    await self._ensure_services_ready(client)
 
-                _LOGGER.debug("Connected to %s, querying metrics", ble_device.address)
-                result = await self._query_soc_once(
-                    client,
-                    ble_device,
-                    device_name_hint=device_name_hint,
+                    # Ensure service discovery is available before first GATT call.
+                    try:
+                        await self._ensure_services_ready(client)
+                    except Exception as err:  # noqa: BLE001
+                        _LOGGER.debug(
+                            "Initial service discovery failed for %s (%s); retrying without cache",
+                            ble_device.address,
+                            err,
+                        )
+                        try:
+                            await client.disconnect()
+                        except Exception:  # noqa: BLE001
+                            pass
+
+                        client = await establish_connection(
+                            BleakClientWithServiceCache,
+                            ble_device,
+                            ble_device.address,
+                            max_attempts=3,
+                            use_services_cache=False,
+                        )
+                        await self._ensure_services_ready(client)
+
+                    _LOGGER.debug("Connected to %s, querying metrics", ble_device.address)
+                    result = await self._query_soc_once(
+                        client,
+                        ble_device,
+                        device_name_hint=device_name_hint,
+                    )
+                    _LOGGER.debug(
+                        "Query complete for %s: metrics=%s",
+                        ble_device.address,
+                        result is not None,
+                    )
+                    return result
+            except (asyncio.TimeoutError, BleakError, Exception) as err:
+                last_exception = err
+                _LOGGER.warning(
+                    "[BLE] Attempt %d/%d failed for %s: %s",
+                    attempt,
+                    max_retries,
+                    ble_device.address,
+                    err,
                 )
-                _LOGGER.debug("Query complete for %s: metrics=%s", ble_device.address, result is not None)
-                return result
-        except asyncio.TimeoutError:
-            _LOGGER.warning("Connection timeout for %s after %ds", ble_device.address, CONNECT_TIMEOUT_SECONDS)
-            return None
-        except BleakError as err:
-            _LOGGER.warning("BLE error for %s: %s", ble_device.address, err)
-            return None
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.error("Unexpected error querying %s: %s", ble_device.address, err, exc_info=True)
-            return None
-        finally:
-            if client and client.is_connected:
-                try:
-                    await client.disconnect()
-                except Exception:  # noqa: BLE001
-                    pass
+                if attempt < max_retries:
+                    backoff = min(initial_backoff * (2 ** (attempt - 1)), max_backoff)
+                    _LOGGER.debug("[BLE] Backing off for %.1fs before retrying", backoff)
+                    await asyncio.sleep(backoff)
+            finally:
+                if client and client.is_connected:
+                    try:
+                        await client.disconnect()
+                    except Exception:  # noqa: BLE001
+                        pass
+
+        _LOGGER.error(
+            "[BLE] All %d attempts failed for %s. Last error: %s",
+            max_retries,
+            ble_device.address,
+            last_exception,
+        )
+        return None
 
     async def async_query_soc(
         self,
@@ -1957,6 +1960,28 @@ class APstorageSocClient:
         if metrics is None or metrics.battery_soc is None:
             return None
         return int(metrics.battery_soc)
+
+    async def _ensure_services_ready(self, client: BleakClient) -> None:
+        """Ensure GATT services are discovered before first characteristic access."""
+        for attempt in range(3):
+            services = getattr(client, "services", None)
+            if services:
+                return
+
+            try:
+                await client.get_services()
+            except Exception:  # noqa: BLE001
+                if attempt >= 2:
+                    raise
+                await asyncio.sleep(0.2 * (attempt + 1))
+                continue
+
+            if getattr(client, "services", None):
+                return
+
+            await asyncio.sleep(0.1)
+
+        raise RuntimeError("BLE services not available after discovery")
 
     async def _async_patch_sysmode_payload(
         self,
@@ -3099,6 +3124,7 @@ class APstorageSocClient:
         for pkt in sec_packets:
             await client.write_gatt_char(WRITE_CHAR, pkt, response=True)
             await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
+        await asyncio.sleep(POST_SECURITY_SETTLE_DELAY_SECONDS)
 
     async def _send_soc_request(
         self,
@@ -3134,15 +3160,31 @@ class APstorageSocClient:
         cmd_custom = _make_cmd(1, 19)
         packets = self._codec.build_packets(cmd_custom, payload, encrypt=True, checksum=True, aes_key=self.session_key)
 
-        self.parsed_frames = []
-        self._frame_cursor = 0
+        frame: BlufiFrame | None = None
+        for attempt in range(1, 3):
+            self.parsed_frames = []
+            self._frame_cursor = 0
 
-        for pkt in packets:
-            await client.write_gatt_char(WRITE_CHAR, pkt, response=True)
-            await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
+            for pkt in packets:
+                await client.write_gatt_char(WRITE_CHAR, pkt, response=True)
+                await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
 
-        # Wait for custom data response on the existing notification session.
-        frame = await self._wait_frame(1, 19, RESPONSE_TIMEOUT_SECONDS)
+            # Wait for custom data response on the existing notification session.
+            try:
+                frame = await self._wait_frame(1, 19, RESPONSE_TIMEOUT_SECONDS)
+                break
+            except TimeoutError:
+                if attempt >= 2:
+                    raise
+                _LOGGER.warning(
+                    "Timed out waiting for local-data response for storage_id=%s; retrying request once",
+                    storage_id,
+                )
+                await asyncio.sleep(NOTIFY_SETTLE_DELAY_SECONDS)
+
+        if frame is None:
+            return None
+
         decrypted = _ema_decrypt_payload(frame.payload)
         try:
             parsed = json.loads(decrypted)
