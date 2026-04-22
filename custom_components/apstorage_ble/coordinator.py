@@ -70,6 +70,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._last_selling_first_write: dict[str, Any] | None = None
         self._last_valley_charge_write: dict[str, Any] | None = None
         self._last_peak_power_write: dict[str, Any] | None = None
+        self._consecutive_poll_failures = 0
         self._shutdown = False
         # Most-recent successfully parsed data; also exposed as coordinator.data
         self.data: PCSData | None = None
@@ -209,8 +210,25 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 device_name_hint=self._name,
             )
             if metrics is None:
+                self._consecutive_poll_failures += 1
                 _LOGGER.info("[%s] SoC query returned no metrics", self._name)
+                if self._consecutive_poll_failures >= 3:
+                    _LOGGER.warning(
+                        "[%s] Poll failed %d times in a row; rebuilding BLE client state",
+                        self._name,
+                        self._consecutive_poll_failures,
+                    )
+                    self._soc_client = APstorageSocClient()
+                    self._last_service_info = None
+                    self._consecutive_poll_failures = 0
             else:
+                if self._consecutive_poll_failures:
+                    _LOGGER.debug(
+                        "[%s] Poll recovered after %d consecutive failures",
+                        self._name,
+                        self._consecutive_poll_failures,
+                    )
+                self._consecutive_poll_failures = 0
                 _LOGGER.debug(
                     "[%s] Received metrics: soc=%s, state=%s, flow=%s",
                     self._name,

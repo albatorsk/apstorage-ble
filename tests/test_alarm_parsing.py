@@ -173,6 +173,16 @@ class _FakeNotifyClient:
             self._callback(None, bytearray(packet))
 
 
+class _FakeConnectedClient:
+    def __init__(self) -> None:
+        self.is_connected = True
+        self.disconnect_calls = 0
+
+    async def disconnect(self) -> None:
+        self.disconnect_calls += 1
+        self.is_connected = False
+
+
 class AlarmParsingTests(unittest.TestCase):
     def test_extracts_active_battery_and_pcs_alarm_summaries(self) -> None:
         parsed = {
@@ -368,6 +378,45 @@ class NotifySessionRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(parsed.get("code"), 200)
         self.assertEqual(parsed.get("data", {}).get("ssoc"), "77")
         self.assertEqual(fake_ble.start_notify_calls, 1)
+
+
+class SessionResetRegressionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_async_query_metrics_clears_blufi_session_state_after_success(self) -> None:
+        client = SOC_CLIENT.APstorageSocClient()
+        fake_ble_client = _FakeConnectedClient()
+
+        async def _fake_establish_connection(*args, **kwargs):
+            return fake_ble_client
+
+        async def _fake_ensure_services_ready(_client) -> None:
+            return None
+
+        async def _fake_query_soc_once(_client, _ble_device, *, device_name_hint=None):
+            client.session_key = b"0123456789abcdef"
+            client.parsed_frames = [SOC_CLIENT.BlufiFrame(1, 19, 0, 1, b"payload")]
+            client._frame_cursor = 1
+            return SOC_CLIENT.SocMetrics(battery_soc=77.0)
+
+        original_establish_connection = SOC_CLIENT.establish_connection
+        original_has_crypto = SOC_CLIENT.HAS_CRYPTO
+        client._ensure_services_ready = _fake_ensure_services_ready
+        client._query_soc_once = _fake_query_soc_once
+        ble_device = types.SimpleNamespace(address="AA:BB:CC:DD:EE:FF")
+
+        try:
+            SOC_CLIENT.HAS_CRYPTO = True
+            SOC_CLIENT.establish_connection = _fake_establish_connection
+            metrics = await client.async_query_metrics(ble_device, max_retries=1)
+        finally:
+            SOC_CLIENT.establish_connection = original_establish_connection
+            SOC_CLIENT.HAS_CRYPTO = original_has_crypto
+
+        self.assertIsNotNone(metrics)
+        self.assertEqual(metrics.battery_soc, 77.0)
+        self.assertIsNone(client.session_key)
+        self.assertEqual(client.parsed_frames, [])
+        self.assertEqual(client._frame_cursor, 0)
+        self.assertEqual(fake_ble_client.disconnect_calls, 1)
 
 
 if __name__ == "__main__":
