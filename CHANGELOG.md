@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.16.1 - 2026-04-22
+
+### Fixed
+- Added `point` field list to `getDeviceLastDataLocal` BLE request so the device returns per-module `SI0`–`SI5` current fields (and other fields it may otherwise omit).
+- Fixed `SI#` extraction to handle both array and scalar response values.
+- Expanded `point` list to include all primary field keys used by existing sensors (`GF`, `GV`, `P2`, `P3`, `BV`, `BUZ`, etc.) so existing sensors are not affected if the device filters on `point`.
+
+### Notes
+- `manifest.json` version bumped to `0.16.1`.
+
 ## v0.16.0 - 2026-04-22
 
 ### Added
