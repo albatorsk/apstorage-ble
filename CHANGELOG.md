@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.16.2 - 2026-04-22
+
+### Removed
+- Removed `Battery Current` sensor — DC battery current (`SI0`–`SI5`) is not available over the local BLE path.
+- Removed `point` field filter from `getDeviceLastDataLocal` request (device ignores it locally).
+
+### Notes
+- `manifest.json` version bumped to `0.16.2`.
+
 ## v0.16.1 - 2026-04-22
 
 ### Fixed
