@@ -898,22 +898,6 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
             metrics.battery_current = bi
             break
 
-    # Local BLE storage payloads expose per-module current as SI0–SI5.
-    # Values may arrive as arrays (historical readings) or plain scalars.
-    # Sum across populated modules to get aggregate DC battery current.
-    if metrics.battery_current is None:
-        for root in roots:
-            total: float | None = None
-            for key in ("si0", "si1", "si2", "si3", "si4", "si5"):
-                si_raw = _deep_find_key(root, {key})
-                si_val = _last_nonzero_from_array(si_raw) if isinstance(si_raw, list) else si_raw
-                si = _to_battery_current(si_val)
-                if si is not None:
-                    total = (total or 0.0) + si
-            if total is not None:
-                metrics.battery_current = total
-                break
-
     # Search for battery power (APstorage field: P0 appears to be battery power)
     for root in roots:
         bp_raw = _deep_find_key(
@@ -3185,30 +3169,6 @@ class APstorageSocClient:
                 "EID": storage_id,
                 "systemId": system_id,
                 "storageId": storage_id,
-                "point": [
-                    # Top-level state fields
-                    "MOD", "STA", "BS", "BUZ",
-                    # Battery voltage / current / power
-                    "BV", "BI", "BP",
-                    # Indexed power fields used for grid/battery/PV/load power
-                    "P0", "P1", "P2", "P3", "P4", "P5",
-                    # Grid voltage / current / frequency
-                    "GV", "GC", "GF", "GP",
-                    # PV voltage / current
-                    "PVV", "PVI",
-                    # Load voltage / current / power
-                    "LV", "LI", "LP",
-                    # Totals and daily energy
-                    "T2", "T3", "CO2",
-                    # Per-module fields (slots 0–5): Power, Current, Voltage,
-                    # SOC, Charged energy, Temperature, Discharged energy
-                    "SP0", "SI0", "SV0", "SSOC0", "CE0", "RT0", "DE0",
-                    "SP1", "SI1", "SV1", "SSOC1", "CE1", "RT1", "DE1",
-                    "SP2", "SI2", "SV2", "SSOC2", "CE2", "RT2", "DE2",
-                    "SP3", "SI3", "SV3", "SSOC3", "CE3", "RT3", "DE3",
-                    "SP4", "SI4", "SV4", "SSOC4", "CE4", "RT4", "DE4",
-                    "SP5", "SI5", "SV5", "SSOC5", "CE5", "RT5", "DE5",
-                ],
             },
         }
 
