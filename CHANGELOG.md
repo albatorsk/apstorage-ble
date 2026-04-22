@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.14.1 - 2026-04-22
+
+### Fixed
+- Cleared transient Blufi session state between BLE polls so a bad encrypted session no longer survives until Home Assistant restart.
+- Rebuilt the APstorage BLE client after repeated no-metrics polls to recover from stalled protocol state without restarting Home Assistant.
+
+### Notes
+- `manifest.json` version bumped to `0.14.1`.
+
 ## v0.14.0 - 2026-04-21
 
 ### Fixed
