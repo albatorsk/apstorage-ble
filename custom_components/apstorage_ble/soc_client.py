@@ -898,6 +898,20 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
             metrics.battery_current = bi
             break
 
+    # Local BLE storage payloads expose per-module current as SI0–SI5 arrays.
+    # Sum across populated modules to get aggregate DC battery current.
+    if metrics.battery_current is None:
+        for root in roots:
+            total: float | None = None
+            for key in ("si0", "si1", "si2", "si3", "si4", "si5"):
+                si_raw = _deep_find_key(root, {key})
+                si = _to_battery_current(_last_nonzero_from_array(si_raw))
+                if si is not None:
+                    total = (total or 0.0) + si
+            if total is not None:
+                metrics.battery_current = total
+                break
+
     # Search for battery power (APstorage field: P0 appears to be battery power)
     for root in roots:
         bp_raw = _deep_find_key(
