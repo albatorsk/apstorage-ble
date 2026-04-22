@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.14.2 - 2026-04-22
+
+### Changed
+- "Valley Charge" and "Selling First" switches are now unavailable (greyed out) when Peak-Valley mode is not active.
+
+### Notes
+- `manifest.json` version bumped to `0.14.2`.
+
 ## v0.14.1 - 2026-04-22
 
 ### Fixed

@@ -144,6 +144,11 @@ class APstorageSellingFirstSwitch(APstorageBaseSwitch):
     """Writable selling-first switch (setsysmode.sellingFirst)."""
 
     @property
+    def available(self) -> bool:
+        """Only available when Peak-Valley mode is active."""
+        return super().available and self._current_mode_code() == "0"
+
+    @property
     def is_on(self) -> bool | None:
         """Return current selling-first state."""
         data = self.coordinator.data
@@ -189,6 +194,11 @@ class APstorageSellingFirstSwitch(APstorageBaseSwitch):
 
 class APstorageValleyChargeSwitch(APstorageBaseSwitch):
     """Writable valley-charge switch (setsysmode.valleycharge)."""
+
+    @property
+    def available(self) -> bool:
+        """Only available when Peak-Valley mode is active."""
+        return super().available and self._current_mode_code() == "0"
 
     @property
     def is_on(self) -> bool | None:
