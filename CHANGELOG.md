@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.15.0 - 2026-04-22
+
+### Fixed
+- Restored `PCS Hardware Version` so it no longer remains `Unknown` when firmware metadata is partially available.
+- Continued version discovery retries until firmware current/latest and hardware version metadata are all populated.
+- Added support for the `HV` hardware-version alias observed in app payloads.
+
+### Notes
+- `manifest.json` version bumped to `0.15.0`.
+
 ## v0.14.2 - 2026-04-22
 
 ### Changed

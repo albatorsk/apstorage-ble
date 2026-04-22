@@ -305,29 +305,28 @@ def _should_refresh_version_info(
     if version_info is None:
         return elapsed >= VERSION_DISCOVERY_RETRY_SECONDS
 
-    has_any_version_metadata = any(
-        _to_text(version_info.get(field_name)) is not None
-        for field_name in (
-            "pcs_firmware_version",
-            "pcs_latest_firmware_version",
-            "pcs_software_version",
-            "pcs_hardware_version",
-        )
-    )
-    if not has_any_version_metadata:
-        return elapsed >= VERSION_DISCOVERY_RETRY_SECONDS
+    if _version_info_is_complete_enough(version_info):
+        return False
 
-    return False
+    # Keep retrying while metadata is incomplete so hardware/software fields
+    # can still be discovered from secondary endpoints.
+    return elapsed >= VERSION_DISCOVERY_RETRY_SECONDS
 
 
 def _version_info_is_complete_enough(info: dict[str, str] | None) -> bool:
-    """Return True when the essential firmware metadata has been captured."""
+    """Return True when key firmware metadata has been captured.
+
+    Current and latest versions are usually returned by `pcsVersion`, while
+    hardware version may come from initialization/configuration endpoints.
+    Keep discovery active until hardware has also been found.
+    """
     if not info:
         return False
 
     current = _to_text(info.get("pcs_firmware_version")) or _to_text(info.get("pcs_software_version"))
     latest = _to_text(info.get("pcs_latest_firmware_version"))
-    return current is not None and latest is not None
+    hardware = _to_text(info.get("pcs_hardware_version"))
+    return current is not None and latest is not None and hardware is not None
 
 
 def _extract_version_info(parsed: Any) -> dict[str, str]:
@@ -381,11 +380,12 @@ def _extract_version_info(parsed: Any) -> dict[str, str]:
             or _to_text(_deep_find_key(root, {"sw_version", "swversion", "softwareversion", "storagesoftwareversion", "softversion", "vs"}))
         )
         hardware = (
-            _to_text(root.get("hw_version"))
+            _to_text(root.get("HV"))
+            or _to_text(root.get("hw_version"))
             or _to_text(root.get("hwVersion"))
             or _to_text(root.get("hardwareVersion"))
             or _to_text(root.get("hardVersion"))
-            or _to_text(_deep_find_key(root, {"hw_version", "hwversion", "hardwareversion", "hardversion"}))
+            or _to_text(_deep_find_key(root, {"hv", "hw_version", "hwversion", "hardwareversion", "hardversion"}))
         )
 
         if software is None and current is not None:
