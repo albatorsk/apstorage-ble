@@ -235,6 +235,24 @@ class VersionParsingTests(unittest.TestCase):
         self.assertEqual(info.get("pcs_latest_firmware_version"), "EZ1_1.2.4_20260420")
         self.assertEqual(info.get("pcs_hardware_version"), "HW-ELT12")
 
+    def test_extracts_hardware_version_from_hv_alias(self) -> None:
+        parsed = {
+            "data": {
+                "replyData": [
+                    {
+                        "CV": "EZ1_1.2.3_20260418",
+                        "LV": "EZ1_1.2.4_20260420",
+                        "VS": "EZ1_1.2.3_20260418",
+                        "HV": "HW-ELT12",
+                    }
+                ]
+            }
+        }
+
+        info = _extract_version_info(parsed)
+
+        self.assertEqual(info.get("pcs_hardware_version"), "HW-ELT12")
+
 
 class VersionRefreshTests(unittest.TestCase):
     def test_does_not_requery_when_version_info_is_already_complete(self) -> None:
@@ -243,14 +261,15 @@ class VersionRefreshTests(unittest.TestCase):
                 {
                     "pcs_firmware_version": "EZ1_1.2.3_20260418",
                     "pcs_latest_firmware_version": "EZ1_1.2.4_20260420",
+                    "pcs_hardware_version": "HW-ELT12",
                 },
                 now=3600,
                 last_attempt=0,
             )
         )
 
-    def test_does_not_keep_retrying_when_some_version_metadata_is_known(self) -> None:
-        self.assertFalse(
+    def test_keeps_retrying_when_hardware_version_is_missing(self) -> None:
+        self.assertTrue(
             SOC_CLIENT._should_refresh_version_info(
                 {"pcs_firmware_version": "EZ1_1.2.3_20260418"},
                 now=30,
@@ -277,7 +296,7 @@ class VersionRefreshTests(unittest.TestCase):
 
 
 class VersionQueryEfficiencyTests(unittest.IsolatedAsyncioTestCase):
-    async def test_version_query_stops_after_first_useful_response(self) -> None:
+    async def test_version_query_continues_until_hardware_is_discovered(self) -> None:
         client = SOC_CLIENT.APstorageSocClient()
         calls: list[str] = []
 
@@ -309,8 +328,9 @@ class VersionQueryEfficiencyTests(unittest.IsolatedAsyncioTestCase):
 
         info = await client._query_version_info(object(), "B05000001878")
 
-        self.assertEqual(calls, ["pcsVersion"])
+        self.assertEqual(calls, ["pcsVersion", "get/initializationInfo"])
         self.assertEqual(info.get("pcs_latest_firmware_version"), "EZ1_1.2.4_20260420")
+        self.assertEqual(info.get("pcs_hardware_version"), "HW-ELT12")
 
 
 class CoordinatorShutdownTests(unittest.IsolatedAsyncioTestCase):
