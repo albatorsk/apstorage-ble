@@ -1849,6 +1849,13 @@ class APstorageSocClient:
         self._alarm_cache: dict[str, dict[str, str]] = {}
         self._alarm_query_last_attempt: dict[str, float] = {}
 
+    def _reset_blufi_session_state(self) -> None:
+        """Drop protocol state that must not leak across BLE sessions."""
+        self.session_key = None
+        self._codec = BlufiCodec(mtu=BLUFI_MTU)
+        self.parsed_frames = []
+        self._frame_cursor = 0
+
     async def async_query_metrics(
         self,
         ble_device: BLEDevice,
@@ -1867,12 +1874,15 @@ class APstorageSocClient:
         for attempt in range(1, max_retries + 1):
             client: BleakClient | None = None
             try:
+                self._reset_blufi_session_state()
+                use_services_cache = attempt == 1
                 _LOGGER.debug(
-                    "[BLE] Attempt %d/%d: Connecting to %s (hint: %s)",
+                    "[BLE] Attempt %d/%d: Connecting to %s (hint: %s, services_cache=%s)",
                     attempt,
                     max_retries,
                     ble_device.address,
                     device_name_hint,
+                    use_services_cache,
                 )
                 async with asyncio.timeout(CONNECT_TIMEOUT_SECONDS):
                     client = await establish_connection(
@@ -1880,7 +1890,7 @@ class APstorageSocClient:
                         ble_device,
                         ble_device.address,
                         max_attempts=3,
-                        use_services_cache=True,
+                        use_services_cache=use_services_cache,
                     )
 
                     # Ensure service discovery is available before first GATT call.
@@ -1917,7 +1927,16 @@ class APstorageSocClient:
                         ble_device.address,
                         result is not None,
                     )
-                    return result
+                    if result is not None:
+                        return result
+
+                    last_exception = RuntimeError("SoC query returned no metrics")
+                    _LOGGER.warning(
+                        "[BLE] Attempt %d/%d returned no metrics for %s",
+                        attempt,
+                        max_retries,
+                        ble_device.address,
+                    )
             except (asyncio.TimeoutError, BleakError, Exception) as err:
                 last_exception = err
                 _LOGGER.warning(
@@ -1937,6 +1956,7 @@ class APstorageSocClient:
                         await client.disconnect()
                     except Exception:  # noqa: BLE001
                         pass
+                self._reset_blufi_session_state()
 
         _LOGGER.error(
             "[BLE] All %d attempts failed for %s. Last error: %s",
@@ -3064,7 +3084,7 @@ class APstorageSocClient:
 
     async def _establish_blufi_session(self, client: BleakClient) -> None:
         """Perform Blufi DH and security setup."""
-        self._codec = BlufiCodec(mtu=BLUFI_MTU)
+        self._reset_blufi_session_state()
 
         # Generate DH keypair
         p = int(BLUFI_DH_P_HEX, 16)
@@ -3097,8 +3117,6 @@ class APstorageSocClient:
         packets_0 = self._codec.build_packets(cmd_nego, nego_payload_0, encrypt=False, checksum=False)
         packets_1 = self._codec.build_packets(cmd_nego, nego_payload_1, encrypt=False, checksum=False)
 
-        self.parsed_frames = []
-        self._frame_cursor = 0
         await client.start_notify(NOTIFY_CHAR, self._on_notify)
         await asyncio.sleep(NOTIFY_SETTLE_DELAY_SECONDS)
 
