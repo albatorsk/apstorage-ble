@@ -81,6 +81,15 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         value_fn=lambda d: d.battery_soc,
     ),
     APstorageSensorDescription(
+        key="battery_current",
+        name="Battery Current",
+        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
+        device_class=SensorDeviceClass.CURRENT,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=2,
+        value_fn=lambda d: d.battery_current,
+    ),
+    APstorageSensorDescription(
         key="battery_discharging_power",
         name="Battery Discharging Power",
         native_unit_of_measurement=UnitOfPower.WATT,

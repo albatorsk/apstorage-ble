@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.16.0 - 2026-04-22
+
+### Added
+- Added `Battery Current` sensor reporting aggregate DC battery current (A) summed across all active battery modules.
+- Added extraction of per-module `SI0`–`SI5` current fields from `getDeviceLastDataLocal` BLE responses.
+
+### Notes
+- `manifest.json` version bumped to `0.16.0`.
+
 ## v0.15.0 - 2026-04-22
 
 ### Fixed
