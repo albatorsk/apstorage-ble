@@ -2,8 +2,30 @@
 
 DOMAIN = "apstorage_ble"
 
-MANUFACTURER = "APstorage"
-MODEL = "ELT-12"
+MANUFACTURER = "APsystems"
+
+
+def get_model(address: str) -> str:
+    """Return the model name based on the device address.
+    
+    Args:
+        address: Bluetooth MAC address (format: AA:BB:CC:DD:EE:FF or AABBCCDDEEFF)
+    
+    Returns:
+        Model name string based on the device ID prefix.
+    """
+    # Extract the device prefix from the MAC address (first two bytes after colon removal)
+    mac_clean = address.replace(":", "").upper()
+    
+    if mac_clean.startswith("215"):
+        return "APstorage ELS-5K"
+    elif mac_clean.startswith("B040"):
+        return "APstorage ELS-11.4"
+    elif mac_clean.startswith("B050"):
+        return "APstorage ELT-12"
+    else:
+        # Default to ELT-12 for unknown devices
+        return "APstorage ELT-12"
 
 # ---------------------------------------------------------------------------
 # GATT UUIDs — UPDATE THESE FOR YOUR DEVICE
