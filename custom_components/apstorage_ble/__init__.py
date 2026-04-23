@@ -21,7 +21,7 @@ from .const import (
     CONF_POLL_INTERVAL_SECONDS,
     DOMAIN,
     MANUFACTURER,
-    MODEL,
+    get_model,
     POLL_INTERVAL_MAX_SECONDS,
     POLL_INTERVAL_MIN_SECONDS,
     POLL_INTERVAL_SECONDS,
@@ -390,7 +390,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         identifiers={(DOMAIN, address)},
         connections={(dr.CONNECTION_BLUETOOTH, address)},
         manufacturer=MANUFACTURER,
-        model=MODEL,
+        model=get_model(address),
         name=name,
     )
 

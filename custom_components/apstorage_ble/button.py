@@ -12,7 +12,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, MANUFACTURER, MODEL
+from .const import DOMAIN, MANUFACTURER, get_model
 from .coordinator import APstorageCoordinator
 
 
@@ -68,7 +68,7 @@ class APstorageClearBuzzerButton(
             connections={(dr.CONNECTION_BLUETOOTH, address)},
             name=entry.title,
             manufacturer=MANUFACTURER,
-            model=MODEL,
+            model=get_model(address),
         )
 
     @property
@@ -117,7 +117,7 @@ class APstoragePcsRebootButton(
             connections={(dr.CONNECTION_BLUETOOTH, address)},
             name=entry.title,
             manufacturer=MANUFACTURER,
-            model=MODEL,
+            model=get_model(address),
         )
 
     @property

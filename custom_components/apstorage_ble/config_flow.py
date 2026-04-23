@@ -2,12 +2,12 @@
 
 Supports three setup paths:
   1. Automatic discovery — HA's Bluetooth integration sees a BLE advertisement
-     matching the ``bluetooth`` matchers in manifest.json (local_name "PCS_B050*")
-     and calls ``async_step_bluetooth``.
+     matching the ``bluetooth`` matchers in manifest.json (local_name patterns
+     "PCS_B050*", "PCS_B040*", "PCS_215*") and calls ``async_step_bluetooth``.
   2. Scan — User opens the integration manually; the flow checks the Bluetooth
      cache first, then runs an active scan for up to SCAN_TIMEOUT seconds
-     looking for a device whose name starts with "PCS_B050".  Found devices
-     are shown in a picker.
+     looking for a device whose name starts with PCS_B050, PCS_B040, or PCS_215.
+     Found devices are shown in a picker.
   3. Manual entry — If no device is found after scanning, the user is asked to
      type the Bluetooth MAC address directly.
 """
@@ -34,7 +34,7 @@ from .const import (
     CONF_POLL_INTERVAL_SECONDS,
     DOMAIN,
     MANUFACTURER,
-    MODEL,
+    get_model,
     POLL_INTERVAL_MAX_SECONDS,
     POLL_INTERVAL_MIN_SECONDS,
     POLL_INTERVAL_SECONDS,
@@ -49,9 +49,15 @@ SCAN_TIMEOUT = 10
 
 
 def _is_apstorage_device(service_info: BluetoothServiceInfoBleak) -> bool:
-    """Return True if the advertisement looks like an APstorage ELT-12 PCS."""
+    """Return True if the advertisement looks like an APstorage storage device.
+    
+    Matches device names starting with:
+    - PCS_B050* (ELT-12)
+    - PCS_B040* (ELS-11.4)
+    - PCS_215* (ELS-5K)
+    """
     name = service_info.name or ""
-    return name.startswith("PCS_B050")
+    return name.startswith(("PCS_B050", "PCS_B040", "PCS_215"))
 
 
 class APstorageConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -147,19 +153,19 @@ class APstorageConfigFlow(ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             # User clicked Submit on the scan prompt — run an active scan.
-            _LOGGER.debug("Starting active BLE scan for PCS_B050* devices")
+            _LOGGER.debug("Starting active BLE scan for APstorage devices (PCS_B050/B040/215)")
             try:
                 found = await async_process_advertisements(
                     self.hass,
                     _is_apstorage_device,
-                    {"local_name_pattern": "PCS_B050*"},
+                    {"local_name_pattern": "PCS_*"},
                     BluetoothScanningMode.ACTIVE,
                     SCAN_TIMEOUT,
                 )
                 if found.address.upper() not in already_configured:
                     self._discovered_devices[found.address.upper()] = found
             except asyncio.TimeoutError:
-                _LOGGER.debug("BLE scan timed out — no ELT-12 found")
+                _LOGGER.debug("BLE scan timed out — no APstorage devices found")
 
             if self._discovered_devices:
                 return await self.async_step_pick_device()
@@ -212,7 +218,7 @@ class APstorageConfigFlow(ConfigFlow, domain=DOMAIN):
                 await self.async_set_unique_id(address)
                 self._abort_if_unique_id_configured()
                 return self.async_create_entry(
-                    title=f"{MANUFACTURER} {MODEL} {address}",
+                    title=f"{MANUFACTURER} {get_model(address)} {address}",
                     data={CONF_ADDRESS: address},
                 )
 
