@@ -1,6 +1,22 @@
 # Changelog
 
-## v0.16.2 - 2026-04-22
+## v0.17.0 - 2026-04-23
+
+### Added
+- Added support for APstorage ELS-5K (device ID prefix `215`).
+- Added support for APstorage ELS-11.4 (device ID prefix `B040`).
+- Device model is now dynamically detected based on Bluetooth MAC address prefix.
+
+### Changed
+- Manufacturer field now shows "APsystems" (previously "APstorage").
+- Updated Bluetooth autodiscovery to support all three device models:
+  - `PCS_B050*` for ELT-12
+  - `PCS_B040*` for ELS-11.4
+  - `PCS_215*` for ELS-5K
+
+### Notes
+- `manifest.json` version bumped to `0.17.0`.
+- Bluetooth matchers now include patterns for all supported models.
 
 ### Removed
 - Removed `Battery Current` sensor — DC battery current (`SI0`–`SI5`) is not available over the local BLE path.
