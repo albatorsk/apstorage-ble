@@ -2,6 +2,10 @@
 
 A Home Assistant custom integration for the **APstorage ELT-12 PCS** communicating over **Bluetooth Low Energy (BLE)**.
 
+Compatibility note:
+- Fully tested on **ELT-12**.
+- **ELS-11.4** and **ELS-5K** may also work (autodiscovery and model mapping are implemented), but they have **not been tested** yet.
+
 Designed to work with an **ESPHome Bluetooth proxy** placed near the PCS.
 
 ---
