@@ -1,6 +1,6 @@
 # APstorage BLE — Home Assistant Custom Integration
 
-A Home Assistant custom integration for the **APstorage ELT-12 PCS** communicating over **Bluetooth Low Energy (BLE)**.
+A Home Assistant custom integration for the **APsystems APstorage ELT-12 PCS** communicating over **Bluetooth Low Energy (BLE)**.
 
 Compatibility note:
 - Fully tested on **ELT-12**.
