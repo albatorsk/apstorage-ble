@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.17.3 - 2026-04-25
+
+### Changed
+- Increased BLE connection retry attempts from 4 to 8 to improve recovery on unreliable links.
+
+### Notes
+- `manifest.json` version bumped to `0.17.3`.
+
 ## v0.17.2 - 2026-04-25
 
 ### Fixed

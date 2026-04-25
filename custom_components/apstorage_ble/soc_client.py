@@ -1877,7 +1877,7 @@ class APstorageSocClient:
         ble_device: BLEDevice,
         *,
         device_name_hint: str | None = None,
-        max_retries: int = 4,
+        max_retries: int = 8,
         initial_backoff: float = 1.0,
         max_backoff: float = 10.0,
     ) -> SocMetrics | None:
