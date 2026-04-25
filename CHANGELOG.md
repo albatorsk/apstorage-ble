@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.17.2 - 2026-04-25
+
+### Fixed
+- Reverted BLE response/diagnostic timeout reductions from v0.17.1 that caused all entities to become Unknown; the device genuinely requires the full original timeout window to respond.
+- Retained the bounded disconnect helper so a hanging BLE disconnect still cannot block coordinator polling indefinitely.
+
+### Notes
+- `manifest.json` version bumped to `0.17.2`.
+
 ## v0.17.1 - 2026-04-25
 
 ### Fixed

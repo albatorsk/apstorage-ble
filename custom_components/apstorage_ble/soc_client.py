@@ -49,15 +49,15 @@ DEVICE_NAME_CHAR = "00002a00-0000-1000-8000-00805f9b34fb"
 BLUFI_MTU = 20
 
 # Timeouts and BLE pacing tuned to the known-good standalone probe flow.
-CONNECT_TIMEOUT_SECONDS = 45
-RESPONSE_TIMEOUT_SECONDS = 15
+CONNECT_TIMEOUT_SECONDS = 90
+RESPONSE_TIMEOUT_SECONDS = 30
 DISCONNECT_TIMEOUT_SECONDS = 5
 NOTIFY_SETTLE_DELAY_SECONDS = 0.10
 PACKET_WRITE_DELAY_SECONDS = 0.05
 POST_SECURITY_SETTLE_DELAY_SECONDS = 0.10
 VERSION_DISCOVERY_RETRY_SECONDS = 30
 VERSION_REFRESH_INTERVAL_SECONDS = 60 * 60
-DIAGNOSTIC_QUERY_TIMEOUT_SECONDS = 5
+DIAGNOSTIC_QUERY_TIMEOUT_SECONDS = 8
 
 try:
     from Crypto.Cipher import AES
@@ -1877,9 +1877,9 @@ class APstorageSocClient:
         ble_device: BLEDevice,
         *,
         device_name_hint: str | None = None,
-        max_retries: int = 2,
-        initial_backoff: float = 0.5,
-        max_backoff: float = 3.0,
+        max_retries: int = 4,
+        initial_backoff: float = 1.0,
+        max_backoff: float = 10.0,
     ) -> SocMetrics | None:
         """Connect to device and return extracted metrics or None on failure. Retries with exponential backoff."""
         if not HAS_CRYPTO:
