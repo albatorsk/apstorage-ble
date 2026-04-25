@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.17.1 - 2026-04-25
+
+### Fixed
+- Reduced BLE polling stall time by lowering connection and response timeout budgets and reducing retry backoff.
+- Added bounded disconnect handling so a hanging BLE disconnect cannot block coordinator polling for extended periods.
+
+### Notes
+- `manifest.json` version bumped to `0.17.1`.
+
 ## v0.17.0 - 2026-04-23
 
 ### Added
