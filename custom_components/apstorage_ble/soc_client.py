@@ -49,14 +49,15 @@ DEVICE_NAME_CHAR = "00002a00-0000-1000-8000-00805f9b34fb"
 BLUFI_MTU = 20
 
 # Timeouts and BLE pacing tuned to the known-good standalone probe flow.
-CONNECT_TIMEOUT_SECONDS = 90
-RESPONSE_TIMEOUT_SECONDS = 30
+CONNECT_TIMEOUT_SECONDS = 45
+RESPONSE_TIMEOUT_SECONDS = 15
+DISCONNECT_TIMEOUT_SECONDS = 5
 NOTIFY_SETTLE_DELAY_SECONDS = 0.10
 PACKET_WRITE_DELAY_SECONDS = 0.05
 POST_SECURITY_SETTLE_DELAY_SECONDS = 0.10
 VERSION_DISCOVERY_RETRY_SECONDS = 30
 VERSION_REFRESH_INTERVAL_SECONDS = 60 * 60
-DIAGNOSTIC_QUERY_TIMEOUT_SECONDS = 8
+DIAGNOSTIC_QUERY_TIMEOUT_SECONDS = 5
 
 try:
     from Crypto.Cipher import AES
@@ -286,6 +287,21 @@ def _to_text(value: Any) -> str | None:
         return None
 
     return text
+
+
+async def _safe_disconnect(client: BleakClient) -> None:
+    """Disconnect a BLE client with a bounded timeout.
+
+    Some BlueZ/proxy stacks can hang during disconnect, which would otherwise
+    block the poll lock and make the integration appear stuck until restart.
+    """
+    try:
+        async with asyncio.timeout(DISCONNECT_TIMEOUT_SECONDS):
+            await client.disconnect()
+    except TimeoutError:
+        _LOGGER.warning("BLE disconnect timed out after %.1fs", DISCONNECT_TIMEOUT_SECONDS)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _should_refresh_version_info(
@@ -1861,9 +1877,9 @@ class APstorageSocClient:
         ble_device: BLEDevice,
         *,
         device_name_hint: str | None = None,
-        max_retries: int = 4,
-        initial_backoff: float = 1.0,
-        max_backoff: float = 10.0,
+        max_retries: int = 2,
+        initial_backoff: float = 0.5,
+        max_backoff: float = 3.0,
     ) -> SocMetrics | None:
         """Connect to device and return extracted metrics or None on failure. Retries with exponential backoff."""
         if not HAS_CRYPTO:
@@ -1903,7 +1919,7 @@ class APstorageSocClient:
                             err,
                         )
                         try:
-                            await client.disconnect()
+                            await _safe_disconnect(client)
                         except Exception:  # noqa: BLE001
                             pass
 
@@ -1953,7 +1969,7 @@ class APstorageSocClient:
             finally:
                 if client and client.is_connected:
                     try:
-                        await client.disconnect()
+                        await _safe_disconnect(client)
                     except Exception:  # noqa: BLE001
                         pass
                 self._reset_blufi_session_state()
@@ -2129,7 +2145,7 @@ class APstorageSocClient:
         finally:
             if client and client.is_connected:
                 try:
-                    await client.disconnect()
+                    await _safe_disconnect(client)
                 except Exception:  # noqa: BLE001
                     pass
 
@@ -2232,7 +2248,7 @@ class APstorageSocClient:
         finally:
             if client and client.is_connected:
                 try:
-                    await client.disconnect()
+                    await _safe_disconnect(client)
                 except Exception:  # noqa: BLE001
                     pass
 
@@ -2363,7 +2379,7 @@ class APstorageSocClient:
         finally:
             if client and client.is_connected:
                 try:
-                    await client.disconnect()
+                    await _safe_disconnect(client)
                 except Exception:  # noqa: BLE001
                     pass
 
@@ -2503,7 +2519,7 @@ class APstorageSocClient:
         finally:
             if client and client.is_connected:
                 try:
-                    await client.disconnect()
+                    await _safe_disconnect(client)
                 except Exception:  # noqa: BLE001
                     pass
 
@@ -2784,7 +2800,7 @@ class APstorageSocClient:
         finally:
             if client and client.is_connected:
                 try:
-                    await client.disconnect()
+                    await _safe_disconnect(client)
                 except Exception:  # noqa: BLE001
                     pass
 
@@ -2897,7 +2913,7 @@ class APstorageSocClient:
         finally:
             if client and client.is_connected:
                 try:
-                    await client.disconnect()
+                    await _safe_disconnect(client)
                 except Exception:  # noqa: BLE001
                     pass
 
