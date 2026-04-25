@@ -26,6 +26,11 @@ from .soc_client import APstorageSocClient
 
 _LOGGER = logging.getLogger(__name__)
 
+# Hard wall-clock cap for a single poll while holding the coordinator lock.
+# This prevents a wedged BLE operation from blocking all future polls until
+# Home Assistant is restarted.
+POLL_WATCHDOG_TIMEOUT_SECONDS = 300
+
 
 class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None]):
     """Coordinator that polls the APstorage ELT-12 via BLE on advertisement."""
@@ -205,10 +210,23 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             self.data = PCSData(**vars(previous)) if previous is not None else PCSData()
             _LOGGER.debug("[%s] Starting metrics poll for %s", self._name, ble_device.address)
 
-            metrics = await self._soc_client.async_query_metrics(
-                ble_device,
-                device_name_hint=self._name,
-            )
+            try:
+                async with asyncio.timeout(POLL_WATCHDOG_TIMEOUT_SECONDS):
+                    metrics = await self._soc_client.async_query_metrics(
+                        ble_device,
+                        device_name_hint=self._name,
+                    )
+            except TimeoutError:
+                _LOGGER.warning(
+                    "[%s] Poll watchdog timed out after %ss; rebuilding BLE client state",
+                    self._name,
+                    POLL_WATCHDOG_TIMEOUT_SECONDS,
+                )
+                self._soc_client = APstorageSocClient()
+                self._last_service_info = None
+                self._consecutive_poll_failures = 0
+                return
+
             if metrics is None:
                 self._consecutive_poll_failures += 1
                 _LOGGER.info("[%s] SoC query returned no metrics", self._name)

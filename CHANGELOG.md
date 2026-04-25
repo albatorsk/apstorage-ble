@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.17.4 - 2026-04-25
+
+### Fixed
+- Added a coordinator poll watchdog (300s) that aborts an overlong poll and rebuilds BLE client state automatically.
+- Prevented indefinitely stuck poll tasks from blocking all future updates until Home Assistant restart.
+
+### Notes
+- `manifest.json` version bumped to `0.17.4`.
+
 ## v0.17.3 - 2026-04-25
 
 ### Changed
