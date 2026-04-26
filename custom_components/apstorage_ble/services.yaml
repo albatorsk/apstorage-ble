@@ -136,9 +136,9 @@ set_buzzer_mode:
         select:
           options:
             - label: "0 - Silent"
-              value: 0
+              value: "0"
             - label: "1 - Normal"
-              value: 1
+              value: "1"
     entry_id:
       name: Config Entry ID
       description: Optional target entry id. Required if multiple APstorage entries are loaded and address is not provided.
