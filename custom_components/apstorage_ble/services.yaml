@@ -11,19 +11,19 @@ set_system_mode:
         select:
           options:
             - label: "0 - Peak Valley"
-              value: 0
+              value: "0"
             - label: "1 - Self-Consumption"
-              value: 1
+              value: "1"
             - label: "2 - Manual Control"
-              value: 2
+              value: "2"
             - label: "3 - Advanced"
-              value: 3
+              value: "3"
             - label: "4 - Backup power supply"
-              value: 4
+              value: "4"
             - label: "5 - Peak-Shaving"
-              value: 5
+              value: "5"
             - label: "6 - Intelligent"
-              value: 6
+              value: "6"
     entry_id:
       name: Config Entry ID
       description: Optional target entry id. Required if multiple APstorage entries are loaded and address is not provided.
