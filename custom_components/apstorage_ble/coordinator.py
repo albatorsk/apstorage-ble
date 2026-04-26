@@ -28,8 +28,9 @@ _LOGGER = logging.getLogger(__name__)
 
 # Hard wall-clock cap for a single poll while holding the coordinator lock.
 # This prevents a wedged BLE operation from blocking all future polls until
-# Home Assistant is restarted.
-POLL_WATCHDOG_TIMEOUT_SECONDS = 60
+# Home Assistant is restarted.  Must be longer than the natural failure path
+# (2 × RESPONSE_TIMEOUT_SECONDS + connection overhead ≈ 75 s).
+POLL_WATCHDOG_TIMEOUT_SECONDS = 120
 
 
 class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None]):
@@ -173,6 +174,14 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         """Connect to the device via GATT and update coordinator data."""
         if self._shutdown:
             _LOGGER.debug("[%s] Poll skipped because coordinator is shutting down", self._name)
+            return
+
+        # Skip this poll if another poll is already running.  Multiple
+        # advertisement callbacks can fire in quick succession; without this
+        # guard they all queue behind _poll_lock and run sequentially, blocking
+        # Home Assistant's bootstrap phase for several minutes.
+        if self._poll_lock.locked():
+            _LOGGER.debug("[%s] Poll skipped — another poll is already in progress", self._name)
             return
 
         async with self._poll_lock:
