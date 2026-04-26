@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.17.7 - 2026-04-26
+
+### Fixed
+- Fixed startup hang: `_async_poll` now skips immediately if another poll is already in progress, preventing multiple advertisement-triggered polls from queuing behind the BLE lock and blocking Home Assistant bootstrap for several minutes.
+- Raised poll watchdog timeout from 60 s to 120 s so it no longer fires before the natural BLE failure path (2×30 s frame wait + connection overhead ≈75 s) completes, which was causing an infinite kill-restart cycle with no data ever arriving.
+- Fixed `services.yaml` selector value types for `set_buzzer_mode` (strings instead of integers).
+
+### Notes
+- `manifest.json` version bumped to `0.17.7`.
+
 ## v0.17.6 - 2026-04-26
 
 ### Fixed
