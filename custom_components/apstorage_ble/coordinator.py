@@ -29,7 +29,7 @@ _LOGGER = logging.getLogger(__name__)
 # Hard wall-clock cap for a single poll while holding the coordinator lock.
 # This prevents a wedged BLE operation from blocking all future polls until
 # Home Assistant is restarted.
-POLL_WATCHDOG_TIMEOUT_SECONDS = 300
+POLL_WATCHDOG_TIMEOUT_SECONDS = 60
 
 
 class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None]):
