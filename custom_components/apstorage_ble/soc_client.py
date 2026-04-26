@@ -2268,6 +2268,26 @@ class APstorageSocClient:
             _LOGGER.error("Invalid system mode: %s", mode)
             return {"ok": False, "code": None, "message": f"invalid mode {mode}"}
 
+        async def _verify_system_mode(storage_id: str, expected_mode: int) -> bool:
+            """Read back system mode after an ambiguous write result."""
+            verify_resp = await self._send_property_request(
+                client,
+                method="get",
+                identifier="getsysmode",
+                storage_id=storage_id,
+                params_extra={},
+                system_id="",
+            )
+            if not isinstance(verify_resp, dict):
+                return False
+
+            verify_data = _extract_sysmode_payload(verify_resp.get("data"))
+            if verify_data is None:
+                return False
+
+            actual_mode = _normalize_mode_code(verify_data.get("mode"))
+            return actual_mode == str(expected_mode)
+
         client: BleakClient | None = None
         try:
             async with asyncio.timeout(CONNECT_TIMEOUT_SECONDS):
@@ -2342,14 +2362,29 @@ class APstorageSocClient:
                     payload.setdefault("peakPower", "5000")
                     payload.setdefault("sellingFirst", "0")
 
-                    set_resp = await self._send_property_request(
-                        client,
-                        method="set",
-                        identifier="setsysmode",
-                        storage_id=storage_id,
-                        params_extra=payload,
-                        system_id="",
-                    )
+                    try:
+                        set_resp = await self._send_property_request(
+                            client,
+                            method="set",
+                            identifier="setsysmode",
+                            storage_id=storage_id,
+                            params_extra=payload,
+                            system_id="",
+                        )
+                    except asyncio.TimeoutError:
+                        if await _verify_system_mode(storage_id, mode):
+                            self._preferred_storage_id = storage_id
+                            _LOGGER.debug(
+                                "System mode write for %s timed out waiting for ACK, but read-back confirmed mode=%s",
+                                storage_id,
+                                mode,
+                            )
+                            return {
+                                "ok": True,
+                                "code": "timeout_verified",
+                                "message": "write acknowledgement timed out, but read-back confirmed mode change",
+                            }
+                        raise
 
                     if isinstance(set_resp, dict):
                         code = set_resp.get("code")
@@ -2357,6 +2392,20 @@ class APstorageSocClient:
                         if _response_is_success(set_resp):
                             self._preferred_storage_id = storage_id
                             return {"ok": True, "code": code, "message": message}
+
+                        if await _verify_system_mode(storage_id, mode):
+                            self._preferred_storage_id = storage_id
+                            _LOGGER.debug(
+                                "System mode write for %s returned non-success code=%s, but read-back confirmed mode=%s",
+                                storage_id,
+                                code,
+                                mode,
+                            )
+                            return {
+                                "ok": True,
+                                "code": code or "verified",
+                                "message": message or "non-success write response, but read-back confirmed mode change",
+                            }
 
                         last_code = code
                         last_message = message

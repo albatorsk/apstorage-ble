@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.18.0 - 2026-04-26
+
+### Fixed
+- Fixed false failure reporting when changing System Mode: if the PCS applies the write but does not return a successful `setsysmode` acknowledgement, the integration now performs a `getsysmode` read-back and treats the write as successful when the requested mode is confirmed.
+
+### Notes
+- `manifest.json` version bumped to `0.18.0`.
+
 ## v0.17.7 - 2026-04-26
 
 ### Fixed
