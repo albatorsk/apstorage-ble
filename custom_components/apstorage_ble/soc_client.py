@@ -50,7 +50,7 @@ BLUFI_MTU = 20
 
 # Timeouts and BLE pacing tuned to the known-good standalone probe flow.
 CONNECT_TIMEOUT_SECONDS = 90
-RESPONSE_TIMEOUT_SECONDS = 10
+RESPONSE_TIMEOUT_SECONDS = 30
 DISCONNECT_TIMEOUT_SECONDS = 5
 NOTIFY_SETTLE_DELAY_SECONDS = 0.10
 PACKET_WRITE_DELAY_SECONDS = 0.05
@@ -3207,20 +3207,12 @@ class APstorageSocClient:
             try:
                 frame = await self._wait_frame(1, 19, RESPONSE_TIMEOUT_SECONDS)
                 break
-            except TimeoutError as err:
+            except TimeoutError:
                 if attempt >= 2:
-                    _LOGGER.debug(
-                        "SoC query frame timeout for storage_id=%s (attempt %d/2): %s",
-                        storage_id,
-                        attempt,
-                        err,
-                    )
                     raise
-                _LOGGER.debug(
-                    "Timed out waiting for local-data response for storage_id=%s (attempt %d); retrying request once: %s",
+                _LOGGER.warning(
+                    "Timed out waiting for local-data response for storage_id=%s; retrying request once",
                     storage_id,
-                    attempt,
-                    err,
                 )
                 await asyncio.sleep(NOTIFY_SETTLE_DELAY_SECONDS)
 
@@ -3396,29 +3388,12 @@ class APstorageSocClient:
     ) -> BlufiFrame:
         """Wait for a specific frame type/subtype."""
         start = asyncio.get_event_loop().time()
-        mismatched_count = 0
-        max_mismatches_before_early_exit = 10
-        
         while asyncio.get_event_loop().time() - start < timeout_seconds:
             while self._frame_cursor < len(self.parsed_frames):
                 frame = self.parsed_frames[self._frame_cursor]
                 self._frame_cursor += 1
                 if frame.frame_type == frame_type and frame.subtype == subtype:
                     return frame
-                else:
-                    mismatched_count += 1
-                    # If we're consistently receiving the wrong frame type,
-                    # fail early rather than waiting for the full timeout
-                    if mismatched_count >= max_mismatches_before_early_exit:
-                        observed = [
-                            f"{frame.frame_type}/{frame.subtype}"
-                            for frame in self.parsed_frames[max(0, self._frame_cursor - 5):]
-                        ]
-                        raise TimeoutError(
-                            f"No frame type={frame_type} subtype={subtype} received; "
-                            f"received {mismatched_count} mismatched frames instead; "
-                            f"observed={observed or ['none']}"
-                        )
 
             await asyncio.sleep(0.05)
 
