@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.17.5 - 2026-04-26
+
+### Fixed
+- Fixed Home Assistant service schema parsing for `set_system_mode` by using string option values in `services.yaml`.
+- Reduced SoC response timeout from 30s to 10s to avoid long stalls when the device does not return the expected response frame.
+- Added early-exit handling when repeated mismatched BLE frames are received instead of the expected `1/19` response frame.
+- Reduced coordinator poll watchdog timeout from 300s to 60s so stalled polls recover faster during startup.
+
+### Notes
+- `manifest.json` version bumped to `0.17.5`.
+
 ## v0.17.4 - 2026-04-25
 
 ### Fixed
