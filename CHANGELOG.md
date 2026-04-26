@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.17.6 - 2026-04-26
+
+### Fixed
+- Reverted BLE response timeout reduction (10s → 30s) from v0.17.5 that caused all entities to become Unknown; the device requires the full 30s window to respond.
+- Removed premature early-exit on mismatched BLE frames; the device legitimately sends `1/18` notification frames before sending the expected `1/19` response.
+- The startup hang fix from v0.17.5 is retained: poll watchdog reduced from 300s to 60s.
+
+### Notes
+- `manifest.json` version bumped to `0.17.6`.
+
 ## v0.17.5 - 2026-04-26
 
 ### Fixed
