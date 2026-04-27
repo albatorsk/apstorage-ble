@@ -76,6 +76,8 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._last_selling_first_write: dict[str, Any] | None = None
         self._last_valley_charge_write: dict[str, Any] | None = None
         self._last_peak_power_write: dict[str, Any] | None = None
+        # Track write timestamps to avoid poll overwriting recent writes (5 second grace period)
+        self._field_write_timestamps: dict[str, datetime] = {}
         self._consecutive_poll_failures = 0
         self._shutdown = False
         # Most-recent successfully parsed data; also exposed as coordinator.data
@@ -130,6 +132,13 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 return "Holding"
 
         return None
+
+    def _is_field_recently_written(self, field_name: str, grace_period_seconds: float = 5.0) -> bool:
+        """Check if a field was written recently (within grace period)."""
+        if field_name not in self._field_write_timestamps:
+            return False
+        elapsed = (datetime.now(timezone.utc) - self._field_write_timestamps[field_name]).total_seconds()
+        return elapsed < grace_period_seconds
 
     # ------------------------------------------------------------------
     # ActiveBluetoothDataUpdateCoordinator callbacks
@@ -280,9 +289,9 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 if metrics.system_state is not None:
                     self.data.system_state = metrics.system_state
                     _LOGGER.debug("[%s] System state: %s", self._name, metrics.system_state)
-                if metrics.system_mode is not None:
+                if metrics.system_mode is not None and not self._is_field_recently_written("system_mode"):
                     self.data.system_mode = metrics.system_mode
-                if metrics.backup_soc is not None:
+                if metrics.backup_soc is not None and not self._is_field_recently_written("backup_soc"):
                     self.data.backup_soc = float(metrics.backup_soc)
                 resolved_flow_state = self._resolve_battery_flow_state(metrics)
                 if resolved_flow_state is not None:
@@ -309,7 +318,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     self.data.load_power = float(metrics.load_power)
                 if metrics.inverter_temperature is not None:
                     self.data.inverter_temperature = float(metrics.inverter_temperature)
-                if metrics.buzzer is not None:
+                if metrics.buzzer is not None and not self._is_field_recently_written("buzzer"):
                     self.data.buzzer = metrics.buzzer
                 if metrics.co2_reduction is not None:
                     self.data.co2_reduction = float(metrics.co2_reduction)
@@ -395,6 +404,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
 
             if self.data is not None:
                 self.data.system_mode = str(mode)
+                self._field_write_timestamps["system_mode"] = datetime.now(timezone.utc)
                 self.async_update_listeners()
 
         # Refresh immediately so entities reflect new state.
@@ -452,6 +462,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
 
             if self.data is not None:
                 self.data.backup_soc = float(backup_soc)
+                self._field_write_timestamps["backup_soc"] = datetime.now(timezone.utc)
                 self.async_update_listeners()
 
         # Refresh immediately so entities reflect new state.
@@ -644,6 +655,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
 
             if self.data is not None:
                 self.data.buzzer = int(mode)
+                self._field_write_timestamps["buzzer"] = datetime.now(timezone.utc)
                 self.async_update_listeners()
 
         await self._async_poll()
