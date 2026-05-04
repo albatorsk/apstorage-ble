@@ -1,13 +1,13 @@
 # Changelog
 
-## v0.18.1 - 2026-05-04
+## v0.18.2 - 2026-05-04
 
 ### Fixed
 - Reduced misleading State of Charge history artifacts during temporary BLE polling outages: after repeated consecutive poll failures, SoC is now marked unavailable instead of holding a stale percentage for extended periods.
 - Applied the stale-SoC guard to both no-metrics polls and watchdog timeout paths so nightly polling gaps no longer appear as long flat-line plateaus followed by sudden drops.
 
 ### Notes
-- `manifest.json` version remains `0.18.1`.
+- `manifest.json` version bumped to `0.18.2`.
 
 ## v0.18.0 - 2026-04-26
 
