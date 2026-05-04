@@ -32,6 +32,11 @@ _LOGGER = logging.getLogger(__name__)
 # (2 × RESPONSE_TIMEOUT_SECONDS + connection overhead ≈ 75 s).
 POLL_WATCHDOG_TIMEOUT_SECONDS = 120
 
+# After this many consecutive poll failures, expose SoC as unknown instead of
+# keeping a stale last-known value. This avoids misleading flat-line artifacts
+# in history when BLE polling is temporarily unavailable.
+SOC_STALE_AFTER_FAILURES = 3
+
 
 class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None]):
     """Coordinator that polls the APstorage ELT-12 via BLE on advertisement."""
@@ -235,20 +240,35 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                         device_name_hint=self._name,
                     )
             except TimeoutError:
+                self._consecutive_poll_failures += 1
                 _LOGGER.warning(
                     "[%s] Poll watchdog timed out after %ss; rebuilding BLE client state",
                     self._name,
                     POLL_WATCHDOG_TIMEOUT_SECONDS,
                 )
+                if self.data is not None and self._consecutive_poll_failures >= SOC_STALE_AFTER_FAILURES:
+                    self.data.battery_soc = None
+                    _LOGGER.debug(
+                        "[%s] Marked battery SoC unknown after %d consecutive poll failures",
+                        self._name,
+                        self._consecutive_poll_failures,
+                    )
+                    self.async_update_listeners()
                 self._soc_client = APstorageSocClient()
                 self._last_service_info = None
-                self._consecutive_poll_failures = 0
                 return
 
             if metrics is None:
                 self._consecutive_poll_failures += 1
                 _LOGGER.info("[%s] SoC query returned no metrics", self._name)
-                if self._consecutive_poll_failures >= 3:
+                if self.data is not None and self._consecutive_poll_failures >= SOC_STALE_AFTER_FAILURES:
+                    self.data.battery_soc = None
+                    _LOGGER.debug(
+                        "[%s] Marked battery SoC unknown after %d consecutive poll failures",
+                        self._name,
+                        self._consecutive_poll_failures,
+                    )
+                if self._consecutive_poll_failures >= SOC_STALE_AFTER_FAILURES:
                     _LOGGER.warning(
                         "[%s] Poll failed %d times in a row; rebuilding BLE client state",
                         self._name,
@@ -256,7 +276,6 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     )
                     self._soc_client = APstorageSocClient()
                     self._last_service_info = None
-                    self._consecutive_poll_failures = 0
             else:
                 if self._consecutive_poll_failures:
                     _LOGGER.debug(
