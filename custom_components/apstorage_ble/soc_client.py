@@ -514,33 +514,11 @@ def _extract_version_info(parsed: Any) -> dict[str, str]:
         )
         hardware = (
             _to_text(root.get("HV"))
-            or _to_text(root.get("HW"))
             or _to_text(root.get("hw_version"))
-            or _to_text(root.get("hardware_version"))
-            or _to_text(root.get("hw"))
             or _to_text(root.get("hwVersion"))
-            or _to_text(root.get("hardware"))
             or _to_text(root.get("hardwareVersion"))
-            or _to_text(root.get("storageHardwareVersion"))
-            or _to_text(root.get("deviceHardwareVersion"))
             or _to_text(root.get("hardVersion"))
-            or _to_text(
-                _deep_find_key(
-                    root,
-                    {
-                        "hv",
-                        "hw",
-                        "hw_version",
-                        "hardware_version",
-                        "hwversion",
-                        "hardware",
-                        "hardwareversion",
-                        "storagehardwareversion",
-                        "devicehardwareversion",
-                        "hardversion",
-                    },
-                )
-            )
+            or _to_text(_deep_find_key(root, {"hv", "hw_version", "hwversion", "hardwareversion", "hardversion"}))
         )
 
         if software is None and current is not None:
