@@ -1872,6 +1872,9 @@ class APstorageSocClient:
         self._version_query_last_attempt: dict[str, float] = {}
         self._alarm_cache: dict[str, dict[str, str]] = {}
         self._alarm_query_last_attempt: dict[str, float] = {}
+        # Persistent BLE session state (kept open between polls to avoid repeated DH handshakes).
+        self._session_ble_client: BleakClient | None = None
+        self._session_storage_id: str | None = None
 
     def _reset_blufi_session_state(self) -> None:
         """Drop protocol state that must not leak across BLE sessions."""
@@ -1879,6 +1882,14 @@ class APstorageSocClient:
         self._codec = BlufiCodec(mtu=BLUFI_MTU)
         self.parsed_frames = []
         self._frame_cursor = 0
+
+    @property
+    def session_open(self) -> bool:
+        """Return True when a persistent BLE session is active and connected."""
+        return (
+            self._session_ble_client is not None
+            and self._session_ble_client.is_connected
+        )
 
     async def async_query_metrics(
         self,
@@ -2026,6 +2037,189 @@ class APstorageSocClient:
         if metrics is None or metrics.battery_soc is None:
             return None
         return int(metrics.battery_soc)
+
+    async def async_open_session(
+        self,
+        ble_device: BLEDevice,
+        *,
+        device_name_hint: str | None = None,
+    ) -> None:
+        """Connect to device, run Blufi DH handshake, and hold the connection open.
+
+        Subsequent calls to async_query_session() reuse this session without
+        reconnecting or repeating the DH key exchange, matching the EMA app
+        behaviour and eliminating the Blufi server-side state-machine confusion
+        that causes failures when connecting/disconnecting on every poll.
+
+        Call async_close_session() when finished or before any write operation.
+        """
+        if not HAS_CRYPTO:
+            raise RuntimeError("pycryptodome required; install with: pip install pycryptodome")
+
+        # Close any stale prior session first.
+        await self.async_close_session()
+
+        client: BleakClient | None = None
+        try:
+            self._reset_blufi_session_state()
+            async with asyncio.timeout(CONNECT_TIMEOUT_SECONDS):
+                client = await establish_connection(
+                    BleakClientWithServiceCache,
+                    ble_device,
+                    ble_device.address,
+                    max_attempts=3,
+                    use_services_cache=False,
+                )
+                await self._ensure_services_ready(client)
+
+                try:
+                    name_raw = await client.read_gatt_char(DEVICE_NAME_CHAR)
+                    device_name = bytes(name_raw).decode("utf-8", errors="ignore").strip("\x00\r\n ")
+                except Exception:  # noqa: BLE001
+                    device_name = ""
+
+                if not device_name:
+                    device_name = device_name_hint or ""
+                if not device_name:
+                    device_name = ble_device.name or ""
+
+                storage_ids = _derive_storage_id_candidates(
+                    self._preferred_storage_id, device_name, device_name_hint, ble_device.name
+                )
+                if not storage_ids:
+                    raise RuntimeError(
+                        f"Could not derive storage ID from device name {device_name!r} "
+                        f"(hint: {device_name_hint!r}, ble_name: {ble_device.name!r})"
+                    )
+
+                await self._establish_blufi_session(client)
+
+            self._session_ble_client = client
+            self._session_storage_id = storage_ids[0]
+            _LOGGER.debug(
+                "[BLE] Persistent session open: %s storage_id=%s",
+                ble_device.address,
+                self._session_storage_id,
+            )
+        except Exception:
+            if client is not None and client.is_connected:
+                await _safe_disconnect(client)
+            self._reset_blufi_session_state()
+            self._session_ble_client = None
+            self._session_storage_id = None
+            raise
+
+    async def async_close_session(self) -> None:
+        """Disconnect and clear the persistent BLE session."""
+        client = self._session_ble_client
+        self._session_ble_client = None
+        self._session_storage_id = None
+        self._reset_blufi_session_state()
+        if client is not None and client.is_connected:
+            _LOGGER.debug("[BLE] Closing persistent session")
+            await _safe_disconnect(client)
+
+    async def async_query_session(self) -> SocMetrics | None:
+        """Query metrics over the existing persistent BLE session.
+
+        No reconnect or DH exchange is performed — the session established by
+        async_open_session() is reused.  Returns None if the response carries
+        no recognisable metrics.
+
+        Raises RuntimeError if no session is open.
+        """
+        client = self._session_ble_client
+        storage_id = self._session_storage_id
+        if client is None or not client.is_connected or storage_id is None:
+            raise RuntimeError("No open BLE session; call async_open_session() first")
+
+        parsed = await self._send_soc_request(client, storage_id)
+        if parsed is None:
+            _LOGGER.warning("[BLE] Session query returned no response for storage_id=%s", storage_id)
+            return None
+
+        if isinstance(parsed, dict):
+            code = parsed.get("code")
+            msg = str(parsed.get("msg") or parsed.get("message") or "")
+            if code == 202 and "device id mismatch" in msg.lower():
+                _LOGGER.warning("[BLE] Storage ID mismatch in session query: storage_id=%s", storage_id)
+                return None
+
+        metrics = _extract_metrics(parsed)
+        now = asyncio.get_running_loop().time()
+
+        version_info = self._version_cache.get(storage_id)
+        if _should_refresh_version_info(
+            version_info, now=now, last_attempt=self._version_query_last_attempt.get(storage_id, 0.0)
+        ):
+            self._version_query_last_attempt[storage_id] = now
+            refreshed = await self._query_version_info(
+                client, storage_id, system_id="", cached_info=version_info
+            )
+            if refreshed:
+                version_info = {**(version_info or {}), **refreshed}
+                self._version_cache[storage_id] = version_info
+            elif version_info is None:
+                _LOGGER.debug("[BLE] No version info returned for storage_id=%s; will retry soon", storage_id)
+
+        if version_info:
+            for field_name, field_value in version_info.items():
+                setattr(metrics, field_name, field_value)
+
+        if (now - self._alarm_query_last_attempt.get(storage_id, 0.0)) >= 60:
+            self._alarm_query_last_attempt[storage_id] = now
+            alarm_info = await self._query_alarm_info(client, storage_id, system_id="")
+            if alarm_info:
+                self._alarm_cache[storage_id] = alarm_info
+                for field_name, field_value in alarm_info.items():
+                    setattr(metrics, field_name, field_value)
+        elif not any(
+            getattr(metrics, name) is not None
+            for name in ("battery_alarm", "pcs_alarm", "alarm_summary")
+        ):
+            for field_name, field_value in self._alarm_cache.get(storage_id, {}).items():
+                setattr(metrics, field_name, field_value)
+
+        _LOGGER.debug(
+            "[BLE] Session query: soc=%s, power=%s, state=%s, fw=%s, alarm=%s",
+            metrics.battery_soc,
+            metrics.battery_power,
+            metrics.system_state,
+            metrics.pcs_firmware_version,
+            metrics.alarm_summary,
+        )
+
+        if any(value is not None for value in (
+            metrics.battery_soc,
+            metrics.battery_voltage,
+            metrics.battery_current,
+            metrics.battery_power,
+            metrics.battery_temperature,
+            metrics.battery_charged_energy,
+            metrics.battery_discharged_energy,
+            metrics.grid_voltage,
+            metrics.grid_current,
+            metrics.grid_power,
+            metrics.grid_frequency,
+            metrics.pv_voltage,
+            metrics.pv_current,
+            metrics.pv_power,
+            metrics.load_voltage,
+            metrics.load_current,
+            metrics.load_power,
+            metrics.inverter_temperature,
+            metrics.battery_alarm,
+            metrics.pcs_alarm,
+            metrics.alarm_summary,
+            metrics.pcs_firmware_version,
+            metrics.pcs_latest_firmware_version,
+            metrics.pcs_hardware_version,
+        )):
+            self._preferred_storage_id = storage_id
+            return metrics
+
+        _LOGGER.warning("[BLE] Session query succeeded but metrics are empty for storage_id=%s", storage_id)
+        return None
 
     async def _ensure_services_ready(self, client: BleakClient) -> None:
         """Ensure GATT services are discovered before first characteristic access."""

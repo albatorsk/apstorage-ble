@@ -104,6 +104,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             with suppress(asyncio.CancelledError, TimeoutError):
                 await asyncio.wait_for(task, timeout=SHUTDOWN_WAIT_SECONDS)
         async with self._poll_lock:
+            await self._soc_client.async_close_session()
             self._last_service_info = None
 
     def _resolve_battery_flow_state(self, metrics) -> str | None:
@@ -252,18 +253,28 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
 
                 try:
                     async with asyncio.timeout(POLL_WATCHDOG_TIMEOUT_SECONDS):
-                        metrics = await self._soc_client.async_query_metrics(
-                            ble_device,
-                            device_name_hint=self._name,
-                            max_retries=1,
-                        )
+                        # Open a persistent BLE session if not already connected.
+                        # The DH handshake is only performed on (re)connect, not every poll.
+                        if not self._soc_client.session_open:
+                            _LOGGER.debug(
+                                "[%s] Opening persistent BLE session to %s",
+                                self._name,
+                                ble_device.address,
+                            )
+                            await self._soc_client.async_open_session(
+                                ble_device, device_name_hint=self._name
+                            )
+                            _LOGGER.debug("[%s] BLE session established", self._name)
+
+                        metrics = await self._soc_client.async_query_session()
                 except TimeoutError:
                     self._consecutive_poll_failures += 1
                     _LOGGER.warning(
-                        "[%s] Poll watchdog timed out after %ss; rebuilding BLE client state",
+                        "[%s] Poll watchdog timed out after %ss; closing BLE session",
                         self._name,
                         POLL_WATCHDOG_TIMEOUT_SECONDS,
                     )
+                    await self._soc_client.async_close_session()
                     if self.data is not None and self._consecutive_poll_failures >= SOC_STALE_AFTER_FAILURES:
                         self.data.battery_soc = None
                         _LOGGER.debug(
@@ -272,7 +283,6 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                             self._consecutive_poll_failures,
                         )
                         self.async_update_listeners()
-                    self._soc_client = APstorageSocClient()
                     self._last_service_info = None
                     return
 
@@ -288,11 +298,11 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                         )
                     if self._consecutive_poll_failures >= SOC_STALE_AFTER_FAILURES:
                         _LOGGER.warning(
-                            "[%s] Poll failed %d times in a row; rebuilding BLE client state",
+                            "[%s] Poll failed %d times in a row; closing BLE session to force reconnect",
                             self._name,
                             self._consecutive_poll_failures,
                         )
-                        self._soc_client = APstorageSocClient()
+                        await self._soc_client.async_close_session()
                         self._last_service_info = None
                 else:
                     if self._consecutive_poll_failures:
@@ -402,6 +412,8 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             raise ValueError(f"Invalid system mode: {mode}")
 
         async with self._poll_lock:
+            # Close the persistent poll session so the write's own BLE connection does not conflict.
+            await self._soc_client.async_close_session()
             service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
             if service_info is not None and service_info.connectable:
@@ -460,6 +472,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             raise ValueError(f"Invalid backup SOC: {backup_soc}")
 
         async with self._poll_lock:
+            await self._soc_client.async_close_session()
             service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
             if service_info is not None and service_info.connectable:
@@ -525,6 +538,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         `peakTime`/`valleyTime` payload arrays.
         """
         async with self._poll_lock:
+            await self._soc_client.async_close_session()
             service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
             if service_info is not None and service_info.connectable:
@@ -590,6 +604,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
     ) -> None:
         """Set Peak Valley mode schedule over BLE using setsysmode."""
         async with self._poll_lock:
+            await self._soc_client.async_close_session()
             service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
             if service_info is not None and service_info.connectable:
@@ -653,6 +668,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             raise ValueError(f"Invalid buzzer mode: {mode}")
 
         async with self._poll_lock:
+            await self._soc_client.async_close_session()
             service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
             if service_info is not None and service_info.connectable:
@@ -707,6 +723,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
     async def async_clear_buzzer(self) -> None:
         """Clear active buzzer alarm over BLE and refresh coordinator data."""
         async with self._poll_lock:
+            await self._soc_client.async_close_session()
             service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
             if service_info is not None and service_info.connectable:
@@ -754,6 +771,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
     async def async_reboot_pcs(self) -> None:
         """Reboot the PCS over BLE."""
         async with self._poll_lock:
+            await self._soc_client.async_close_session()
             service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
             if service_info is not None and service_info.connectable:
@@ -799,6 +817,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
     async def async_set_selling_first(self, enabled: bool) -> None:
         """Set sellingFirst over BLE and refresh coordinator data."""
         async with self._poll_lock:
+            await self._soc_client.async_close_session()
             service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
             if service_info is not None and service_info.connectable:
@@ -852,6 +871,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
     async def async_set_valley_charge(self, enabled: bool) -> None:
         """Set valleycharge over BLE and refresh coordinator data."""
         async with self._poll_lock:
+            await self._soc_client.async_close_session()
             service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
             if service_info is not None and service_info.connectable:
@@ -908,6 +928,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             raise ValueError(f"Invalid peak power: {peak_power}")
 
         async with self._poll_lock:
+            await self._soc_client.async_close_session()
             service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
             if service_info is not None and service_info.connectable:

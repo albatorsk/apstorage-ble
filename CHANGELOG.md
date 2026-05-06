@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.19.0 - 2026-05-06
+
+### Changed
+- **Persistent BLE session**: The coordinator now keeps the BLE connection open between polls and reuses the established Blufi DH session for every data read. Previously each 30-second poll cycle reconnected and repeated the full DH key exchange, which left the device's Blufi state machine in a partial state and caused most poll attempts to fail until the device internally timed out and reset (~10–30 s). The new approach matches how the EMA app behaves and makes every poll succeed reliably.
+- On connection failure or watchdog timeout the session is closed and re-established on the next cycle.
+- All write operations (system mode, backup SoC, schedules, buzzer, etc.) close the persistent poll session before opening their own connection, preventing conflicts.
+- Integration unload now explicitly closes the persistent session, cleanly releasing the ESPHome Bluetooth proxy slot.
+
+### Notes
+- `manifest.json` version bumped to `0.19.0`.
+
 ## v0.18.6 - 2026-05-06
 
 ### Fixed
