@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.19.7 - 2026-05-06
+
+### Fixed
+- Improved BLE compatibility by selecting protocol profile parameters dynamically from device naming hints before session setup.
+- Added support for additional protocol families with profile-specific write/notify UUID pairs and request `productKey` handling.
+- Updated request payload encryption/decryption to use the active profile AES parameters during query flows.
+
+### Notes
+- `manifest.json` version bumped to `0.19.7`.
+
 ## v0.19.6 - 2026-05-06
 
 ### Changed
