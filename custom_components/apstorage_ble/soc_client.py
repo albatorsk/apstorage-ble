@@ -44,6 +44,72 @@ WRITE_CHAR = "0000ff07-0000-1000-8000-00805f9b34fb"
 NOTIFY_CHAR = "0000ff06-0000-1000-8000-00805f9b34fb"
 DEVICE_NAME_CHAR = "00002a00-0000-1000-8000-00805f9b34fb"
 
+
+@dataclass(frozen=True)
+class ProtocolProfile:
+    """Per-family BLE and crypto profile extracted from EMA app behavior."""
+
+    service_uuid: str
+    write_char_uuid: str
+    notify_char_uuid: str
+    aes_key: str
+    aes_iv: str
+    product_key: str
+
+
+PROTOCOL_PROFILES: dict[str, ProtocolProfile] = {
+    "PCS": ProtocolProfile(
+        service_uuid="0000ffec-0000-1000-8000-00805f9b34fb",
+        write_char_uuid="0000ff07-0000-1000-8000-00805f9b34fb",
+        notify_char_uuid="0000ff06-0000-1000-8000-00805f9b34fb",
+        aes_key="E7MiPPrs9v6i3DY3",
+        aes_iv="8914934610490056",
+        product_key="PCS",
+    ),
+    "SEM": ProtocolProfile(
+        service_uuid="0000fffe-0000-1000-8000-00805f9b34fb",
+        write_char_uuid="0000ff0a-0000-1000-8000-00805f9b34fb",
+        notify_char_uuid="0000ff0b-0000-1000-8000-00805f9b34fb",
+        aes_key="E7MiPPrs9v6i3DY3",
+        aes_iv="8914934610490056",
+        product_key="SEM",
+    ),
+    "LAKE": ProtocolProfile(
+        service_uuid="0000ffed-0000-1000-8000-00805f9b34fb",
+        write_char_uuid="0000ff09-0000-1000-8000-00805f9b34fb",
+        notify_char_uuid="0000ff08-0000-1000-8000-00805f9b34fb",
+        aes_key="E7MiPPrs9v6i3DY3",
+        aes_iv="8914934610490056",
+        product_key="PCS",
+    ),
+    "E": ProtocolProfile(
+        service_uuid="016df5da-0000-1000-8000-00805f9b34fb",
+        write_char_uuid="0000ef0a-0000-1000-8000-00805f9b34fb",
+        notify_char_uuid="0000ef0b-0000-1000-8000-00805f9b34fb",
+        aes_key="6iMCjQF1nmna2JWX",
+        aes_iv="9711913766558768",
+        product_key="PCS",
+    ),
+}
+DEFAULT_PROFILE_NAME = "PCS"
+
+
+def _profile_name_from_hint(hint: str | None) -> str:
+    """Map a device/storage hint to a protocol profile name."""
+    if not hint:
+        return DEFAULT_PROFILE_NAME
+
+    value = hint.strip().upper()
+    if not value:
+        return DEFAULT_PROFILE_NAME
+    if value.startswith("SEM_") or value.startswith("SEM"):
+        return "SEM"
+    if value.startswith("LAKE_") or value.startswith("LAKE"):
+        return "LAKE"
+    if value.startswith("E") and not value.startswith("EZ1_"):
+        return "E"
+    return DEFAULT_PROFILE_NAME
+
 # The PCS expects Blufi frames fragmented for the default BLE payload size.
 # Keep this aligned with the known-good standalone script defaults.
 BLUFI_MTU = 20
@@ -1869,6 +1935,8 @@ class APstorageSocClient:
         self._codec = BlufiCodec(mtu=BLUFI_MTU)
         self.parsed_frames: list[BlufiFrame] = []
         self._frame_cursor = 0
+        self._profile_name = DEFAULT_PROFILE_NAME
+        self._profile = PROTOCOL_PROFILES[DEFAULT_PROFILE_NAME]
         self._preferred_storage_id: str | None = None
         self._version_cache: dict[str, dict[str, str]] = {}
         self._version_query_last_attempt: dict[str, float] = {}
@@ -1884,6 +1952,54 @@ class APstorageSocClient:
         self._codec = BlufiCodec(mtu=BLUFI_MTU)
         self.parsed_frames = []
         self._frame_cursor = 0
+
+    async def _select_protocol_profile(self, client: BleakClient) -> None:
+        """Pick BLE/crypto profile from device hints before DH handshake."""
+        profile_hint: str | None = self._preferred_storage_id
+        if not profile_hint:
+            try:
+                name_raw = await client.read_gatt_char(DEVICE_NAME_CHAR)
+                name = bytes(name_raw).decode("utf-8", errors="ignore").strip("\x00\r\n ")
+                if name:
+                    profile_hint = name
+            except Exception:  # noqa: BLE001
+                profile_hint = None
+
+        profile_name = _profile_name_from_hint(profile_hint)
+        self._profile_name = profile_name
+        self._profile = PROTOCOL_PROFILES.get(profile_name, PROTOCOL_PROFILES[DEFAULT_PROFILE_NAME])
+        _LOGGER.debug(
+            "Using protocol profile %s (write=%s, notify=%s) for hint=%r",
+            self._profile_name,
+            self._profile.write_char_uuid,
+            self._profile.notify_char_uuid,
+            profile_hint,
+        )
+
+    def _encrypt_request_json_hexascii(self, request_json: str) -> bytes:
+        """Encrypt request with active profile AES params and hex-ASCII encode."""
+        if not HAS_CRYPTO:
+            raise RuntimeError("pycryptodome required")
+
+        data = request_json.encode("utf-8")
+        if len(data) % 16 != 0:
+            data += b"\x00" * (16 - (len(data) % 16))
+
+        key = _pad_key_16(self._profile.aes_key or AES_KEY_STR)
+        iv = ((self._profile.aes_iv or AES_IV_STR).ljust(16, "\x00")).encode("utf-8")[:16]
+        cipher = AES.new(key, AES.MODE_CBC, iv=iv)
+        return cipher.encrypt(data).hex().encode("ascii")
+
+    def _decrypt_response_payload(self, payload: bytes) -> str:
+        """Decrypt response payload with active profile AES params."""
+        if not HAS_CRYPTO:
+            raise RuntimeError("pycryptodome required")
+
+        key = _pad_key_16(self._profile.aes_key or AES_KEY_STR)
+        iv = ((self._profile.aes_iv or AES_IV_STR).ljust(16, "\x00")).encode("utf-8")[:16]
+        cipher = AES.new(key, AES.MODE_CBC, iv=iv)
+        decrypted = cipher.decrypt(payload)
+        return decrypted.rstrip(b"\x00").decode("utf-8", errors="replace").strip()
 
     @property
     def session_open(self) -> bool:
@@ -3440,6 +3556,7 @@ class APstorageSocClient:
     async def _establish_blufi_session(self, client: BleakClient) -> None:
         """Perform Blufi DH and security setup."""
         self._reset_blufi_session_state()
+        await self._select_protocol_profile(client)
 
         # Generate DH keypair
         p = int(BLUFI_DH_P_HEX, 16)
@@ -3472,11 +3589,11 @@ class APstorageSocClient:
         packets_0 = self._codec.build_packets(cmd_nego, nego_payload_0, encrypt=False, checksum=False)
         packets_1 = self._codec.build_packets(cmd_nego, nego_payload_1, encrypt=False, checksum=False)
 
-        await client.start_notify(NOTIFY_CHAR, self._on_notify)
+        await client.start_notify(self._profile.notify_char_uuid, self._on_notify)
         await asyncio.sleep(NOTIFY_SETTLE_DELAY_SECONDS)
 
         for pkt in packets_0 + packets_1:
-            await client.write_gatt_char(WRITE_CHAR, pkt, response=True)
+            await client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
             await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
 
         # Wait for device public key response
@@ -3495,7 +3612,7 @@ class APstorageSocClient:
         cmd_sec = _make_cmd(0, 1)
         sec_packets = self._codec.build_packets(cmd_sec, bytes([0x03]), encrypt=False, checksum=True, aes_key=self.session_key)
         for pkt in sec_packets:
-            await client.write_gatt_char(WRITE_CHAR, pkt, response=True)
+            await client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
             await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
         await asyncio.sleep(POST_SECURITY_SETTLE_DELAY_SECONDS)
 
@@ -3509,7 +3626,7 @@ class APstorageSocClient:
         request = {
             "company": "apsystems",
             "companyKey": "AmS4SV9oy3gk",
-            "productKey": "PCS",
+            "productKey": self._profile.product_key,
             "version": "1.0",
             "id": storage_id,
             "deviceId": storage_id,
@@ -3528,7 +3645,7 @@ class APstorageSocClient:
         }
 
         request_json = json.dumps(request, separators=(",", ":"))
-        payload = _ema_encrypt_json_hexascii(request_json)
+        payload = self._encrypt_request_json_hexascii(request_json)
 
         cmd_custom = _make_cmd(1, 19)
         packets = self._codec.build_packets(cmd_custom, payload, encrypt=True, checksum=True, aes_key=self.session_key)
@@ -3539,7 +3656,7 @@ class APstorageSocClient:
             self._frame_cursor = 0
 
             for pkt in packets:
-                await client.write_gatt_char(WRITE_CHAR, pkt, response=True)
+                await client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
                 await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
 
             # Wait for custom data response on the existing notification session.
@@ -3558,7 +3675,7 @@ class APstorageSocClient:
         if frame is None:
             return None
 
-        decrypted = _ema_decrypt_payload(frame.payload)
+        decrypted = self._decrypt_response_payload(frame.payload)
         try:
             parsed = json.loads(decrypted)
         except json.JSONDecodeError:
@@ -3661,7 +3778,7 @@ class APstorageSocClient:
         request = {
             "company": "apsystems",
             "companyKey": "AmS4SV9oy3gk",
-            "productKey": "PCS",
+            "productKey": self._profile.product_key,
             "version": "1.0",
             "id": storage_id,
             "deviceId": storage_id,
@@ -3681,7 +3798,7 @@ class APstorageSocClient:
         }
 
         request_json = json.dumps(request, separators=(",", ":"))
-        payload = _ema_encrypt_json_hexascii(request_json)
+        payload = self._encrypt_request_json_hexascii(request_json)
 
         cmd_custom = _make_cmd(1, 19)
         packets = self._codec.build_packets(
@@ -3696,11 +3813,11 @@ class APstorageSocClient:
         self._frame_cursor = 0
 
         for pkt in packets:
-            await client.write_gatt_char(WRITE_CHAR, pkt, response=True)
+            await client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
             await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
 
         frame = await self._wait_frame(1, 19, response_timeout_seconds)
-        decrypted = _ema_decrypt_payload(frame.payload)
+        decrypted = self._decrypt_response_payload(frame.payload)
         try:
             parsed = json.loads(decrypted)
         except json.JSONDecodeError:
