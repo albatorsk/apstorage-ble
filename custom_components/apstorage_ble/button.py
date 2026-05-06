@@ -74,7 +74,7 @@ class APstorageClearBuzzerButton(
     @property
     def available(self) -> bool:
         """Return availability from Bluetooth coordinator reachability."""
-        return self.coordinator.available
+        return self.coordinator.runtime_available
 
     async def async_press(self) -> None:
         """Clear the active buzzer alarm."""
@@ -123,7 +123,7 @@ class APstoragePcsRebootButton(
     @property
     def available(self) -> bool:
         """Return availability from Bluetooth coordinator reachability."""
-        return self.coordinator.available
+        return self.coordinator.runtime_available
 
     async def async_press(self) -> None:
         """Reboot the PCS."""

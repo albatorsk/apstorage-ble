@@ -130,7 +130,7 @@ class APstoragePeakPowerNumber(
     @property
     def available(self) -> bool:
         """Only available when connected and mode supports peak power."""
-        if not self.coordinator.available:
+        if not self.coordinator.runtime_available:
             return False
         return self._current_mode_code() == "5"
 
