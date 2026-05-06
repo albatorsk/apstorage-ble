@@ -253,20 +253,37 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
 
                 try:
                     async with asyncio.timeout(POLL_WATCHDOG_TIMEOUT_SECONDS):
-                        # Open a persistent BLE session if not already connected.
-                        # The DH handshake is only performed on (re)connect, not every poll.
-                        if not self._soc_client.session_open:
-                            _LOGGER.debug(
-                                "[%s] Opening persistent BLE session to %s",
-                                self._name,
-                                ble_device.address,
-                            )
-                            await self._soc_client.async_open_session(
-                                ble_device, device_name_hint=self._name
-                            )
-                            _LOGGER.debug("[%s] BLE session established", self._name)
+                        try:
+                            # Open a persistent BLE session if not already connected.
+                            # The DH handshake is only performed on (re)connect, not every poll.
+                            if not self._soc_client.session_open:
+                                _LOGGER.debug(
+                                    "[%s] Opening persistent BLE session to %s",
+                                    self._name,
+                                    ble_device.address,
+                                )
+                                await self._soc_client.async_open_session(
+                                    ble_device, device_name_hint=self._name
+                                )
+                                _LOGGER.debug("[%s] BLE session established", self._name)
 
-                        metrics = await self._soc_client.async_query_session()
+                            metrics = await self._soc_client.async_query_session()
+                        except Exception as session_err:  # noqa: BLE001
+                            # Shared ESPHome proxy environments can drop long-lived
+                            # sessions unpredictably. Fall back to a one-shot query so
+                            # this poll cycle can still return data.
+                            _LOGGER.warning(
+                                "[%s] Persistent session failed (%s: %s); falling back to one-shot poll",
+                                self._name,
+                                type(session_err).__name__,
+                                session_err,
+                            )
+                            await self._soc_client.async_close_session()
+                            metrics = await self._soc_client.async_query_metrics(
+                                ble_device,
+                                device_name_hint=self._name,
+                                max_retries=1,
+                            )
                 except TimeoutError:
                     self._consecutive_poll_failures += 1
                     _LOGGER.warning(
