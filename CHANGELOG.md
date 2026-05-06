@@ -1,15 +1,5 @@
 # Changelog
 
-## v0.19.18 - 2026-05-06
-
-### Fixed
-- Emergency stability rollback for startup polling responsiveness.
-- Restore short version-query timeout and compact identifier list during startup version discovery to avoid holding the coordinator poll lock for multiple minutes.
-- This prevents normal telemetry entities from staying Unknown while startup version probing is in progress.
-
-### Notes
-- `manifest.json` version bumped to `0.19.18`.
-
 ## v0.19.17 - 2026-05-06
 
 ### Fixed
