@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.19.6 - 2026-05-06
+
+### Changed
+- Switched default polling strategy to one-shot connect/query/disconnect for shared ESPHome proxy stability.
+- Persistent-session mode is no longer enabled by default and will only be used when explicitly enabled in code defaults.
+- Increased one-shot poll retries from 1 to 2 attempts per poll cycle to improve success probability on noisy BLE links.
+
+### Notes
+- `manifest.json` version bumped to `0.19.6`.
+
 ## v0.19.5 - 2026-05-06
 
 ### Fixed
