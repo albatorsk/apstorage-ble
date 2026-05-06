@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.19.8 - 2026-05-06
+
+### Changed
+- Disabled version and alarm enrichment during normal polling so periodic reads now only perform the base local-data query.
+- This isolates secondary diagnostic requests from the main SoC update path to reduce `Unknown` regressions under unstable BLE links.
+
+### Notes
+- `manifest.json` version bumped to `0.19.8`.
+
 ## v0.19.7 - 2026-05-06
 
 ### Fixed
