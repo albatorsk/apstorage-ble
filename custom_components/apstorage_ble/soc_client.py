@@ -52,7 +52,7 @@ BLUFI_MTU = 20
 # Keep connect bounded so one stuck attempt cannot monopolize the poll window.
 CONNECT_TIMEOUT_SECONDS = 45
 RESPONSE_TIMEOUT_SECONDS = 30
-DISCONNECT_TIMEOUT_SECONDS = 15
+DISCONNECT_TIMEOUT_SECONDS = 5
 NOTIFY_SETTLE_DELAY_SECONDS = 0.10
 PACKET_WRITE_DELAY_SECONDS = 0.05
 POST_SECURITY_SETTLE_DELAY_SECONDS = 0.10
@@ -304,7 +304,7 @@ async def _safe_disconnect(client: BleakClient) -> None:
         _LOGGER.warning("BLE disconnect timed out after %.1fs", DISCONNECT_TIMEOUT_SECONDS)
         try:
             # Retry once with a short grace period; ESPHome proxy disconnect can lag.
-            async with asyncio.timeout(3):
+            async with asyncio.timeout(1):
                 await client.disconnect()
         except Exception:  # noqa: BLE001
             pass
