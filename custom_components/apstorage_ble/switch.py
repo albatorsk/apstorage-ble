@@ -120,7 +120,7 @@ class APstorageBaseSwitch(
     @property
     def available(self) -> bool:
         """Return availability from Bluetooth coordinator reachability."""
-        return self.coordinator.available
+        return self.coordinator.runtime_available
 
     def _current_mode_code(self) -> str | None:
         """Return current mode code from decoded fields."""
