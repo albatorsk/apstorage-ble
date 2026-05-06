@@ -406,19 +406,13 @@ def _should_refresh_version_info(
 
 
 def _version_info_is_complete_enough(info: dict[str, str] | None) -> bool:
-    """Return True when key firmware metadata has been captured.
-
-    Current and latest versions are usually returned by `pcsVersion`, while
-    hardware version may come from initialization/configuration endpoints.
-    Keep discovery active until hardware has also been found.
-    """
+    """Return True when key firmware metadata has been captured."""
     if not info:
         return False
 
     current = _to_text(info.get("pcs_firmware_version")) or _to_text(info.get("pcs_software_version"))
     latest = _to_text(info.get("pcs_latest_firmware_version"))
-    hardware = _to_text(info.get("pcs_hardware_version"))
-    return current is not None and latest is not None and hardware is not None
+    return current is not None and latest is not None
 
 
 def _parse_jsonish(value: Any) -> Any:
@@ -3537,16 +3531,7 @@ class APstorageSocClient:
     ) -> dict[str, str]:
         """Query PCS version-related information via app-compatible requests."""
         combined: dict[str, str] = dict(cached_info or {})
-        identifiers = (
-            ("pcsVersion",)
-            if _version_info_is_complete_enough(cached_info)
-            else (
-                "pcsVersion",
-                "storageConfigInfo",
-                "getStorageConfigurationInfo",
-                "get/initializationInfo",
-            )
-        )
+        identifiers = ("pcsVersion",)
 
         for identifier in identifiers:
             try:
