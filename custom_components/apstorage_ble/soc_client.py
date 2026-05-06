@@ -1943,6 +1943,8 @@ class APstorageSocClient:
         self._version_query_last_attempt: dict[str, float] = {}
         self._alarm_cache: dict[str, dict[str, str]] = {}
         self._alarm_query_last_attempt: dict[str, float] = {}
+        # Set to True once a startup version query has been attempted so it is never retried.
+        self._startup_version_fetched = False
         # Persistent BLE session state (kept open between polls to avoid repeated DH handshakes).
         self._session_ble_client: BleakClient | None = None
         self._session_storage_id: str | None = None
@@ -3389,6 +3391,25 @@ class APstorageSocClient:
                     metrics.inverter_temperature,
                 )):
                     self._preferred_storage_id = storage_id
+                    # On the very first successful poll, fetch version info using the
+                    # already-open BLE connection and merge it into the returned metrics.
+                    # The flag is set before the query so a failure does not cause a retry.
+                    if not self._startup_version_fetched:
+                        self._startup_version_fetched = True
+                        try:
+                            version_info = await self._query_version_info(
+                                client,
+                                storage_id,
+                                system_id="",
+                            )
+                            if version_info:
+                                metrics.pcs_firmware_version = version_info.get("pcs_firmware_version") or metrics.pcs_firmware_version
+                                metrics.pcs_latest_firmware_version = version_info.get("pcs_latest_firmware_version") or metrics.pcs_latest_firmware_version
+                                metrics.pcs_software_version = version_info.get("pcs_software_version") or metrics.pcs_software_version
+                                metrics.pcs_hardware_version = version_info.get("pcs_hardware_version") or metrics.pcs_hardware_version
+                                _LOGGER.debug("Startup version info fetched: %s", version_info)
+                        except Exception as ver_err:  # noqa: BLE001
+                            _LOGGER.debug("Startup version query failed (non-fatal): %s", ver_err)
                     return metrics
                 _LOGGER.warning("Extraction succeeded but metrics are empty for storage_id=%s", storage_id)
             except Exception as err:  # noqa: BLE001

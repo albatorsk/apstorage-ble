@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.19.9 - 2026-05-06
+
+### Added
+- Firmware version info (current, latest, software, hardware) is now fetched once on the first successful poll after integration startup, using the already-open BLE connection. It is never queried again until the integration restarts, so it cannot interfere with normal SoC polling.
+
+### Notes
+- `manifest.json` version bumped to `0.19.9`.
+
 ## v0.19.8 - 2026-05-06
 
 ### Changed
