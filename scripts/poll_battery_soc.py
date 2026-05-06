@@ -8,9 +8,9 @@ state-machine confusion that causes repeated failures when connecting and
 disconnecting on every poll.
 
 Examples:
-  python3 scripts/poll_battery_soc.py --mac 48:CA:43:EB:C3:F9
-  python3 scripts/poll_battery_soc.py --mac 48:CA:43:EB:C3:F9 --interval 5 --count 20
-  python3 scripts/poll_battery_soc.py --mac 48:CA:43:EB:C3:F9 --interval 5 --count 20 --debug
+    python3 scripts/poll_battery_soc.py --mac AA:BB:CC:DD:EE:FF
+    python3 scripts/poll_battery_soc.py --mac AA:BB:CC:DD:EE:FF --interval 5 --count 20
+    python3 scripts/poll_battery_soc.py --mac AA:BB:CC:DD:EE:FF --interval 5 --count 20 --debug
 """
 
 from __future__ import annotations
