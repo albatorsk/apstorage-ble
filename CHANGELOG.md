@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.18.5 - 2026-05-06
+
+### Fixed
+- Improved BLE recovery under ESPHome proxy contention: reduced per-poll retry pressure and bounded query/connect timing to avoid long in-progress poll stalls.
+- Added explicit handling for proxy connection-slot exhaustion so poll attempts fail fast and retry on the next scheduled cycle.
+- Improved disconnect robustness with a longer timeout and one retry path to better release busy proxy sessions.
+
+### Notes
+- `manifest.json` version bumped to `0.18.5`.
+
 ## v0.18.4 - 2026-05-06
 
 ### Fixed
