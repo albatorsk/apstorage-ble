@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.18.4 - 2026-05-06
+
+### Fixed
+- Fixed BLE teardown when disabling the integration: in-flight polls are now cancelled during coordinator shutdown so ESPHome Bluetooth proxy connections are released promptly.
+- Added bounded shutdown wait for poll cancellation to avoid long unload hangs while still allowing clean disconnect handling.
+
+### Notes
+- `manifest.json` version bumped to `0.18.4`.
+
 ## v0.18.3 - 2026-05-06
 
 ### Fixed
