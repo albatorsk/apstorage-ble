@@ -128,6 +128,7 @@ ALARM_REFRESH_INTERVAL_SECONDS = 10 * 60
 DIAGNOSTIC_QUERY_TIMEOUT_SECONDS = 8
 DIAGNOSTIC_ENRICH_BUDGET_SECONDS = 4
 QUERY_ATTEMPT_TIMEOUT_SECONDS = 40
+DIAGNOSTIC_MIN_REMAINING_BUDGET_SECONDS = 1.5
 
 try:
     from Crypto.Cipher import AES
@@ -2078,11 +2079,13 @@ class APstorageSocClient:
                         await self._ensure_services_ready(client)
 
                     _LOGGER.debug("Connected to %s, querying metrics", ble_device.address)
+                    query_deadline = asyncio.get_running_loop().time() + QUERY_ATTEMPT_TIMEOUT_SECONDS
                     async with asyncio.timeout(QUERY_ATTEMPT_TIMEOUT_SECONDS):
                         result = await self._query_soc_once(
                             client,
                             ble_device,
                             device_name_hint=device_name_hint,
+                            query_deadline=query_deadline,
                         )
                     _LOGGER.debug(
                         "Query complete for %s: metrics=%s",
@@ -2264,79 +2267,12 @@ class APstorageSocClient:
                 return None
 
         metrics = _extract_metrics(parsed)
-        now = asyncio.get_running_loop().time()
-
-        version_info = self._version_cache.get(storage_id)
-        if _should_refresh_version_info(
-            version_info, now=now, last_attempt=self._version_query_last_attempt.get(storage_id, 0.0)
-        ):
-            self._version_query_last_attempt[storage_id] = now
-            try:
-                async with asyncio.timeout(DIAGNOSTIC_ENRICH_BUDGET_SECONDS):
-                    refreshed = await self._query_version_info(
-                        client, storage_id, system_id="", cached_info=version_info
-                    )
-            except TimeoutError:
-                refreshed = None
-                _LOGGER.debug(
-                    "[BLE] Version enrichment timed out for storage_id=%s; returning base metrics",
-                    storage_id,
-                )
-            except Exception as err:  # noqa: BLE001
-                refreshed = None
-                _LOGGER.debug(
-                    "[BLE] Version enrichment failed for storage_id=%s: %s",
-                    storage_id,
-                    err,
-                )
-
-            if refreshed:
-                version_info = {**(version_info or {}), **refreshed}
-                self._version_cache[storage_id] = version_info
-            elif version_info is None:
-                _LOGGER.debug("[BLE] No version info returned for storage_id=%s; will retry soon", storage_id)
-
-        if version_info:
-            for field_name, field_value in version_info.items():
-                setattr(metrics, field_name, field_value)
-
-        if (now - self._alarm_query_last_attempt.get(storage_id, 0.0)) >= ALARM_REFRESH_INTERVAL_SECONDS:
-            self._alarm_query_last_attempt[storage_id] = now
-            try:
-                async with asyncio.timeout(DIAGNOSTIC_ENRICH_BUDGET_SECONDS):
-                    alarm_info = await self._query_alarm_info(client, storage_id, system_id="")
-            except TimeoutError:
-                alarm_info = {}
-                _LOGGER.debug(
-                    "[BLE] Alarm enrichment timed out for storage_id=%s; returning base metrics",
-                    storage_id,
-                )
-            except Exception as err:  # noqa: BLE001
-                alarm_info = {}
-                _LOGGER.debug(
-                    "[BLE] Alarm enrichment failed for storage_id=%s: %s",
-                    storage_id,
-                    err,
-                )
-
-            if alarm_info:
-                self._alarm_cache[storage_id] = alarm_info
-                for field_name, field_value in alarm_info.items():
-                    setattr(metrics, field_name, field_value)
-        elif not any(
-            getattr(metrics, name) is not None
-            for name in ("battery_alarm", "pcs_alarm", "alarm_summary")
-        ):
-            for field_name, field_value in self._alarm_cache.get(storage_id, {}).items():
-                setattr(metrics, field_name, field_value)
 
         _LOGGER.debug(
-            "[BLE] Session query: soc=%s, power=%s, state=%s, fw=%s, alarm=%s",
+            "[BLE] Session query: soc=%s, power=%s, state=%s",
             metrics.battery_soc,
             metrics.battery_power,
             metrics.system_state,
-            metrics.pcs_firmware_version,
-            metrics.alarm_summary,
         )
 
         if any(value is not None for value in (
@@ -2355,12 +2291,6 @@ class APstorageSocClient:
             metrics.pv_current,
             metrics.pv_power,
             metrics.load_voltage,
-            metrics.load_current,
-            metrics.load_power,
-            metrics.inverter_temperature,
-            metrics.battery_alarm,
-            metrics.pcs_alarm,
-            metrics.alarm_summary,
             metrics.pcs_firmware_version,
             metrics.pcs_latest_firmware_version,
             metrics.pcs_hardware_version,
@@ -3376,6 +3306,7 @@ class APstorageSocClient:
         ble_device: BLEDevice,
         *,
         device_name_hint: str | None = None,
+        query_deadline: float | None = None,
     ) -> SocMetrics | None:
         """Execute full local-data query sequence."""
         # 1. Read device name
@@ -3429,93 +3360,12 @@ class APstorageSocClient:
 
                 metrics = _extract_metrics(parsed)
 
-                version_info = self._version_cache.get(storage_id)
-                last_attempt = self._version_query_last_attempt.get(storage_id, 0.0)
-                now = asyncio.get_running_loop().time()
-
-                if _should_refresh_version_info(version_info, now=now, last_attempt=last_attempt):
-                    self._version_query_last_attempt[storage_id] = now
-                    try:
-                        async with asyncio.timeout(DIAGNOSTIC_ENRICH_BUDGET_SECONDS):
-                            refreshed_version_info = await self._query_version_info(
-                                client,
-                                storage_id,
-                                system_id="",
-                                cached_info=version_info,
-                            )
-                    except TimeoutError:
-                        refreshed_version_info = None
-                        _LOGGER.debug(
-                            "Version enrichment timed out for storage_id=%s; returning base metrics",
-                            storage_id,
-                        )
-                    except Exception as err:  # noqa: BLE001
-                        refreshed_version_info = None
-                        _LOGGER.debug(
-                            "Version enrichment failed for storage_id=%s: %s",
-                            storage_id,
-                            err,
-                        )
-
-                    if refreshed_version_info:
-                        if version_info:
-                            version_info = {**version_info, **refreshed_version_info}
-                        else:
-                            version_info = refreshed_version_info
-                        self._version_cache[storage_id] = version_info
-                    elif version_info is None:
-                        _LOGGER.debug(
-                            "No version info returned for storage_id=%s; will retry soon",
-                            storage_id,
-                        )
-                    else:
-                        _LOGGER.debug(
-                            "Version refresh returned no new data for storage_id=%s; keeping cached values",
-                            storage_id,
-                        )
-
-                if version_info:
-                    for field_name, field_value in version_info.items():
-                        setattr(metrics, field_name, field_value)
-
-                if (now - self._alarm_query_last_attempt.get(storage_id, 0.0)) >= ALARM_REFRESH_INTERVAL_SECONDS:
-                    self._alarm_query_last_attempt[storage_id] = now
-                    try:
-                        async with asyncio.timeout(DIAGNOSTIC_ENRICH_BUDGET_SECONDS):
-                            alarm_info = await self._query_alarm_info(client, storage_id, system_id="")
-                    except TimeoutError:
-                        alarm_info = {}
-                        _LOGGER.debug(
-                            "Alarm enrichment timed out for storage_id=%s; returning base metrics",
-                            storage_id,
-                        )
-                    except Exception as err:  # noqa: BLE001
-                        alarm_info = {}
-                        _LOGGER.debug(
-                            "Alarm enrichment failed for storage_id=%s: %s",
-                            storage_id,
-                            err,
-                        )
-
-                    if alarm_info:
-                        self._alarm_cache[storage_id] = alarm_info
-                        for field_name, field_value in alarm_info.items():
-                            setattr(metrics, field_name, field_value)
-                elif not any(
-                    getattr(metrics, name) is not None
-                    for name in ("battery_alarm", "pcs_alarm", "alarm_summary")
-                ):
-                    for field_name, field_value in self._alarm_cache.get(storage_id, {}).items():
-                        setattr(metrics, field_name, field_value)
-
                 _LOGGER.debug(
-                    "Extracted metrics for storage_id=%s: soc=%s, power=%s, state=%s, fw=%s, alarm=%s",
+                    "Extracted metrics for storage_id=%s: soc=%s, power=%s, state=%s",
                     storage_id,
                     metrics.battery_soc,
                     metrics.battery_power,
                     metrics.system_state,
-                    metrics.pcs_firmware_version,
-                    metrics.alarm_summary,
                 )
                 # Return if we extracted any useful metric
                 if any(value is not None for value in (
@@ -3537,12 +3387,6 @@ class APstorageSocClient:
                     metrics.load_current,
                     metrics.load_power,
                     metrics.inverter_temperature,
-                    metrics.battery_alarm,
-                    metrics.pcs_alarm,
-                    metrics.alarm_summary,
-                    metrics.pcs_firmware_version,
-                    metrics.pcs_latest_firmware_version,
-                    metrics.pcs_hardware_version,
                 )):
                     self._preferred_storage_id = storage_id
                     return metrics
@@ -3552,6 +3396,20 @@ class APstorageSocClient:
 
         _LOGGER.warning("No usable metrics found for storage_id candidates: %s", storage_ids)
         return None
+
+    def _diagnostic_timeout_seconds(self, query_deadline: float | None) -> float | None:
+        """Return a safe timeout for best-effort diagnostics within the active query budget."""
+        if query_deadline is None:
+            return DIAGNOSTIC_ENRICH_BUDGET_SECONDS
+
+        remaining = query_deadline - asyncio.get_running_loop().time()
+        if remaining <= DIAGNOSTIC_MIN_REMAINING_BUDGET_SECONDS:
+            return None
+
+        return min(
+            DIAGNOSTIC_ENRICH_BUDGET_SECONDS,
+            max(remaining - DIAGNOSTIC_MIN_REMAINING_BUDGET_SECONDS, 0.1),
+        )
 
     async def _establish_blufi_session(self, client: BleakClient) -> None:
         """Perform Blufi DH and security setup."""
@@ -3747,21 +3605,34 @@ class APstorageSocClient:
         system_id: str = "",
     ) -> dict[str, str]:
         """Query active PCS and battery alarm information."""
-        try:
-            response = await self._send_property_request(
-                client,
-                method="get",
-                identifier="get/deviceAPpcsAlarmInfo",
-                storage_id=storage_id,
-                params_extra={},
-                system_id=system_id,
-                response_timeout_seconds=DIAGNOSTIC_QUERY_TIMEOUT_SECONDS,
-            )
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.debug("Alarm query failed for %s: %s", storage_id, err)
-            return {}
+        identifiers = (
+            "getDeviceDetailStorageAlarmInformation",
+            "getDeviceDetailBatteryAlarmInformation",
+            "getDeviceDetailInverterAlarmInformation",
+            "get/deviceAPpcsAlarmInfo",
+        )
 
-        return _extract_alarm_info(response)
+        combined: dict[str, str] = {}
+        for identifier in identifiers:
+            try:
+                response = await self._send_property_request(
+                    client,
+                    method="get",
+                    identifier=identifier,
+                    storage_id=storage_id,
+                    params_extra={},
+                    system_id=system_id,
+                    response_timeout_seconds=DIAGNOSTIC_QUERY_TIMEOUT_SECONDS,
+                )
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.debug("Alarm query %s failed for %s: %s", identifier, storage_id, err)
+                continue
+
+            extracted = _extract_alarm_info(response)
+            if extracted:
+                combined.update(extracted)
+
+        return combined
 
     async def _send_property_request(
         self,
