@@ -1,15 +1,5 @@
 # Changelog
 
-## v0.19.16 - 2026-05-06
-
-### Fixed
-- Harden version-only BLE requests without touching telemetry polling behavior.
-- Increase version query timeout from a short diagnostic timeout to the full BLE response timeout used by stable telemetry requests.
-- Try both known app identifier variants for firmware and config version lookups: `pcsVersion`/`get/pcsVersion` and `storageConfigInfo`/`getStorageConfigurationInfo`.
-
-### Notes
-- `manifest.json` version bumped to `0.19.16`.
-
 ## v0.19.15 - 2026-05-06
 
 ### Fixed
