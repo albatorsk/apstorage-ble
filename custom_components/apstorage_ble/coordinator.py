@@ -88,6 +88,10 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._consecutive_poll_failures = 0
         self._shutdown = False
         self._active_poll_task: asyncio.Task[Any] | None = None
+        # Persistent sessions improve latency when stable, but shared proxy
+        # environments can invalidate long-lived connections unpredictably.
+        # Automatically downgrade to one-shot polling after the first stall.
+        self._persistent_session_enabled = True
         # Most-recent successfully parsed data; also exposed as coordinator.data
         self.data: PCSData | None = None
 
@@ -253,32 +257,39 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
 
                 try:
                     async with asyncio.timeout(POLL_WATCHDOG_TIMEOUT_SECONDS):
-                        try:
-                            # Open a persistent BLE session if not already connected.
-                            # The DH handshake is only performed on (re)connect, not every poll.
-                            if not self._soc_client.session_open:
-                                _LOGGER.debug(
-                                    "[%s] Opening persistent BLE session to %s",
-                                    self._name,
-                                    ble_device.address,
-                                )
-                                await self._soc_client.async_open_session(
-                                    ble_device, device_name_hint=self._name
-                                )
-                                _LOGGER.debug("[%s] BLE session established", self._name)
+                        if self._persistent_session_enabled:
+                            try:
+                                # Open a persistent BLE session if not already connected.
+                                # The DH handshake is only performed on (re)connect, not every poll.
+                                if not self._soc_client.session_open:
+                                    _LOGGER.debug(
+                                        "[%s] Opening persistent BLE session to %s",
+                                        self._name,
+                                        ble_device.address,
+                                    )
+                                    await self._soc_client.async_open_session(
+                                        ble_device, device_name_hint=self._name
+                                    )
+                                    _LOGGER.debug("[%s] BLE session established", self._name)
 
-                            metrics = await self._soc_client.async_query_session()
-                        except Exception as session_err:  # noqa: BLE001
-                            # Shared ESPHome proxy environments can drop long-lived
-                            # sessions unpredictably. Fall back to a one-shot query so
-                            # this poll cycle can still return data.
-                            _LOGGER.warning(
-                                "[%s] Persistent session failed (%s: %s); falling back to one-shot poll",
-                                self._name,
-                                type(session_err).__name__,
-                                session_err,
-                            )
-                            await self._soc_client.async_close_session()
+                                metrics = await self._soc_client.async_query_session()
+                            except Exception as session_err:  # noqa: BLE001
+                                # If persistent sessions are unstable in this runtime,
+                                # disable them and continue with one-shot polling.
+                                _LOGGER.warning(
+                                    "[%s] Persistent session failed (%s: %s); disabling persistent mode for this runtime",
+                                    self._name,
+                                    type(session_err).__name__,
+                                    session_err,
+                                )
+                                self._persistent_session_enabled = False
+                                await self._soc_client.async_close_session()
+                                metrics = await self._soc_client.async_query_metrics(
+                                    ble_device,
+                                    device_name_hint=self._name,
+                                    max_retries=1,
+                                )
+                        else:
                             metrics = await self._soc_client.async_query_metrics(
                                 ble_device,
                                 device_name_hint=self._name,
@@ -291,6 +302,12 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                         self._name,
                         POLL_WATCHDOG_TIMEOUT_SECONDS,
                     )
+                    if self._persistent_session_enabled:
+                        _LOGGER.warning(
+                            "[%s] Disabling persistent BLE mode after watchdog timeout",
+                            self._name,
+                        )
+                        self._persistent_session_enabled = False
                     await self._soc_client.async_close_session()
                     if self.data is not None and self._consecutive_poll_failures >= SOC_STALE_AFTER_FAILURES:
                         self.data.battery_soc = None
