@@ -40,6 +40,7 @@ SOC_STALE_AFTER_FAILURES = 3
 SHUTDOWN_WAIT_SECONDS = 10
 DEFAULT_PERSISTENT_SESSION_ENABLED = True
 ONE_SHOT_MAX_RETRIES = 2
+VERSION_RETRY_INTERVAL_SECONDS = 300
 
 
 class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None]):
@@ -92,6 +93,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._active_poll_task: asyncio.Task[Any] | None = None
         self._startup_version_task: asyncio.Task[Any] | None = None
         self._startup_version_fetch_attempted = False
+        self._last_version_retry_at: datetime | None = None
         self._last_successful_poll_at: datetime | None = None
         # Persistent sessions improve latency when stable, but shared proxy
         # environments can invalidate long-lived connections unpredictably.
@@ -226,6 +228,20 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             self.data.pcs_software_version = version_info["pcs_software_version"]
         if version_info.get("pcs_hardware_version") is not None:
             self.data.pcs_hardware_version = version_info["pcs_hardware_version"]
+
+    def _version_info_missing(self) -> bool:
+        """Return True while any core version field is still missing."""
+        if self.data is None:
+            return True
+
+        return any(
+            not value
+            for value in (
+                self.data.pcs_firmware_version,
+                self.data.pcs_latest_firmware_version,
+                self.data.pcs_hardware_version,
+            )
+        )
 
     async def _async_fetch_startup_version_info(self) -> None:
         """Fetch firmware version once at startup, then prepare persistent polling."""
@@ -545,6 +561,34 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                         self.data.battery_charged_energy = float(metrics.battery_charged_energy)
                     if metrics.battery_discharged_energy is not None:
                         self.data.battery_discharged_energy = float(metrics.battery_discharged_energy)
+
+                    # If startup version fetch failed or raced, keep retrying over the
+                    # same persistent session until all version fields are populated.
+                    now = datetime.now(timezone.utc)
+                    due_for_retry = (
+                        self._last_version_retry_at is None
+                        or (now - self._last_version_retry_at).total_seconds() >= VERSION_RETRY_INTERVAL_SECONDS
+                    )
+                    if (
+                        due_for_retry
+                        and self._persistent_session_enabled
+                        and self._soc_client.session_open
+                        and self._version_info_missing()
+                    ):
+                        self._last_version_retry_at = now
+                        try:
+                            version_info = await self._soc_client.async_query_session_version_info()
+                        except Exception as err:  # noqa: BLE001
+                            _LOGGER.debug(
+                                "[%s] Poll-path version retry failed (non-fatal): %s: %s",
+                                self._name,
+                                type(err).__name__,
+                                err,
+                            )
+                        else:
+                            if version_info:
+                                self._apply_version_info(version_info)
+                                _LOGGER.debug("[%s] Poll-path version info fetched: %s", self._name, version_info)
 
                 # Push the update to all subscribed entities.
                 self.async_update_listeners()
