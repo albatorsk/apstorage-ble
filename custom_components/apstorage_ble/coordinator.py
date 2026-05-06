@@ -285,6 +285,25 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                         self.async_update_listeners()
                     self._last_service_info = None
                     return
+                except Exception as err:  # noqa: BLE001
+                    self._consecutive_poll_failures += 1
+                    _LOGGER.warning(
+                        "[%s] Poll failed with %s: %s; closing BLE session",
+                        self._name,
+                        type(err).__name__,
+                        err,
+                    )
+                    await self._soc_client.async_close_session()
+                    if self.data is not None and self._consecutive_poll_failures >= SOC_STALE_AFTER_FAILURES:
+                        self.data.battery_soc = None
+                        _LOGGER.debug(
+                            "[%s] Marked battery SoC unknown after %d consecutive poll failures",
+                            self._name,
+                            self._consecutive_poll_failures,
+                        )
+                        self.async_update_listeners()
+                    self._last_service_info = None
+                    return
 
                 if metrics is None:
                     self._consecutive_poll_failures += 1
