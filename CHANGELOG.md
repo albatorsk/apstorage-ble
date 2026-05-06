@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.19.12 - 2026-05-06
+
+### Changed
+- Fetch firmware version information once in a separate startup task instead of inside the normal telemetry poll path.
+- Enable persistent BLE polling by default for steady-state telemetry after startup.
+- Reconnect persistent BLE sessions on failure instead of permanently falling back to one-shot polling for the rest of the runtime.
+
+### Notes
+- `manifest.json` version bumped to `0.19.12`.
+
 ## v0.19.11 - 2026-05-06
 
 ### Fixed

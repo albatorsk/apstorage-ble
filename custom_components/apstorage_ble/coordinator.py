@@ -38,7 +38,7 @@ POLL_WATCHDOG_TIMEOUT_SECONDS = 120
 # in history when BLE polling is temporarily unavailable.
 SOC_STALE_AFTER_FAILURES = 3
 SHUTDOWN_WAIT_SECONDS = 10
-DEFAULT_PERSISTENT_SESSION_ENABLED = False
+DEFAULT_PERSISTENT_SESSION_ENABLED = True
 ONE_SHOT_MAX_RETRIES = 2
 
 
@@ -90,11 +90,13 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._consecutive_poll_failures = 0
         self._shutdown = False
         self._active_poll_task: asyncio.Task[Any] | None = None
+        self._startup_version_task: asyncio.Task[Any] | None = None
+        self._startup_version_fetch_attempted = False
         self._last_successful_poll_at: datetime | None = None
         # Persistent sessions improve latency when stable, but shared proxy
         # environments can invalidate long-lived connections unpredictably.
-        # Default to one-shot polling and only use persistent mode when
-        # explicitly enabled via code defaults.
+        # Keep persistent mode enabled by default and reconnect the session
+        # when needed instead of permanently falling back to one-shot polling.
         self._persistent_session_enabled = DEFAULT_PERSISTENT_SESSION_ENABLED
         # Most-recent successfully parsed data; also exposed as coordinator.data
         self.data: PCSData | None = None
@@ -119,11 +121,20 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         return age <= timedelta(seconds=grace_seconds)
 
     async def async_initialize(self) -> None:
-        """No-op; retained for caller compatibility."""
+        """Schedule one-time startup version discovery outside the poll path."""
+        if self._startup_version_task is None:
+            self._startup_version_task = self.hass.async_create_task(
+                self._async_fetch_startup_version_info()
+            )
 
     async def async_shutdown(self) -> None:
         """Block new BLE activity once the config entry is unloading."""
         self._shutdown = True
+        startup_task = self._startup_version_task
+        if startup_task is not None and not startup_task.done():
+            startup_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await startup_task
         task = self._active_poll_task
         if task is not None and not task.done():
             _LOGGER.debug("[%s] Cancelling in-flight poll during shutdown", self._name)
@@ -181,6 +192,91 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             return False
         elapsed = (datetime.now(timezone.utc) - self._field_write_timestamps[field_name]).total_seconds()
         return elapsed < grace_period_seconds
+
+    def _resolve_ble_device(self) -> Any | None:
+        """Resolve the best currently connectable BLE device for this coordinator."""
+        service_info: BluetoothServiceInfoBleak | None = self._last_service_info
+
+        if service_info is not None and service_info.connectable:
+            return service_info.device
+
+        if service_info is not None:
+            return bluetooth.async_ble_device_from_address(
+                self.hass,
+                service_info.device.address,
+                connectable=True,
+            )
+
+        return bluetooth.async_ble_device_from_address(
+            self.hass,
+            self._address,
+            connectable=True,
+        )
+
+    def _apply_version_info(self, version_info: dict[str, str]) -> None:
+        """Merge one-time version info into coordinator data."""
+        if self.data is None:
+            self.data = PCSData()
+
+        if version_info.get("pcs_firmware_version") is not None:
+            self.data.pcs_firmware_version = version_info["pcs_firmware_version"]
+        if version_info.get("pcs_latest_firmware_version") is not None:
+            self.data.pcs_latest_firmware_version = version_info["pcs_latest_firmware_version"]
+        if version_info.get("pcs_software_version") is not None:
+            self.data.pcs_software_version = version_info["pcs_software_version"]
+        if version_info.get("pcs_hardware_version") is not None:
+            self.data.pcs_hardware_version = version_info["pcs_hardware_version"]
+
+    async def _async_fetch_startup_version_info(self) -> None:
+        """Fetch firmware version once at startup, then prepare persistent polling."""
+        if self._shutdown or self._startup_version_fetch_attempted:
+            return
+
+        self._startup_version_fetch_attempted = True
+
+        async with self._poll_lock:
+            if self._shutdown:
+                return
+
+            ble_device = self._resolve_ble_device()
+            if ble_device is None:
+                _LOGGER.debug("[%s] Startup version fetch skipped; no connectable BLE device", self._name)
+                return
+
+            version_info: dict[str, str] = {}
+            try:
+                async with asyncio.timeout(POLL_WATCHDOG_TIMEOUT_SECONDS):
+                    version_info = await self._soc_client.async_query_version_info_once(
+                        ble_device,
+                        device_name_hint=self._name,
+                    )
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.debug(
+                    "[%s] Startup version fetch failed (non-fatal): %s: %s",
+                    self._name,
+                    type(err).__name__,
+                    err,
+                )
+
+            if version_info:
+                self._apply_version_info(version_info)
+                self.async_update_listeners()
+                _LOGGER.debug("[%s] Startup version info fetched: %s", self._name, version_info)
+
+            if self._persistent_session_enabled and not self._soc_client.session_open:
+                try:
+                    await self._soc_client.async_open_session(
+                        ble_device,
+                        device_name_hint=self._name,
+                    )
+                    _LOGGER.debug("[%s] Startup persistent BLE session established", self._name)
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.debug(
+                        "[%s] Startup persistent session open failed; will retry on next poll (%s: %s)",
+                        self._name,
+                        type(err).__name__,
+                        err,
+                    )
 
     # ------------------------------------------------------------------
     # ActiveBluetoothDataUpdateCoordinator callbacks
@@ -247,24 +343,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 self._active_poll_task = None
                 return
             try:
-                service_info: BluetoothServiceInfoBleak | None = self._last_service_info
-
-                # Prefer the connectable device from the most recent advertisement;
-                # fall back to HA's current best connectable device by configured MAC.
-                if service_info is not None and service_info.connectable:
-                    ble_device = service_info.device
-                elif service_info is not None:
-                    ble_device = bluetooth.async_ble_device_from_address(
-                        self.hass,
-                        service_info.device.address,
-                        connectable=True,
-                    )
-                else:
-                    ble_device = bluetooth.async_ble_device_from_address(
-                        self.hass,
-                        self._address,
-                        connectable=True,
-                    )
+                ble_device = self._resolve_ble_device()
 
                 if ble_device is None:
                     _LOGGER.warning(
@@ -297,15 +376,12 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
 
                                 metrics = await self._soc_client.async_query_session()
                             except Exception as session_err:  # noqa: BLE001
-                                # If persistent sessions are unstable in this runtime,
-                                # disable them and continue with one-shot polling.
                                 _LOGGER.warning(
-                                    "[%s] Persistent session failed (%s: %s); disabling persistent mode for this runtime",
+                                    "[%s] Persistent session failed (%s: %s); reconnecting session and falling back to one-shot for this poll",
                                     self._name,
                                     type(session_err).__name__,
                                     session_err,
                                 )
-                                self._persistent_session_enabled = False
                                 await self._soc_client.async_close_session()
                                 metrics = await self._soc_client.async_query_metrics(
                                     ble_device,
@@ -325,12 +401,6 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                         self._name,
                         POLL_WATCHDOG_TIMEOUT_SECONDS,
                     )
-                    if self._persistent_session_enabled:
-                        _LOGGER.warning(
-                            "[%s] Disabling persistent BLE mode after watchdog timeout",
-                            self._name,
-                        )
-                        self._persistent_session_enabled = False
                     await self._soc_client.async_close_session()
                     if self.data is not None and self._consecutive_poll_failures >= SOC_STALE_AFTER_FAILURES:
                         self.data.battery_soc = None

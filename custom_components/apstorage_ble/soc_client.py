@@ -1998,6 +1998,84 @@ class APstorageSocClient:
             return None
         return int(metrics.battery_soc)
 
+    async def async_query_version_info_once(
+        self,
+        ble_device: BLEDevice,
+        *,
+        device_name_hint: str | None = None,
+    ) -> dict[str, str]:
+        """Fetch firmware version info once over a dedicated short-lived BLE session."""
+        if not HAS_CRYPTO:
+            _LOGGER.error("pycryptodome required; install with: pip install pycryptodome")
+            return {}
+
+        client: BleakClient | None = None
+        try:
+            self._reset_blufi_session_state()
+            async with asyncio.timeout(CONNECT_TIMEOUT_SECONDS):
+                client = await establish_connection(
+                    BleakClientWithServiceCache,
+                    ble_device,
+                    ble_device.address,
+                    max_attempts=3,
+                    use_services_cache=False,
+                )
+                await self._ensure_services_ready(client)
+
+                try:
+                    name_raw = await client.read_gatt_char(DEVICE_NAME_CHAR)
+                    device_name = bytes(name_raw).decode("utf-8", errors="ignore").strip("\x00\r\n ")
+                except Exception:  # noqa: BLE001
+                    device_name = ""
+
+                if not device_name:
+                    device_name = device_name_hint or ""
+                if not device_name:
+                    device_name = ble_device.name or ""
+
+                storage_ids = _derive_storage_id_candidates(
+                    self._preferred_storage_id,
+                    device_name,
+                    device_name_hint,
+                    ble_device.name,
+                )
+                if not storage_ids:
+                    _LOGGER.warning(
+                        "Could not derive storage ID for version query from device name: %s",
+                        device_name,
+                    )
+                    return {}
+
+                await self._establish_blufi_session(client)
+
+                for storage_id in storage_ids:
+                    try:
+                        version_info = await self._query_version_info(client, storage_id, system_id="")
+                    except Exception as err:  # noqa: BLE001
+                        _LOGGER.debug(
+                            "Version query failed for storage_id=%s on %s: %s",
+                            storage_id,
+                            ble_device.address,
+                            err,
+                        )
+                        continue
+
+                    if version_info:
+                        now = asyncio.get_running_loop().time()
+                        self._preferred_storage_id = storage_id
+                        self._version_cache[storage_id] = dict(version_info)
+                        self._version_query_last_attempt[storage_id] = now
+                        return version_info
+
+            return {}
+        finally:
+            if client is not None and client.is_connected:
+                try:
+                    await _safe_disconnect(client)
+                except Exception:  # noqa: BLE001
+                    pass
+            self._reset_blufi_session_state()
+
     async def async_open_session(
         self,
         ble_device: BLEDevice,
