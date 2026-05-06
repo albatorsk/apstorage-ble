@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.19.2 - 2026-05-06
+
+### Fixed
+- Improved resilience when persistent BLE sessions become unstable on shared ESPHome proxy environments: polling now falls back to a one-shot connect/query/disconnect cycle in the same poll cycle instead of failing the entire update.
+- This specifically addresses repeated `Poll watchdog timed out` and `BleakError: Not connected` loops where entities could remain `Unknown` for extended periods.
+
+### Notes
+- `manifest.json` version bumped to `0.19.2`.
+
 ## v0.19.1 - 2026-05-06
 
 ### Fixed
