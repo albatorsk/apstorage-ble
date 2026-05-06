@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.19.15 - 2026-05-06
+
+### Fixed
+- Restore missing JSON-like payload parsing helper in version extraction so version responses are decoded instead of failing silently.
+- Expand version response traversal to include app-style nested containers (`reply`, `replyData`, `payload`) in addition to `data` and `messagedata`.
+- Add poll-path session retry for version discovery every 5 minutes while firmware/latest/hardware fields are still missing, so version entities can recover even if startup fetch raced or failed.
+
+### Notes
+- `manifest.json` version bumped to `0.19.15`.
+
 ## v0.19.14 - 2026-05-06
 
 ### Fixed

@@ -421,6 +421,38 @@ def _version_info_is_complete_enough(info: dict[str, str] | None) -> bool:
     return current is not None and latest is not None and hardware is not None
 
 
+def _parse_jsonish(value: Any) -> Any:
+    """Best-effort decode for nested JSON-like payload fragments.
+
+    Some responses embed JSON objects as strings inside top-level fields.
+    """
+    if value is None:
+        return None
+
+    if isinstance(value, (dict, list)):
+        return value
+
+    if isinstance(value, bytes):
+        text = value.decode("utf-8", errors="ignore").strip()
+    elif isinstance(value, str):
+        text = value.strip()
+    else:
+        return value
+
+    if not text:
+        return value
+
+    if (text.startswith("{") and text.endswith("}")) or (
+        text.startswith("[") and text.endswith("]")
+    ):
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return value
+
+    return value
+
+
 def _extract_version_info(parsed: Any) -> dict[str, str]:
     """Extract PCS version details from a version/config response payload."""
     if not isinstance(parsed, dict):
@@ -439,7 +471,16 @@ def _extract_version_info(parsed: Any) -> dict[str, str]:
 
         if isinstance(candidate, dict):
             roots.append(candidate)
-            for key in ("messagedata", "messageData", "data", "result", "message"):
+            for key in (
+                "messagedata",
+                "messageData",
+                "data",
+                "result",
+                "message",
+                "reply",
+                "replyData",
+                "payload",
+            ):
                 if key in candidate:
                     queue.append(candidate.get(key))
         elif isinstance(candidate, list):
