@@ -58,6 +58,7 @@ PACKET_WRITE_DELAY_SECONDS = 0.05
 POST_SECURITY_SETTLE_DELAY_SECONDS = 0.10
 VERSION_DISCOVERY_RETRY_SECONDS = 30
 VERSION_REFRESH_INTERVAL_SECONDS = 60 * 60
+ALARM_REFRESH_INTERVAL_SECONDS = 10 * 60
 DIAGNOSTIC_QUERY_TIMEOUT_SECONDS = 8
 QUERY_ATTEMPT_TIMEOUT_SECONDS = 40
 
@@ -2166,7 +2167,7 @@ class APstorageSocClient:
             for field_name, field_value in version_info.items():
                 setattr(metrics, field_name, field_value)
 
-        if (now - self._alarm_query_last_attempt.get(storage_id, 0.0)) >= 60:
+        if (now - self._alarm_query_last_attempt.get(storage_id, 0.0)) >= ALARM_REFRESH_INTERVAL_SECONDS:
             self._alarm_query_last_attempt[storage_id] = now
             alarm_info = await self._query_alarm_info(client, storage_id, system_id="")
             if alarm_info:
@@ -3312,7 +3313,7 @@ class APstorageSocClient:
                     for field_name, field_value in version_info.items():
                         setattr(metrics, field_name, field_value)
 
-                if (now - self._alarm_query_last_attempt.get(storage_id, 0.0)) >= 60:
+                if (now - self._alarm_query_last_attempt.get(storage_id, 0.0)) >= ALARM_REFRESH_INTERVAL_SECONDS:
                     self._alarm_query_last_attempt[storage_id] = now
                     alarm_info = await self._query_alarm_info(client, storage_id, system_id="")
                     if alarm_info:
