@@ -168,7 +168,7 @@ class APstorageSystemModeSelect(
     @property
     def available(self) -> bool:
         """Return availability from Bluetooth coordinator reachability."""
-        return self.coordinator.available
+        return self.coordinator.runtime_available
 
     @property
     def current_option(self) -> str | None:
@@ -274,7 +274,7 @@ class APstorageBackupSocSelect(
     @property
     def available(self) -> bool:
         """Only available when connected and mode supports backup SOC."""
-        if not self.coordinator.available:
+        if not self.coordinator.runtime_available:
             return False
         return self._current_mode_code() in {"1", "3"}
 
@@ -354,7 +354,7 @@ class APstorageBuzzerModeSelect(
     @property
     def available(self) -> bool:
         """Return availability from Bluetooth coordinator reachability."""
-        return self.coordinator.available
+        return self.coordinator.runtime_available
 
     @property
     def current_option(self) -> str | None:
