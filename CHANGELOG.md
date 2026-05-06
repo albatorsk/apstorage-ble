@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.19.1 - 2026-05-06
+
+### Fixed
+- Fixed a persistent-session regression where non-timeout BLE exceptions during polling could escape `_async_poll()` and leave entities stuck as `Unknown`.
+- Poll failures now consistently close the active BLE session and recover on the next cycle.
+
+### Changed
+- Reduced alarm endpoint query frequency from once per minute to once every 10 minutes to lower timeout noise and reduce pressure on the BLE session.
+
+### Notes
+- `manifest.json` version bumped to `0.19.1`.
+
 ## v0.19.0 - 2026-05-06
 
 ### Changed
