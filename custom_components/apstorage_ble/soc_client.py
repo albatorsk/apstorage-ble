@@ -124,7 +124,7 @@ PACKET_WRITE_DELAY_SECONDS = 0.05
 POST_SECURITY_SETTLE_DELAY_SECONDS = 0.10
 VERSION_DISCOVERY_RETRY_SECONDS = 30
 VERSION_REFRESH_INTERVAL_SECONDS = 60 * 60
-DIAGNOSTIC_QUERY_TIMEOUT_SECONDS = 8
+DIAGNOSTIC_QUERY_TIMEOUT_SECONDS = RESPONSE_TIMEOUT_SECONDS
 DIAGNOSTIC_ENRICH_BUDGET_SECONDS = 4
 QUERY_ATTEMPT_TIMEOUT_SECONDS = 40
 DIAGNOSTIC_MIN_REMAINING_BUDGET_SECONDS = 1.5
@@ -3538,9 +3538,15 @@ class APstorageSocClient:
         """Query PCS version-related information via app-compatible requests."""
         combined: dict[str, str] = dict(cached_info or {})
         identifiers = (
-            ("pcsVersion",)
+            ("pcsVersion", "get/pcsVersion")
             if _version_info_is_complete_enough(cached_info)
-            else ("pcsVersion", "storageConfigInfo", "get/initializationInfo")
+            else (
+                "pcsVersion",
+                "get/pcsVersion",
+                "storageConfigInfo",
+                "getStorageConfigurationInfo",
+                "get/initializationInfo",
+            )
         )
 
         for identifier in identifiers:
