@@ -179,24 +179,6 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         value_fn=lambda d: d.battery_flow_state,
     ),
     APstorageSensorDescription(
-        key="alarm_summary",
-        name="Alarm Summary",
-        entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda d: d.alarm_summary,
-    ),
-    APstorageSensorDescription(
-        key="pcs_alarm",
-        name="PCS Alarm",
-        entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda d: d.pcs_alarm,
-    ),
-    APstorageSensorDescription(
-        key="battery_alarm",
-        name="Battery Alarm",
-        entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda d: d.battery_alarm,
-    ),
-    APstorageSensorDescription(
         key="co2_reduction",
         name="CO2 Reduction",
         native_unit_of_measurement=UnitOfMass.KILOGRAMS,
@@ -287,6 +269,12 @@ async def _async_migrate_sensor_unique_ids(hass: HomeAssistant, entry: ConfigEnt
         f"{address}-battery_power": f"{address}-battery_discharging_power",
     }
 
+    removed_sensor_unique_ids = {
+        f"{address}-alarm_summary",
+        f"{address}-pcs_alarm",
+        f"{address}-battery_alarm",
+    }
+
     for old_unique_id, new_unique_id in migrations.items():
         entity_id = entity_registry.async_get_entity_id("sensor", DOMAIN, old_unique_id)
         new_entity_id = entity_registry.async_get_entity_id("sensor", DOMAIN, new_unique_id)
@@ -297,6 +285,12 @@ async def _async_migrate_sensor_unique_ids(hass: HomeAssistant, entry: ConfigEnt
         elif entity_id:
             entity_registry.async_update_entity(entity_id, new_unique_id=new_unique_id)
             _LOGGER.debug("Migrated sensor unique ID from %s to %s", old_unique_id, new_unique_id)
+
+    for unique_id in removed_sensor_unique_ids:
+        entity_id = entity_registry.async_get_entity_id("sensor", DOMAIN, unique_id)
+        if entity_id:
+            entity_registry.async_remove(entity_id)
+            _LOGGER.debug("Removed deprecated alarm sensor entity with unique ID %s", unique_id)
 
 
 async def async_setup_entry(
@@ -386,8 +380,6 @@ class APstorageSensor(
             if value == "Discharging":
                 return "mdi:battery-arrow-down"
             return "mdi:battery"
-        if key in {"alarm_summary", "pcs_alarm", "battery_alarm"}:
-            return "mdi:alert-circle" if value and value != "Clear" else "mdi:check-circle-outline"
         return None
 
     @property
