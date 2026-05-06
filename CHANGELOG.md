@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.18.3 - 2026-05-06
+
+### Fixed
+- Fixed integration becoming unresponsive after Home Assistant restart: BLE services cache is now cleared on the first connection attempt to avoid stale cache entries that cause connection timeouts.
+- Improved error logging: BLE connection failures now show exception type and detailed error message instead of empty error strings, making debugging easier.
+- Added BlueZ stack stabilization delay before first BLE connection attempt to improve reliability immediately after Home Assistant startup.
+
+### Notes
+- `manifest.json` version bumped to `0.18.3`.
+
 ## v0.18.2 - 2026-05-04
 
 ### Fixed
