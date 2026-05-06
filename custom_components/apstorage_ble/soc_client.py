@@ -48,16 +48,18 @@ DEVICE_NAME_CHAR = "00002a00-0000-1000-8000-00805f9b34fb"
 # Keep this aligned with the known-good standalone script defaults.
 BLUFI_MTU = 20
 
-# Timeouts and BLE pacing tuned to the known-good standalone probe flow.
-CONNECT_TIMEOUT_SECONDS = 90
+# Timeouts and BLE pacing tuned for shared ESPHome proxy environments.
+# Keep connect bounded so one stuck attempt cannot monopolize the poll window.
+CONNECT_TIMEOUT_SECONDS = 45
 RESPONSE_TIMEOUT_SECONDS = 30
-DISCONNECT_TIMEOUT_SECONDS = 5
+DISCONNECT_TIMEOUT_SECONDS = 15
 NOTIFY_SETTLE_DELAY_SECONDS = 0.10
 PACKET_WRITE_DELAY_SECONDS = 0.05
 POST_SECURITY_SETTLE_DELAY_SECONDS = 0.10
 VERSION_DISCOVERY_RETRY_SECONDS = 30
 VERSION_REFRESH_INTERVAL_SECONDS = 60 * 60
 DIAGNOSTIC_QUERY_TIMEOUT_SECONDS = 8
+QUERY_ATTEMPT_TIMEOUT_SECONDS = 40
 
 try:
     from Crypto.Cipher import AES
@@ -300,6 +302,12 @@ async def _safe_disconnect(client: BleakClient) -> None:
             await client.disconnect()
     except TimeoutError:
         _LOGGER.warning("BLE disconnect timed out after %.1fs", DISCONNECT_TIMEOUT_SECONDS)
+        try:
+            # Retry once with a short grace period; ESPHome proxy disconnect can lag.
+            async with asyncio.timeout(3):
+                await client.disconnect()
+        except Exception:  # noqa: BLE001
+            pass
     except Exception:  # noqa: BLE001
         pass
 
@@ -1877,7 +1885,7 @@ class APstorageSocClient:
         ble_device: BLEDevice,
         *,
         device_name_hint: str | None = None,
-        max_retries: int = 8,
+        max_retries: int = 3,
         initial_backoff: float = 1.0,
         max_backoff: float = 10.0,
     ) -> SocMetrics | None:
@@ -1941,11 +1949,12 @@ class APstorageSocClient:
                         await self._ensure_services_ready(client)
 
                     _LOGGER.debug("Connected to %s, querying metrics", ble_device.address)
-                    result = await self._query_soc_once(
-                        client,
-                        ble_device,
-                        device_name_hint=device_name_hint,
-                    )
+                    async with asyncio.timeout(QUERY_ATTEMPT_TIMEOUT_SECONDS):
+                        result = await self._query_soc_once(
+                            client,
+                            ble_device,
+                            device_name_hint=device_name_hint,
+                        )
                     _LOGGER.debug(
                         "Query complete for %s: metrics=%s",
                         ble_device.address,
@@ -1973,6 +1982,16 @@ class APstorageSocClient:
                     err_type,
                     err_msg,
                 )
+
+                # Shared ESPHome proxies can run out of connection slots.
+                # Avoid aggressive retries that starve other integrations.
+                if "OutOfConnectionSlots" in err_type or "connection slot" in err_msg.lower():
+                    _LOGGER.warning(
+                        "[BLE] Proxy has no free connection slots for %s; ending this poll early",
+                        ble_device.address,
+                    )
+                    break
+
                 if attempt < max_retries:
                     backoff = min(initial_backoff * (2 ** (attempt - 1)), max_backoff)
                     _LOGGER.debug("[BLE] Backing off for %.1fs before retrying", backoff)
