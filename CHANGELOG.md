@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.19.17 - 2026-05-06
+
+### Fixed
+- Improve PCS hardware version extraction by accepting additional payload key variants seen across firmware/app responses.
+- Added fallback key coverage for hardware-only fields: `HW`, `hw`, `hardware_version`, `hardware`, `storageHardwareVersion`, and `deviceHardwareVersion` (in addition to existing `HV`/`hw_version`/`hwVersion`/`hardwareVersion`).
+
+### Notes
+- `manifest.json` version bumped to `0.19.17`.
+
 ## v0.19.16 - 2026-05-06
 
 ### Fixed
