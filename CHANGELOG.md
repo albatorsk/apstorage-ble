@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.19.14 - 2026-05-06
+
+### Fixed
+- Fix the BLE identifier used for the storage configuration request that provides hardware and software version.
+- The decompiled app sends `storageConfigInfo` as the BLE property identifier; the integration was mistakenly using `getStorageConfigurationInfo` (the internal enum name), which the device does not respond to. This caused `pcs_hardware_version` and `pcs_software_version` entities to remain Unknown permanently.
+- Reordered version-discovery attempts: `pcsVersion` first (firmware current/latest), then `storageConfigInfo` (hardware/software), then `get/initializationInfo` as fallback.
+
+### Notes
+- `manifest.json` version bumped to `0.19.14`.
+
 ## v0.19.13 - 2026-05-06
 
 ### Fixed
