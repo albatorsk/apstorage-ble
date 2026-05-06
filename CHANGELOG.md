@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.19.21 - 2026-05-06
+
+### Fixed
+- Prevent false `Unknown` states when telemetry is healthy but Bluetooth advertisement availability flaps.
+- Entity availability now stays `True` while the persistent BLE session is open.
+- Increased recent-poll grace window for runtime availability fallback.
+
+### Notes
+- `manifest.json` version bumped to `0.19.21`.
+
 ## v0.19.20 - 2026-05-06
 
 ### Fixed

@@ -111,13 +111,16 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         false even though data is still being updated. Keep entities available
         while we have a recent successful poll.
         """
+        if self._soc_client.session_open:
+            return True
+
         if self.available:
             return True
 
         if self._last_successful_poll_at is None:
             return False
 
-        grace_seconds = max(self._poll_interval_seconds * 4, 180)
+        grace_seconds = max(self._poll_interval_seconds * 8, 900)
         age = datetime.now(timezone.utc) - self._last_successful_poll_at
         return age <= timedelta(seconds=grace_seconds)
 
