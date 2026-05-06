@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.19.3 - 2026-05-06
+
+### Fixed
+- Fixed repeated polling stalls on busy/shared BLE proxy environments where persistent session open/query could hang and trigger `Poll watchdog timed out` loops.
+- Coordinator now auto-disables persistent-session mode after the first persistent-session failure/timeout and continues polling via one-shot connect/query/disconnect for the rest of the runtime.
+
+### Notes
+- `manifest.json` version bumped to `0.19.3`.
+
 ## v0.19.2 - 2026-05-06
 
 ### Fixed
