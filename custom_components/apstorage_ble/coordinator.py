@@ -38,6 +38,8 @@ POLL_WATCHDOG_TIMEOUT_SECONDS = 120
 # in history when BLE polling is temporarily unavailable.
 SOC_STALE_AFTER_FAILURES = 3
 SHUTDOWN_WAIT_SECONDS = 10
+DEFAULT_PERSISTENT_SESSION_ENABLED = False
+ONE_SHOT_MAX_RETRIES = 2
 
 
 class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None]):
@@ -91,8 +93,9 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._last_successful_poll_at: datetime | None = None
         # Persistent sessions improve latency when stable, but shared proxy
         # environments can invalidate long-lived connections unpredictably.
-        # Automatically downgrade to one-shot polling after the first stall.
-        self._persistent_session_enabled = True
+        # Default to one-shot polling and only use persistent mode when
+        # explicitly enabled via code defaults.
+        self._persistent_session_enabled = DEFAULT_PERSISTENT_SESSION_ENABLED
         # Most-recent successfully parsed data; also exposed as coordinator.data
         self.data: PCSData | None = None
 
@@ -307,13 +310,13 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                                 metrics = await self._soc_client.async_query_metrics(
                                     ble_device,
                                     device_name_hint=self._name,
-                                    max_retries=1,
+                                    max_retries=ONE_SHOT_MAX_RETRIES,
                                 )
                         else:
                             metrics = await self._soc_client.async_query_metrics(
                                 ble_device,
                                 device_name_hint=self._name,
-                                max_retries=1,
+                                max_retries=ONE_SHOT_MAX_RETRIES,
                             )
                 except TimeoutError:
                     self._consecutive_poll_failures += 1
