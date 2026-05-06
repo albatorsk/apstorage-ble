@@ -232,7 +232,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             self.data.pcs_hardware_version = version_info["pcs_hardware_version"]
 
     def _version_info_missing(self) -> bool:
-        """Return True while any core version field is still missing."""
+        """Return True while firmware version fields are still missing."""
         if self.data is None:
             return True
 
@@ -241,7 +241,6 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             for value in (
                 self.data.pcs_firmware_version,
                 self.data.pcs_latest_firmware_version,
-                self.data.pcs_hardware_version,
             )
         )
 
