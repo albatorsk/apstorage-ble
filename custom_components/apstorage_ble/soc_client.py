@@ -1891,7 +1891,9 @@ class APstorageSocClient:
             client: BleakClient | None = None
             try:
                 self._reset_blufi_session_state()
-                use_services_cache = attempt == 1
+                # Disable services cache on first attempt to avoid stale cache after HA restart.
+                # Subsequent attempts will use cache if available (attempt > 2).
+                use_services_cache = attempt > 1
                 _LOGGER.debug(
                     "[BLE] Attempt %d/%d: Connecting to %s (hint: %s, services_cache=%s)",
                     attempt,
@@ -1900,6 +1902,12 @@ class APstorageSocClient:
                     device_name_hint,
                     use_services_cache,
                 )
+                
+                # On first attempt, add a small delay to let BlueZ stack stabilize.
+                # This helps recovery after Home Assistant restarts.
+                if attempt == 1:
+                    await asyncio.sleep(0.2)
+                
                 async with asyncio.timeout(CONNECT_TIMEOUT_SECONDS):
                     client = await establish_connection(
                         BleakClientWithServiceCache,
@@ -1955,12 +1963,15 @@ class APstorageSocClient:
                     )
             except (asyncio.TimeoutError, BleakError, Exception) as err:
                 last_exception = err
+                err_type = type(err).__name__
+                err_msg = str(err) if str(err) else "(no details)"
                 _LOGGER.warning(
-                    "[BLE] Attempt %d/%d failed for %s: %s",
+                    "[BLE] Attempt %d/%d failed for %s: %s: %s",
                     attempt,
                     max_retries,
                     ble_device.address,
-                    err,
+                    err_type,
+                    err_msg,
                 )
                 if attempt < max_retries:
                     backoff = min(initial_backoff * (2 ** (attempt - 1)), max_backoff)
