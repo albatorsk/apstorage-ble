@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.19.19 - 2026-05-06
+
+### Fixed
+- Roll back post-`0.19.15` version-query changes to restore the last known stable telemetry behavior.
+- This release intentionally matches the working `0.19.15` code path for polling and startup behavior, while publishing as a newer version so upgrades proceed normally.
+
+### Notes
+- `manifest.json` version bumped to `0.19.19`.
+
 ## v0.19.15 - 2026-05-06
 
 ### Fixed
