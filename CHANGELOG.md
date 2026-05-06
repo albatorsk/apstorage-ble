@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.19.13 - 2026-05-06
+
+### Fixed
+- Run the one-time startup firmware version fetch over the same persistent BLE session used by normal telemetry, instead of a separate short-lived connection.
+- This aligns version discovery with the working session path so firmware entities can populate without breaking the stable live metrics flow.
+
+### Notes
+- `manifest.json` version bumped to `0.19.13`.
+
 ## v0.19.12 - 2026-05-06
 
 ### Changed
