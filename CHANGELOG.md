@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.19.11 - 2026-05-06
+
+### Fixed
+- Removed the startup firmware-version fetch from the critical poll path so the first successful telemetry read returns immediately again.
+- This restores normal sensor updates after restart/update on installations where the version query blocks or times out.
+
+### Notes
+- `manifest.json` version bumped to `0.19.11`.
+
 ## v0.19.10 - 2026-05-06
 
 ### Changed
