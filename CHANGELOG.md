@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.19.10 - 2026-05-06
+
+### Changed
+- Removed alarm sensors and alarm polling/parsing logic from the integration.
+- Added cleanup for existing alarm sensor entities so they are removed when the integration is set up after update.
+
+### Notes
+- `manifest.json` version bumped to `0.19.10`.
+
 ## v0.19.9 - 2026-05-06
 
 ### Added

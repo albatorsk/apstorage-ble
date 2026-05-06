@@ -124,7 +124,6 @@ PACKET_WRITE_DELAY_SECONDS = 0.05
 POST_SECURITY_SETTLE_DELAY_SECONDS = 0.10
 VERSION_DISCOVERY_RETRY_SECONDS = 30
 VERSION_REFRESH_INTERVAL_SECONDS = 60 * 60
-ALARM_REFRESH_INTERVAL_SECONDS = 10 * 60
 DIAGNOSTIC_QUERY_TIMEOUT_SECONDS = 8
 DIAGNOSTIC_ENRICH_BUDGET_SECONDS = 4
 QUERY_ATTEMPT_TIMEOUT_SECONDS = 40
@@ -498,155 +497,6 @@ def _extract_version_info(parsed: Any) -> dict[str, str]:
     return info
 
 
-def _parse_jsonish(value: Any) -> Any:
-    """Parse JSON-like strings while leaving plain strings untouched."""
-    if not isinstance(value, str):
-        return value
-
-    text = value.strip()
-    if not text:
-        return value
-
-    if (text.startswith("{") and text.endswith("}")) or (
-        text.startswith("[") and text.endswith("]")
-    ):
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            return value
-
-    return value
-
-
-def _is_clear_alarm_scalar(value: Any) -> bool:
-    """Return True for scalar values that indicate no active alarm."""
-    text = _to_text(value)
-    if text is None:
-        return True
-
-    return text.strip().lower() in {
-        "0",
-        "0.0",
-        "false",
-        "off",
-        "ok",
-        "normal",
-        "none",
-        "null",
-        "clear",
-        "success",
-        "[]",
-        "{}",
-        "-",
-    }
-
-
-def _collect_alarm_tokens(value: Any, *, path_prefix: str = "") -> list[str]:
-    """Flatten active alarm entries into readable token strings."""
-    value = _parse_jsonish(value)
-
-    if isinstance(value, dict):
-        tokens: list[str] = []
-        for key, nested_value in value.items():
-            key_str = str(key).replace("_", " ").strip()
-            next_prefix = f"{path_prefix} {key_str}".strip()
-            tokens.extend(_collect_alarm_tokens(nested_value, path_prefix=next_prefix))
-        return tokens
-
-    if isinstance(value, list):
-        tokens: list[str] = []
-        for nested_value in value:
-            tokens.extend(_collect_alarm_tokens(nested_value, path_prefix=path_prefix))
-        return tokens
-
-    text = _to_text(value)
-    if text is None or _is_clear_alarm_scalar(text):
-        return []
-
-    label = " ".join(path_prefix.strip().split())
-    lowered = text.lower()
-
-    if lowered in {"1", "true", "yes"}:
-        return [label or "Active"]
-
-    if label:
-        return [f"{label}: {text}"]
-
-    return [text]
-
-
-def _summarize_alarm_value(value: Any) -> str | None:
-    """Return a compact summary for an alarm payload value."""
-    if value is None:
-        return None
-
-    tokens = _collect_alarm_tokens(value)
-    if not tokens:
-        return "Clear"
-
-    unique_tokens = list(dict.fromkeys(tokens))
-    if len(unique_tokens) > 4:
-        return "; ".join(unique_tokens[:4]) + f"; +{len(unique_tokens) - 4} more"
-
-    return "; ".join(unique_tokens)
-
-
-def _extract_alarm_info(parsed: Any) -> dict[str, str]:
-    """Extract battery and PCS alarm summaries from an alarm payload."""
-    if not isinstance(parsed, dict):
-        return {}
-
-    roots: list[Any] = []
-    for key in ("messagedata", "data"):
-        candidate = parsed.get(key)
-        candidate = _parse_jsonish(candidate)
-        if isinstance(candidate, (dict, list)):
-            roots.append(candidate)
-    roots.append(parsed)
-
-    storage_alarm_raw: Any | None = None
-    inverter_alarm_raw: Any | None = None
-    ess_alarm_raw: Any | None = None
-
-    for root in roots:
-        if storage_alarm_raw is None:
-            storage_alarm_raw = _deep_find_key(root, {"storagealarm", "batteryalarm", "batalarm"})
-        if inverter_alarm_raw is None:
-            inverter_alarm_raw = _deep_find_key(root, {"inverteralarm", "pcsalarm", "inverter_alarm"})
-        if ess_alarm_raw is None:
-            ess_alarm_raw = _deep_find_key(root, {"essalarm", "ess_alarm"})
-
-    battery_alarm = _summarize_alarm_value(storage_alarm_raw) if storage_alarm_raw is not None else None
-    inverter_alarm = _summarize_alarm_value(inverter_alarm_raw) if inverter_alarm_raw is not None else None
-    ess_alarm = _summarize_alarm_value(ess_alarm_raw) if ess_alarm_raw is not None else None
-
-    info: dict[str, str] = {}
-
-    if battery_alarm is not None:
-        info["battery_alarm"] = battery_alarm
-
-    if inverter_alarm is not None or ess_alarm is not None:
-        pcs_parts: list[str] = []
-        if inverter_alarm not in (None, "Clear"):
-            pcs_parts.append(inverter_alarm)
-        if ess_alarm not in (None, "Clear"):
-            pcs_parts.append(f"ESS: {ess_alarm}")
-        info["pcs_alarm"] = "; ".join(pcs_parts) if pcs_parts else "Clear"
-
-    summary_parts: list[str] = []
-    if info.get("battery_alarm") not in (None, "Clear"):
-        summary_parts.append(f"Battery: {info['battery_alarm']}")
-    if info.get("pcs_alarm") not in (None, "Clear"):
-        summary_parts.append(f"PCS: {info['pcs_alarm']}")
-
-    if summary_parts:
-        info["alarm_summary"] = " | ".join(summary_parts)
-    elif any(value is not None for value in (battery_alarm, inverter_alarm, ess_alarm)):
-        info["alarm_summary"] = "Clear"
-
-    return info
-
-
 def _last_nonzero_from_array(value: Any) -> float | None:
     """Extract the last non-zero numeric value from a list of strings/numbers.
 
@@ -936,10 +786,6 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
         return metrics
 
     ess_flow_state: str | None = None
-
-    alarm_info = _extract_alarm_info(parsed)
-    for field_name, field_value in alarm_info.items():
-        setattr(metrics, field_name, field_value)
 
     # Preserve explicit system mode code when present.
     mode_raw = _deep_find_key(parsed, {"mode"}) if isinstance(parsed, dict) else None
@@ -1518,8 +1364,6 @@ def _extract_metrics(parsed: Any) -> SocMetrics:
         extracted_fields.append(f"t3={metrics.total_consumed:.3f}")
     if metrics.total_consumed_daily is not None:
         extracted_fields.append(f"de3={metrics.total_consumed_daily:.3f}")
-    if getattr(metrics, "alarm_summary", None) is not None:
-        extracted_fields.append(f"alarm={metrics.alarm_summary}")
     if extracted_fields:
         _LOGGER.debug("Extracted from local-data: %s", ", ".join(extracted_fields))
 
@@ -1565,9 +1409,6 @@ class SocMetrics:
     pcs_latest_firmware_version: str | None = None  # latest available PCS firmware version
     pcs_software_version: str | None = None       # reported PCS software version
     pcs_hardware_version: str | None = None       # reported PCS hardware version
-    battery_alarm: str | None = None              # battery/storage alarm summary
-    pcs_alarm: str | None = None                  # PCS/ESS alarm summary
-    alarm_summary: str | None = None              # combined alarm summary
     # Grid metrics
     grid_voltage: float | None = None          # V
     grid_current: float | None = None          # A
@@ -1941,8 +1782,6 @@ class APstorageSocClient:
         self._preferred_storage_id: str | None = None
         self._version_cache: dict[str, dict[str, str]] = {}
         self._version_query_last_attempt: dict[str, float] = {}
-        self._alarm_cache: dict[str, dict[str, str]] = {}
-        self._alarm_query_last_attempt: dict[str, float] = {}
         # Set to True once a startup version query has been attempted so it is never retried.
         self._startup_version_fetched = False
         # Persistent BLE session state (kept open between polls to avoid repeated DH handshakes).
@@ -3616,42 +3455,6 @@ class APstorageSocClient:
 
             if _version_info_is_complete_enough(combined):
                 break
-
-        return combined
-
-    async def _query_alarm_info(
-        self,
-        client: BleakClient,
-        storage_id: str,
-        system_id: str = "",
-    ) -> dict[str, str]:
-        """Query active PCS and battery alarm information."""
-        identifiers = (
-            "getDeviceDetailStorageAlarmInformation",
-            "getDeviceDetailBatteryAlarmInformation",
-            "getDeviceDetailInverterAlarmInformation",
-            "get/deviceAPpcsAlarmInfo",
-        )
-
-        combined: dict[str, str] = {}
-        for identifier in identifiers:
-            try:
-                response = await self._send_property_request(
-                    client,
-                    method="get",
-                    identifier=identifier,
-                    storage_id=storage_id,
-                    params_extra={},
-                    system_id=system_id,
-                    response_timeout_seconds=DIAGNOSTIC_QUERY_TIMEOUT_SECONDS,
-                )
-            except Exception as err:  # noqa: BLE001
-                _LOGGER.debug("Alarm query %s failed for %s: %s", identifier, storage_id, err)
-                continue
-
-            extracted = _extract_alarm_info(response)
-            if extracted:
-                combined.update(extracted)
 
         return combined
 
