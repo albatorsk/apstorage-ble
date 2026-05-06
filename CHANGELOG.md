@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.19.22 - 2026-05-06
+
+### Fixed
+- Keep telemetry path unchanged while improving hardware-version lookup compatibility.
+- Version discovery now tries both storage configuration identifier variants for hardware metadata: `storageConfigInfo` and `getStorageConfigurationInfo`.
+- This addresses units that return firmware/software from `pcsVersion` but do not respond to one of the storage-config identifier forms.
+
+### Notes
+- `manifest.json` version bumped to `0.19.22`.
+
 ## v0.19.21 - 2026-05-06
 
 ### Fixed
