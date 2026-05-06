@@ -30,13 +30,9 @@ Designed to work with an **ESPHome Bluetooth proxy** placed near the PCS.
 
 ---
 
-## Implemented Sensors
+## Entities Created
 
-The following sensors are implemented in the integration.
-
-
-
-### Entities
+The integration creates the following entities.
 
 
 #### Battery
@@ -66,9 +62,6 @@ The following sensors are implemented in the integration.
 - Daily Total Consumed (`kWh`)
 
 #### Diagnostics
-- Alarm Summary
-- PCS Alarm
-- Battery Alarm
 - PCS Firmware 1
 - PCS Firmware 2
 - PCS Firmware 3
@@ -105,6 +98,12 @@ Service:
     - `peak_time`: optional (`HH:MM-HH:MM` or `HHMMSSHHMMSS`, max 5)
     - `valley_time`: optional (`HH:MM-HH:MM` or `HHMMSSHHMMSS`, max 5)
     - at least one of `peak_time` / `valley_time` is required
+    - `entry_id`: optional (target config entry)
+    - `address`: optional (target device MAC)
+- `apstorage_ble.set_advanced_schedule`
+    - `peak_time`: optional (`HH:MM-HH:MM` or `HHMMSSHHMMSS`, max 5)
+    - `valley_time`: optional (`HH:MM-HH:MM` or `HHMMSSHHMMSS`, max 5)
+    - `schedule`: optional raw TOU list (use instead of `peak_time`/`valley_time`)
     - `entry_id`: optional (target config entry)
     - `address`: optional (target device MAC)
 - `apstorage_ble.set_buzzer_mode`
@@ -156,6 +155,7 @@ Service:
 3. In HA go to **Settings → Devices & Services**.
 4. The PCS should be auto-discovered.  Click **Configure** and confirm.
 5. If not auto-discovered, click **Add Integration**, search for **APstorage BLE**, and enter the MAC address manually.
+6. Initial population can take up to **5 minutes** before all entities show live values/version fields.
 
 ---
 
