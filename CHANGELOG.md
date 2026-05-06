@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.19.5 - 2026-05-06
+
+### Fixed
+- Fixed entities staying `Unknown` despite successful metric reads when Bluetooth advertisement-based availability temporarily dropped.
+- Coordinator now tracks recent successful polls and exposes runtime availability that remains true for a grace period after good data.
+- Sensor/select/number/switch/button entities now use runtime availability instead of raw advertisement availability.
+
+### Notes
+- `manifest.json` version bumped to `0.19.5`.
+
 ## v0.19.4 - 2026-05-06
 
 ### Fixed

@@ -364,7 +364,7 @@ class APstorageSensor(
         maintained by PassiveBluetoothDataUpdateCoordinator based on
         whether the device is still advertising.
         """
-        return self.coordinator.available
+        return self.coordinator.runtime_available
 
     @property
     def native_value(self) -> Any:
