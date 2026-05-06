@@ -3499,7 +3499,7 @@ class APstorageSocClient:
         identifiers = (
             ("pcsVersion",)
             if _version_info_is_complete_enough(cached_info)
-            else ("pcsVersion", "get/initializationInfo", "getStorageConfigurationInfo")
+            else ("pcsVersion", "storageConfigInfo", "get/initializationInfo")
         )
 
         for identifier in identifiers:
