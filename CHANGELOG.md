@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.18.6 - 2026-05-06
+
+### Fixed
+- Prevented redundant poll triggering while a poll is already in progress by gating both advertisement and periodic fallback paths behind the poll lock.
+- Reduced BLE stall amplification by running a single query attempt per poll cycle, allowing faster recovery on subsequent cycles instead of spending one cycle in long retry loops.
+- Tightened disconnect timeout behavior to reduce lock hold time when ESPHome proxy disconnect requests are unresponsive.
+
+### Notes
+- `manifest.json` version bumped to `0.18.6`.
+
 ## v0.18.5 - 2026-05-06
 
 ### Fixed
