@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.19.20 - 2026-05-06
+
+### Fixed
+- Enforce single-connection behavior for PCS polling in persistent-session mode.
+- Remove one-shot fallback connection from the persistent-session poll error path, so the integration no longer opens a second connection in the same poll cycle.
+- Remove startup one-shot version-query fallback; startup version reads now use the existing persistent session only.
+
+### Notes
+- `manifest.json` version bumped to `0.19.20`.
+
 ## v0.19.19 - 2026-05-06
 
 ### Fixed

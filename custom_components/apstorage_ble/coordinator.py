@@ -39,7 +39,6 @@ POLL_WATCHDOG_TIMEOUT_SECONDS = 120
 SOC_STALE_AFTER_FAILURES = 3
 SHUTDOWN_WAIT_SECONDS = 10
 DEFAULT_PERSISTENT_SESSION_ENABLED = True
-ONE_SHOT_MAX_RETRIES = 2
 VERSION_RETRY_INTERVAL_SECONDS = 300
 
 
@@ -271,11 +270,6 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
 
                     if self._soc_client.session_open:
                         version_info = await self._soc_client.async_query_session_version_info()
-                    else:
-                        version_info = await self._soc_client.async_query_version_info_once(
-                            ble_device,
-                            device_name_hint=self._name,
-                        )
             except Exception as err:  # noqa: BLE001
                 _LOGGER.debug(
                     "[%s] Startup version fetch failed (non-fatal): %s: %s",
@@ -402,22 +396,18 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                                 metrics = await self._soc_client.async_query_session()
                             except Exception as session_err:  # noqa: BLE001
                                 _LOGGER.warning(
-                                    "[%s] Persistent session failed (%s: %s); reconnecting session and falling back to one-shot for this poll",
+                                    "[%s] Persistent session failed (%s: %s); closing session and skipping this poll",
                                     self._name,
                                     type(session_err).__name__,
                                     session_err,
                                 )
                                 await self._soc_client.async_close_session()
-                                metrics = await self._soc_client.async_query_metrics(
-                                    ble_device,
-                                    device_name_hint=self._name,
-                                    max_retries=ONE_SHOT_MAX_RETRIES,
-                                )
+                                metrics = None
                         else:
                             metrics = await self._soc_client.async_query_metrics(
                                 ble_device,
                                 device_name_hint=self._name,
-                                max_retries=ONE_SHOT_MAX_RETRIES,
+                                max_retries=2,
                             )
                 except TimeoutError:
                     self._consecutive_poll_failures += 1
