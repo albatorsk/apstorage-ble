@@ -9,6 +9,7 @@ Uses HA's ActiveBluetoothDataUpdateCoordinator so that:
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from datetime import datetime, timezone
 import logging
 from typing import Any
@@ -36,6 +37,7 @@ POLL_WATCHDOG_TIMEOUT_SECONDS = 120
 # keeping a stale last-known value. This avoids misleading flat-line artifacts
 # in history when BLE polling is temporarily unavailable.
 SOC_STALE_AFTER_FAILURES = 3
+SHUTDOWN_WAIT_SECONDS = 10
 
 
 class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None]):
@@ -85,6 +87,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._field_write_timestamps: dict[str, datetime] = {}
         self._consecutive_poll_failures = 0
         self._shutdown = False
+        self._active_poll_task: asyncio.Task[Any] | None = None
         # Most-recent successfully parsed data; also exposed as coordinator.data
         self.data: PCSData | None = None
 
@@ -94,6 +97,12 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
     async def async_shutdown(self) -> None:
         """Block new BLE activity once the config entry is unloading."""
         self._shutdown = True
+        task = self._active_poll_task
+        if task is not None and not task.done():
+            _LOGGER.debug("[%s] Cancelling in-flight poll during shutdown", self._name)
+            task.cancel()
+            with suppress(asyncio.CancelledError, TimeoutError):
+                await asyncio.wait_for(task, timeout=SHUTDOWN_WAIT_SECONDS)
         async with self._poll_lock:
             self._last_service_info = None
 
@@ -199,177 +208,182 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             return
 
         async with self._poll_lock:
+            self._active_poll_task = asyncio.current_task()
             if self._shutdown:
                 _LOGGER.debug("[%s] Poll aborted because coordinator is shutting down", self._name)
+                self._active_poll_task = None
                 return
-            service_info: BluetoothServiceInfoBleak | None = self._last_service_info
-
-            # Prefer the connectable device from the most recent advertisement;
-            # fall back to HA's current best connectable device by configured MAC.
-            if service_info is not None and service_info.connectable:
-                ble_device = service_info.device
-            elif service_info is not None:
-                ble_device = bluetooth.async_ble_device_from_address(
-                    self.hass,
-                    service_info.device.address,
-                    connectable=True,
-                )
-            else:
-                ble_device = bluetooth.async_ble_device_from_address(
-                    self.hass,
-                    self._address,
-                    connectable=True,
-                )
-
-            if ble_device is None:
-                _LOGGER.warning(
-                    "[%s] No connectable BLE device found — skipping poll", self._name
-                )
-                return
-
-            # Start from the previous snapshot so transient query failures
-            # do not force all entities to Unknown.
-            previous = self.data
-            self.data = PCSData(**vars(previous)) if previous is not None else PCSData()
-            _LOGGER.debug("[%s] Starting metrics poll for %s", self._name, ble_device.address)
-
             try:
-                async with asyncio.timeout(POLL_WATCHDOG_TIMEOUT_SECONDS):
-                    metrics = await self._soc_client.async_query_metrics(
-                        ble_device,
-                        device_name_hint=self._name,
-                    )
-            except TimeoutError:
-                self._consecutive_poll_failures += 1
-                _LOGGER.warning(
-                    "[%s] Poll watchdog timed out after %ss; rebuilding BLE client state",
-                    self._name,
-                    POLL_WATCHDOG_TIMEOUT_SECONDS,
-                )
-                if self.data is not None and self._consecutive_poll_failures >= SOC_STALE_AFTER_FAILURES:
-                    self.data.battery_soc = None
-                    _LOGGER.debug(
-                        "[%s] Marked battery SoC unknown after %d consecutive poll failures",
-                        self._name,
-                        self._consecutive_poll_failures,
-                    )
-                    self.async_update_listeners()
-                self._soc_client = APstorageSocClient()
-                self._last_service_info = None
-                return
+                service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
-            if metrics is None:
-                self._consecutive_poll_failures += 1
-                _LOGGER.info("[%s] SoC query returned no metrics", self._name)
-                if self.data is not None and self._consecutive_poll_failures >= SOC_STALE_AFTER_FAILURES:
-                    self.data.battery_soc = None
-                    _LOGGER.debug(
-                        "[%s] Marked battery SoC unknown after %d consecutive poll failures",
-                        self._name,
-                        self._consecutive_poll_failures,
+                # Prefer the connectable device from the most recent advertisement;
+                # fall back to HA's current best connectable device by configured MAC.
+                if service_info is not None and service_info.connectable:
+                    ble_device = service_info.device
+                elif service_info is not None:
+                    ble_device = bluetooth.async_ble_device_from_address(
+                        self.hass,
+                        service_info.device.address,
+                        connectable=True,
                     )
-                if self._consecutive_poll_failures >= SOC_STALE_AFTER_FAILURES:
+                else:
+                    ble_device = bluetooth.async_ble_device_from_address(
+                        self.hass,
+                        self._address,
+                        connectable=True,
+                    )
+
+                if ble_device is None:
                     _LOGGER.warning(
-                        "[%s] Poll failed %d times in a row; rebuilding BLE client state",
-                        self._name,
-                        self._consecutive_poll_failures,
+                        "[%s] No connectable BLE device found — skipping poll", self._name
                     )
+                    return
+
+                # Start from the previous snapshot so transient query failures
+                # do not force all entities to Unknown.
+                previous = self.data
+                self.data = PCSData(**vars(previous)) if previous is not None else PCSData()
+                _LOGGER.debug("[%s] Starting metrics poll for %s", self._name, ble_device.address)
+
+                try:
+                    async with asyncio.timeout(POLL_WATCHDOG_TIMEOUT_SECONDS):
+                        metrics = await self._soc_client.async_query_metrics(
+                            ble_device,
+                            device_name_hint=self._name,
+                        )
+                except TimeoutError:
+                    self._consecutive_poll_failures += 1
+                    _LOGGER.warning(
+                        "[%s] Poll watchdog timed out after %ss; rebuilding BLE client state",
+                        self._name,
+                        POLL_WATCHDOG_TIMEOUT_SECONDS,
+                    )
+                    if self.data is not None and self._consecutive_poll_failures >= SOC_STALE_AFTER_FAILURES:
+                        self.data.battery_soc = None
+                        _LOGGER.debug(
+                            "[%s] Marked battery SoC unknown after %d consecutive poll failures",
+                            self._name,
+                            self._consecutive_poll_failures,
+                        )
+                        self.async_update_listeners()
                     self._soc_client = APstorageSocClient()
                     self._last_service_info = None
-            else:
-                if self._consecutive_poll_failures:
-                    _LOGGER.debug(
-                        "[%s] Poll recovered after %d consecutive failures",
-                        self._name,
-                        self._consecutive_poll_failures,
-                    )
-                self._consecutive_poll_failures = 0
-                _LOGGER.debug(
-                    "[%s] Received metrics: soc=%s, state=%s, flow=%s",
-                    self._name,
-                    metrics.battery_soc,
-                    metrics.system_state,
-                    metrics.battery_flow_state,
-                )
-                if metrics.battery_soc is not None:
-                    self.data.battery_soc = float(metrics.battery_soc)
-                    _LOGGER.debug("[%s] Battery SoC: %.1f%%", self._name, self.data.battery_soc)
-                if metrics.battery_voltage is not None:
-                    self.data.battery_voltage = float(metrics.battery_voltage)
-                if metrics.battery_current is not None:
-                    self.data.battery_current = float(metrics.battery_current)
-                if metrics.battery_power is not None:
-                    self.data.battery_power = float(metrics.battery_power)
-                    _LOGGER.debug("[%s] Battery Power: %.1f W", self._name, self.data.battery_power)
-                if metrics.battery_charging_power is not None:
-                    self.data.battery_charging_power = float(metrics.battery_charging_power)
-                if metrics.battery_temperature is not None:
-                    self.data.battery_temperature = float(metrics.battery_temperature)
-                if metrics.system_state is not None:
-                    self.data.system_state = metrics.system_state
-                    _LOGGER.debug("[%s] System state: %s", self._name, metrics.system_state)
-                if metrics.system_mode is not None and not self._is_field_recently_written("system_mode"):
-                    self.data.system_mode = metrics.system_mode
-                if metrics.backup_soc is not None and not self._is_field_recently_written("backup_soc"):
-                    self.data.backup_soc = float(metrics.backup_soc)
-                resolved_flow_state = self._resolve_battery_flow_state(metrics)
-                if resolved_flow_state is not None:
-                    self.data.battery_flow_state = resolved_flow_state
-                if metrics.grid_voltage is not None:
-                    self.data.grid_voltage = float(metrics.grid_voltage)
-                if metrics.grid_current is not None:
-                    self.data.grid_current = float(metrics.grid_current)
-                if metrics.grid_power is not None:
-                    self.data.grid_power = float(metrics.grid_power)
-                if metrics.grid_frequency is not None:
-                    self.data.grid_frequency = float(metrics.grid_frequency)
-                if metrics.pv_voltage is not None:
-                    self.data.pv_voltage = float(metrics.pv_voltage)
-                if metrics.pv_current is not None:
-                    self.data.pv_current = float(metrics.pv_current)
-                if metrics.pv_power is not None:
-                    self.data.pv_power = float(metrics.pv_power)
-                if metrics.load_voltage is not None:
-                    self.data.load_voltage = float(metrics.load_voltage)
-                if metrics.load_current is not None:
-                    self.data.load_current = float(metrics.load_current)
-                if metrics.load_power is not None:
-                    self.data.load_power = float(metrics.load_power)
-                if metrics.inverter_temperature is not None:
-                    self.data.inverter_temperature = float(metrics.inverter_temperature)
-                if metrics.buzzer is not None and not self._is_field_recently_written("buzzer"):
-                    self.data.buzzer = metrics.buzzer
-                if metrics.co2_reduction is not None:
-                    self.data.co2_reduction = float(metrics.co2_reduction)
-                if metrics.total_produced is not None:
-                    self.data.total_produced = float(metrics.total_produced)
-                if metrics.total_consumed is not None:
-                    self.data.total_consumed = float(metrics.total_consumed)
-                if metrics.total_consumed_daily is not None:
-                    self.data.total_consumed_daily = float(metrics.total_consumed_daily)
-                if metrics.battery_alarm is not None:
-                    self.data.battery_alarm = metrics.battery_alarm
-                if metrics.pcs_alarm is not None:
-                    self.data.pcs_alarm = metrics.pcs_alarm
-                if metrics.alarm_summary is not None:
-                    self.data.alarm_summary = metrics.alarm_summary
-                if metrics.pcs_firmware_version is not None:
-                    self.data.pcs_firmware_version = metrics.pcs_firmware_version
-                if metrics.pcs_latest_firmware_version is not None:
-                    self.data.pcs_latest_firmware_version = metrics.pcs_latest_firmware_version
-                if metrics.pcs_software_version is not None:
-                    self.data.pcs_software_version = metrics.pcs_software_version
-                if metrics.pcs_hardware_version is not None:
-                    self.data.pcs_hardware_version = metrics.pcs_hardware_version
-                if metrics.pv_energy_produced is not None:
-                    self.data.pv_energy_produced = float(metrics.pv_energy_produced)
-                if metrics.battery_charged_energy is not None:
-                    self.data.battery_charged_energy = float(metrics.battery_charged_energy)
-                if metrics.battery_discharged_energy is not None:
-                    self.data.battery_discharged_energy = float(metrics.battery_discharged_energy)
+                    return
 
-            # Push the update to all subscribed entities.
-            self.async_update_listeners()
+                if metrics is None:
+                    self._consecutive_poll_failures += 1
+                    _LOGGER.info("[%s] SoC query returned no metrics", self._name)
+                    if self.data is not None and self._consecutive_poll_failures >= SOC_STALE_AFTER_FAILURES:
+                        self.data.battery_soc = None
+                        _LOGGER.debug(
+                            "[%s] Marked battery SoC unknown after %d consecutive poll failures",
+                            self._name,
+                            self._consecutive_poll_failures,
+                        )
+                    if self._consecutive_poll_failures >= SOC_STALE_AFTER_FAILURES:
+                        _LOGGER.warning(
+                            "[%s] Poll failed %d times in a row; rebuilding BLE client state",
+                            self._name,
+                            self._consecutive_poll_failures,
+                        )
+                        self._soc_client = APstorageSocClient()
+                        self._last_service_info = None
+                else:
+                    if self._consecutive_poll_failures:
+                        _LOGGER.debug(
+                            "[%s] Poll recovered after %d consecutive failures",
+                            self._name,
+                            self._consecutive_poll_failures,
+                        )
+                    self._consecutive_poll_failures = 0
+                    _LOGGER.debug(
+                        "[%s] Received metrics: soc=%s, state=%s, flow=%s",
+                        self._name,
+                        metrics.battery_soc,
+                        metrics.system_state,
+                        metrics.battery_flow_state,
+                    )
+                    if metrics.battery_soc is not None:
+                        self.data.battery_soc = float(metrics.battery_soc)
+                        _LOGGER.debug("[%s] Battery SoC: %.1f%%", self._name, self.data.battery_soc)
+                    if metrics.battery_voltage is not None:
+                        self.data.battery_voltage = float(metrics.battery_voltage)
+                    if metrics.battery_current is not None:
+                        self.data.battery_current = float(metrics.battery_current)
+                    if metrics.battery_power is not None:
+                        self.data.battery_power = float(metrics.battery_power)
+                        _LOGGER.debug("[%s] Battery Power: %.1f W", self._name, self.data.battery_power)
+                    if metrics.battery_charging_power is not None:
+                        self.data.battery_charging_power = float(metrics.battery_charging_power)
+                    if metrics.battery_temperature is not None:
+                        self.data.battery_temperature = float(metrics.battery_temperature)
+                    if metrics.system_state is not None:
+                        self.data.system_state = metrics.system_state
+                        _LOGGER.debug("[%s] System state: %s", self._name, metrics.system_state)
+                    if metrics.system_mode is not None and not self._is_field_recently_written("system_mode"):
+                        self.data.system_mode = metrics.system_mode
+                    if metrics.backup_soc is not None and not self._is_field_recently_written("backup_soc"):
+                        self.data.backup_soc = float(metrics.backup_soc)
+                    resolved_flow_state = self._resolve_battery_flow_state(metrics)
+                    if resolved_flow_state is not None:
+                        self.data.battery_flow_state = resolved_flow_state
+                    if metrics.grid_voltage is not None:
+                        self.data.grid_voltage = float(metrics.grid_voltage)
+                    if metrics.grid_current is not None:
+                        self.data.grid_current = float(metrics.grid_current)
+                    if metrics.grid_power is not None:
+                        self.data.grid_power = float(metrics.grid_power)
+                    if metrics.grid_frequency is not None:
+                        self.data.grid_frequency = float(metrics.grid_frequency)
+                    if metrics.pv_voltage is not None:
+                        self.data.pv_voltage = float(metrics.pv_voltage)
+                    if metrics.pv_current is not None:
+                        self.data.pv_current = float(metrics.pv_current)
+                    if metrics.pv_power is not None:
+                        self.data.pv_power = float(metrics.pv_power)
+                    if metrics.load_voltage is not None:
+                        self.data.load_voltage = float(metrics.load_voltage)
+                    if metrics.load_current is not None:
+                        self.data.load_current = float(metrics.load_current)
+                    if metrics.load_power is not None:
+                        self.data.load_power = float(metrics.load_power)
+                    if metrics.inverter_temperature is not None:
+                        self.data.inverter_temperature = float(metrics.inverter_temperature)
+                    if metrics.buzzer is not None and not self._is_field_recently_written("buzzer"):
+                        self.data.buzzer = metrics.buzzer
+                    if metrics.co2_reduction is not None:
+                        self.data.co2_reduction = float(metrics.co2_reduction)
+                    if metrics.total_produced is not None:
+                        self.data.total_produced = float(metrics.total_produced)
+                    if metrics.total_consumed is not None:
+                        self.data.total_consumed = float(metrics.total_consumed)
+                    if metrics.total_consumed_daily is not None:
+                        self.data.total_consumed_daily = float(metrics.total_consumed_daily)
+                    if metrics.battery_alarm is not None:
+                        self.data.battery_alarm = metrics.battery_alarm
+                    if metrics.pcs_alarm is not None:
+                        self.data.pcs_alarm = metrics.pcs_alarm
+                    if metrics.alarm_summary is not None:
+                        self.data.alarm_summary = metrics.alarm_summary
+                    if metrics.pcs_firmware_version is not None:
+                        self.data.pcs_firmware_version = metrics.pcs_firmware_version
+                    if metrics.pcs_latest_firmware_version is not None:
+                        self.data.pcs_latest_firmware_version = metrics.pcs_latest_firmware_version
+                    if metrics.pcs_software_version is not None:
+                        self.data.pcs_software_version = metrics.pcs_software_version
+                    if metrics.pcs_hardware_version is not None:
+                        self.data.pcs_hardware_version = metrics.pcs_hardware_version
+                    if metrics.pv_energy_produced is not None:
+                        self.data.pv_energy_produced = float(metrics.pv_energy_produced)
+                    if metrics.battery_charged_energy is not None:
+                        self.data.battery_charged_energy = float(metrics.battery_charged_energy)
+                    if metrics.battery_discharged_energy is not None:
+                        self.data.battery_discharged_energy = float(metrics.battery_discharged_energy)
+
+                # Push the update to all subscribed entities.
+                self.async_update_listeners()
+            finally:
+                self._active_poll_task = None
 
     async def async_set_system_mode(self, mode: int) -> None:
         """Set storage system mode over BLE and refresh coordinator data.
