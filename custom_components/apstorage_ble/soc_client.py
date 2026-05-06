@@ -60,6 +60,7 @@ VERSION_DISCOVERY_RETRY_SECONDS = 30
 VERSION_REFRESH_INTERVAL_SECONDS = 60 * 60
 ALARM_REFRESH_INTERVAL_SECONDS = 10 * 60
 DIAGNOSTIC_QUERY_TIMEOUT_SECONDS = 8
+DIAGNOSTIC_ENRICH_BUDGET_SECONDS = 4
 QUERY_ATTEMPT_TIMEOUT_SECONDS = 40
 
 try:
@@ -2154,9 +2155,25 @@ class APstorageSocClient:
             version_info, now=now, last_attempt=self._version_query_last_attempt.get(storage_id, 0.0)
         ):
             self._version_query_last_attempt[storage_id] = now
-            refreshed = await self._query_version_info(
-                client, storage_id, system_id="", cached_info=version_info
-            )
+            try:
+                async with asyncio.timeout(DIAGNOSTIC_ENRICH_BUDGET_SECONDS):
+                    refreshed = await self._query_version_info(
+                        client, storage_id, system_id="", cached_info=version_info
+                    )
+            except TimeoutError:
+                refreshed = None
+                _LOGGER.debug(
+                    "[BLE] Version enrichment timed out for storage_id=%s; returning base metrics",
+                    storage_id,
+                )
+            except Exception as err:  # noqa: BLE001
+                refreshed = None
+                _LOGGER.debug(
+                    "[BLE] Version enrichment failed for storage_id=%s: %s",
+                    storage_id,
+                    err,
+                )
+
             if refreshed:
                 version_info = {**(version_info or {}), **refreshed}
                 self._version_cache[storage_id] = version_info
@@ -2169,7 +2186,23 @@ class APstorageSocClient:
 
         if (now - self._alarm_query_last_attempt.get(storage_id, 0.0)) >= ALARM_REFRESH_INTERVAL_SECONDS:
             self._alarm_query_last_attempt[storage_id] = now
-            alarm_info = await self._query_alarm_info(client, storage_id, system_id="")
+            try:
+                async with asyncio.timeout(DIAGNOSTIC_ENRICH_BUDGET_SECONDS):
+                    alarm_info = await self._query_alarm_info(client, storage_id, system_id="")
+            except TimeoutError:
+                alarm_info = {}
+                _LOGGER.debug(
+                    "[BLE] Alarm enrichment timed out for storage_id=%s; returning base metrics",
+                    storage_id,
+                )
+            except Exception as err:  # noqa: BLE001
+                alarm_info = {}
+                _LOGGER.debug(
+                    "[BLE] Alarm enrichment failed for storage_id=%s: %s",
+                    storage_id,
+                    err,
+                )
+
             if alarm_info:
                 self._alarm_cache[storage_id] = alarm_info
                 for field_name, field_value in alarm_info.items():
@@ -3286,12 +3319,28 @@ class APstorageSocClient:
 
                 if _should_refresh_version_info(version_info, now=now, last_attempt=last_attempt):
                     self._version_query_last_attempt[storage_id] = now
-                    refreshed_version_info = await self._query_version_info(
-                        client,
-                        storage_id,
-                        system_id="",
-                        cached_info=version_info,
-                    )
+                    try:
+                        async with asyncio.timeout(DIAGNOSTIC_ENRICH_BUDGET_SECONDS):
+                            refreshed_version_info = await self._query_version_info(
+                                client,
+                                storage_id,
+                                system_id="",
+                                cached_info=version_info,
+                            )
+                    except TimeoutError:
+                        refreshed_version_info = None
+                        _LOGGER.debug(
+                            "Version enrichment timed out for storage_id=%s; returning base metrics",
+                            storage_id,
+                        )
+                    except Exception as err:  # noqa: BLE001
+                        refreshed_version_info = None
+                        _LOGGER.debug(
+                            "Version enrichment failed for storage_id=%s: %s",
+                            storage_id,
+                            err,
+                        )
+
                     if refreshed_version_info:
                         if version_info:
                             version_info = {**version_info, **refreshed_version_info}
@@ -3315,7 +3364,23 @@ class APstorageSocClient:
 
                 if (now - self._alarm_query_last_attempt.get(storage_id, 0.0)) >= ALARM_REFRESH_INTERVAL_SECONDS:
                     self._alarm_query_last_attempt[storage_id] = now
-                    alarm_info = await self._query_alarm_info(client, storage_id, system_id="")
+                    try:
+                        async with asyncio.timeout(DIAGNOSTIC_ENRICH_BUDGET_SECONDS):
+                            alarm_info = await self._query_alarm_info(client, storage_id, system_id="")
+                    except TimeoutError:
+                        alarm_info = {}
+                        _LOGGER.debug(
+                            "Alarm enrichment timed out for storage_id=%s; returning base metrics",
+                            storage_id,
+                        )
+                    except Exception as err:  # noqa: BLE001
+                        alarm_info = {}
+                        _LOGGER.debug(
+                            "Alarm enrichment failed for storage_id=%s: %s",
+                            storage_id,
+                            err,
+                        )
+
                     if alarm_info:
                         self._alarm_cache[storage_id] = alarm_info
                         for field_name, field_value in alarm_info.items():

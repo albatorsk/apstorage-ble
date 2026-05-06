@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.19.4 - 2026-05-06
+
+### Fixed
+- Fixed a regression where successful local-data reads could still end up as `Unknown` in Home Assistant because slow version/alarm enrichment exhausted the overall query timeout before metrics were returned.
+- Version and alarm enrichment are now strictly best-effort with a small time budget, so successful SoC/data payloads are returned immediately even when secondary diagnostic endpoints are slow or unresponsive.
+
+### Notes
+- `manifest.json` version bumped to `0.19.4`.
+
 ## v0.19.3 - 2026-05-06
 
 ### Fixed
