@@ -2218,6 +2218,20 @@ class APstorageSocClient:
         _LOGGER.warning("[BLE] Session query succeeded but metrics are empty for storage_id=%s", storage_id)
         return None
 
+    async def async_query_session_version_info(self) -> dict[str, str]:
+        """Query firmware version info over the existing persistent BLE session."""
+        client = self._session_ble_client
+        storage_id = self._session_storage_id
+        if client is None or not client.is_connected or storage_id is None:
+            raise RuntimeError("No open BLE session; call async_open_session() first")
+
+        version_info = await self._query_version_info(client, storage_id, system_id="")
+        if version_info:
+            now = asyncio.get_running_loop().time()
+            self._version_cache[storage_id] = dict(version_info)
+            self._version_query_last_attempt[storage_id] = now
+        return version_info
+
     async def _ensure_services_ready(self, client: BleakClient) -> None:
         """Ensure GATT services are discovered before first characteristic access."""
         for attempt in range(3):
