@@ -177,6 +177,11 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         if self.hass.state != CoreState.running:
             return False
 
+        # Do not schedule another advertisement-triggered poll while one is
+        # already running; this avoids repeated queued/skip churn.
+        if self._poll_lock.locked():
+            return False
+
         if (
             seconds_since_last_poll is not None
             and seconds_since_last_poll < self._poll_interval_seconds
@@ -250,6 +255,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                         metrics = await self._soc_client.async_query_metrics(
                             ble_device,
                             device_name_hint=self._name,
+                            max_retries=1,
                         )
                 except TimeoutError:
                     self._consecutive_poll_failures += 1
@@ -956,6 +962,11 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         """Run a fallback poll independent of advertisement event timing."""
         if self._shutdown:
             return
+
+        # Fallback timer should not contend with an active advertisement poll.
+        if self._poll_lock.locked():
+            return
+
         await self._async_poll()
 
     @callback
