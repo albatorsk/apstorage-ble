@@ -257,6 +257,12 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda d: d.pcs_hardware_version,
     ),
+    APstorageSensorDescription(
+        key="ble_connection",
+        name="BLE Connection",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda d: None,
+    ),
 )
 
 
@@ -358,11 +364,16 @@ class APstorageSensor(
         maintained by PassiveBluetoothDataUpdateCoordinator based on
         whether the device is still advertising.
         """
+        if self.entity_description.key == "ble_connection":
+            return True
         return self.coordinator.runtime_available
 
     @property
     def native_value(self) -> Any:
         """Return the current sensor value."""
+        if self.entity_description.key == "ble_connection":
+            return self.coordinator.ble_connection_mode
+
         if self.coordinator.data is None:
             return None
         return self.entity_description.value_fn(self.coordinator.data)
@@ -380,6 +391,8 @@ class APstorageSensor(
             if value == "Discharging":
                 return "mdi:battery-arrow-down"
             return "mdi:battery"
+        if key == "ble_connection":
+            return "mdi:bluetooth-connect" if value == "Persistent" else "mdi:bluetooth"
         return None
 
     @property

@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.20.0 - 2026-05-07
+
+### Added
+- Add a new diagnostic sensor `BLE Connection` to expose current connection mode.
+- The sensor reports `Persistent` when an active persistent BLE session is open.
+- The sensor reports `One-shot` when polling is operating without an open persistent session.
+
+### Notes
+- `manifest.json` version bumped to `0.20.0`.
+
 ## v0.19.24 - 2026-05-07
 
 ### Fixed
