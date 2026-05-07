@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.19.24 - 2026-05-07
+
+### Fixed
+- Add staged auto-recovery when BLE discovery drops into repeated `No connectable BLE device found` loops.
+- Track consecutive no-device polls and periodically force-close stale persistent BLE sessions to unblock reconnection.
+- Add cooldown-based fallback probing using cached non-connectable BLE device entries so polling can recover without Home Assistant restart.
+- Temporarily force one-shot polling when recovering from no-device streaks to reduce reconnection pressure on unstable proxy paths.
+
+### Notes
+- `manifest.json` version bumped to `0.19.24`.
+
 ## v0.19.22 - 2026-05-06
 
 ### Fixed
