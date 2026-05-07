@@ -40,6 +40,9 @@ SOC_STALE_AFTER_FAILURES = 3
 SHUTDOWN_WAIT_SECONDS = 10
 DEFAULT_PERSISTENT_SESSION_ENABLED = True
 VERSION_RETRY_INTERVAL_SECONDS = 300
+NO_DEVICE_STRONG_RESET_THRESHOLD = 6
+NO_DEVICE_STRONG_RESET_COOLDOWN_SECONDS = 300
+NO_DEVICE_FALLBACK_PROBE_INTERVAL_SECONDS = 90
 
 
 class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None]):
@@ -94,6 +97,9 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._startup_version_fetch_attempted = False
         self._last_version_retry_at: datetime | None = None
         self._last_successful_poll_at: datetime | None = None
+        self._consecutive_no_device_polls = 0
+        self._last_no_device_probe_at: datetime | None = None
+        self._last_no_device_strong_reset_at: datetime | None = None
         # Persistent sessions improve latency when stable, but shared proxy
         # environments can invalidate long-lived connections unpredictably.
         # Keep persistent mode enabled by default and reconnect the session
@@ -216,6 +222,72 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             self._address,
             connectable=True,
         )
+
+    def _should_run_no_device_probe(self, now: datetime) -> bool:
+        """Return True when enough time elapsed to probe a non-connectable fallback."""
+        if self._last_no_device_probe_at is None:
+            return True
+        elapsed = (now - self._last_no_device_probe_at).total_seconds()
+        return elapsed >= NO_DEVICE_FALLBACK_PROBE_INTERVAL_SECONDS
+
+    async def _async_handle_no_device_detected(self, now: datetime) -> Any | None:
+        """Apply staged recovery when no connectable BLE device is available.
+
+        1. Track no-device streak and stale SoC masking.
+        2. Periodically force-close any stale session state.
+        3. Probe a non-connectable cached BLEDevice as a last-resort target.
+        """
+        self._consecutive_no_device_polls += 1
+        self._consecutive_poll_failures += 1
+
+        if self.data is not None and self._consecutive_poll_failures >= SOC_STALE_AFTER_FAILURES:
+            self.data.battery_soc = None
+            _LOGGER.debug(
+                "[%s] Marked battery SoC unknown after %d consecutive poll failures",
+                self._name,
+                self._consecutive_poll_failures,
+            )
+            self.async_update_listeners()
+
+        should_strong_reset = (
+            self._consecutive_no_device_polls >= NO_DEVICE_STRONG_RESET_THRESHOLD
+            and (
+                self._last_no_device_strong_reset_at is None
+                or (now - self._last_no_device_strong_reset_at).total_seconds()
+                >= NO_DEVICE_STRONG_RESET_COOLDOWN_SECONDS
+            )
+        )
+        if should_strong_reset:
+            _LOGGER.warning(
+                "[%s] No connectable BLE device for %d polls; forcing strong BLE session reset",
+                self._name,
+                self._consecutive_no_device_polls,
+            )
+            await self._soc_client.async_close_session()
+            self._last_service_info = None
+            self._last_no_device_strong_reset_at = now
+
+        if not self._should_run_no_device_probe(now):
+            _LOGGER.warning("[%s] No connectable BLE device found - skipping poll", self._name)
+            return None
+
+        self._last_no_device_probe_at = now
+        fallback = bluetooth.async_ble_device_from_address(
+            self.hass,
+            self._address,
+            connectable=False,
+        )
+        if fallback is None:
+            _LOGGER.warning("[%s] No connectable BLE device found - skipping poll", self._name)
+            return None
+
+        _LOGGER.warning(
+            "[%s] Using fallback BLE cache entry for %s after no-device streak=%d",
+            self._name,
+            self._address,
+            self._consecutive_no_device_polls,
+        )
+        return fallback
 
     def _apply_version_info(self, version_info: dict[str, str]) -> None:
         """Merge one-time version info into coordinator data."""
@@ -366,12 +438,21 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 return
             try:
                 ble_device = self._resolve_ble_device()
+                now = datetime.now(timezone.utc)
+                force_one_shot = False
 
                 if ble_device is None:
-                    _LOGGER.warning(
-                        "[%s] No connectable BLE device found — skipping poll", self._name
+                    ble_device = await self._async_handle_no_device_detected(now)
+                    if ble_device is None:
+                        return
+                    force_one_shot = True
+                elif self._consecutive_no_device_polls:
+                    _LOGGER.debug(
+                        "[%s] BLE device rediscovered after %d no-device polls",
+                        self._name,
+                        self._consecutive_no_device_polls,
                     )
-                    return
+                    self._consecutive_no_device_polls = 0
 
                 # Start from the previous snapshot so transient query failures
                 # do not force all entities to Unknown.
@@ -381,7 +462,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
 
                 try:
                     async with asyncio.timeout(POLL_WATCHDOG_TIMEOUT_SECONDS):
-                        if self._persistent_session_enabled:
+                        if self._persistent_session_enabled and not force_one_shot:
                             try:
                                 # Open a persistent BLE session if not already connected.
                                 # The DH handshake is only performed on (re)connect, not every poll.
@@ -469,6 +550,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                         await self._soc_client.async_close_session()
                         self._last_service_info = None
                 else:
+                    self._consecutive_no_device_polls = 0
                     if self._consecutive_poll_failures:
                         _LOGGER.debug(
                             "[%s] Poll recovered after %d consecutive failures",
