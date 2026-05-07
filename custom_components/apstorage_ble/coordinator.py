@@ -130,6 +130,17 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         age = datetime.now(timezone.utc) - self._last_successful_poll_at
         return age <= timedelta(seconds=grace_seconds)
 
+    @property
+    def ble_connection_mode(self) -> str:
+        """Return the current BLE polling/connection mode label.
+
+        Persistent mode means a live session is currently open and reused.
+        Otherwise, polling falls back to one-shot connect/query/disconnect.
+        """
+        if self._persistent_session_enabled and self._soc_client.session_open:
+            return "Persistent"
+        return "One-shot"
+
     async def async_initialize(self) -> None:
         """Schedule one-time startup version discovery outside the poll path."""
         if self._startup_version_task is None:
