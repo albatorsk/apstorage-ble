@@ -80,6 +80,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._poll_lock = asyncio.Lock()
         self._last_system_mode_write: dict[str, Any] | None = None
         self._last_backup_soc_write: dict[str, Any] | None = None
+        self._last_system_mode_payload_read: dict[str, Any] | None = None
         self._last_advanced_schedule_write: dict[str, Any] | None = None
         self._last_peak_valley_schedule_write: dict[str, Any] | None = None
         self._last_buzzer_mode_write: dict[str, Any] | None = None
@@ -804,6 +805,63 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
     def last_backup_soc_write(self) -> dict[str, Any] | None:
         """Return the most recent backup SOC write attempt for diagnostics."""
         return self._last_backup_soc_write
+
+    async def async_read_system_mode_payload(self) -> dict[str, Any]:
+        """Read current getsysmode payload over BLE for diagnostics/automation."""
+        async with self._poll_lock:
+            await self._soc_client.async_close_session()
+            service_info: BluetoothServiceInfoBleak | None = self._last_service_info
+
+            if service_info is not None and service_info.connectable:
+                ble_device = service_info.device
+            elif service_info is not None:
+                ble_device = bluetooth.async_ble_device_from_address(
+                    self.hass,
+                    service_info.device.address,
+                    connectable=True,
+                )
+            else:
+                ble_device = bluetooth.async_ble_device_from_address(
+                    self.hass,
+                    self._address,
+                    connectable=True,
+                )
+
+            if ble_device is None:
+                raise RuntimeError("No connectable BLE device found for getsysmode read")
+
+            _LOGGER.debug("[%s] Reading getsysmode payload", self._name)
+            result = await self._soc_client.async_get_system_mode_payload(
+                ble_device,
+                device_name_hint=self._name,
+            )
+            self._last_system_mode_payload_read = {
+                "ok": bool(result.get("ok", False)),
+                "code": result.get("code"),
+                "message": result.get("message"),
+                "storage_id": result.get("storage_id"),
+                "payload": result.get("payload"),
+                "at": datetime.now(timezone.utc).isoformat(),
+            }
+            if not bool(result.get("ok", False)):
+                raise RuntimeError(
+                    "getsysmode read failed"
+                    f" (code={result.get('code')}, message={result.get('message')})"
+                )
+
+            payload = result.get("payload")
+            if isinstance(payload, dict) and self.data is not None:
+                mode_value = payload.get("mode")
+                if mode_value is not None:
+                    self.data.system_mode = str(mode_value)
+                    self.async_update_listeners()
+
+            return result
+
+    @property
+    def last_system_mode_payload_read(self) -> dict[str, Any] | None:
+        """Return the most recent getsysmode read attempt."""
+        return self._last_system_mode_payload_read
 
     async def async_set_advanced_schedule(
         self,

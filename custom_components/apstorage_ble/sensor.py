@@ -263,6 +263,12 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda d: None,
     ),
+    APstorageSensorDescription(
+        key="system_mode_payload_read",
+        name="System Mode Payload Read",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda d: None,
+    ),
 )
 
 
@@ -364,7 +370,7 @@ class APstorageSensor(
         maintained by PassiveBluetoothDataUpdateCoordinator based on
         whether the device is still advertising.
         """
-        if self.entity_description.key == "ble_connection":
+        if self.entity_description.key in {"ble_connection", "system_mode_payload_read"}:
             return True
         return self.coordinator.runtime_available
 
@@ -373,6 +379,12 @@ class APstorageSensor(
         """Return the current sensor value."""
         if self.entity_description.key == "ble_connection":
             return self.coordinator.ble_connection_mode
+
+        if self.entity_description.key == "system_mode_payload_read":
+            last_read = self.coordinator.last_system_mode_payload_read
+            if last_read is None:
+                return None
+            return "ok" if bool(last_read.get("ok", False)) else "error"
 
         if self.coordinator.data is None:
             return None
@@ -398,6 +410,19 @@ class APstorageSensor(
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
         """Return optional extra attributes for selected sensors."""
+        if self.entity_description.key == "system_mode_payload_read":
+            read_info = self.coordinator.last_system_mode_payload_read
+            if read_info is None:
+                return None
+            return {
+                "last_read_ok": read_info.get("ok"),
+                "last_read_code": read_info.get("code"),
+                "last_read_message": read_info.get("message"),
+                "last_read_storage_id": read_info.get("storage_id"),
+                "last_read_at": read_info.get("at"),
+                "payload": read_info.get("payload"),
+            }
+
         if self.entity_description.key in {
             "battery_charged_energy",
             "battery_discharged_energy",

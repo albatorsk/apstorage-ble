@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.21.0 - 2026-05-08
+
+### Added
+- Add service `apstorage_ble.get_system_mode_payload` to read current `getsysmode` payload from the battery over BLE.
+- The service now emits Home Assistant event `apstorage_ble_system_mode_payload` with the returned payload (`address`, `storage_id`, `code`, `message`, `payload`).
+- Add diagnostic sensor `System Mode Payload Read` that stores the last read result and exposes the latest payload in entity attributes.
+
+### Changed
+- Keep schedule readback behavior aligned with device-native `getsysmode` response shape (supports both `schedule` and `peakTime`/`valleyTime` payload styles).
+
+### Notes
+- `manifest.json` version bumped to `0.21.0`.
+
 ## v0.20.0 - 2026-05-07
 
 ### Added
