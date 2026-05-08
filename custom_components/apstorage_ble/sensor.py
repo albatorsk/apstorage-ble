@@ -42,7 +42,7 @@ _LOGGER = logging.getLogger(__name__)
 
 SYSTEM_STATE_LABELS: dict[str, str] = {
     "0": "Peak Valley",
-    "1": "Self-consumption",
+    "1": "Self-Consumption",
     "2": "Manual Control",
     "3": "Advanced",
     "4": "Backup power supply",
@@ -166,7 +166,7 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
     # --- System ---
     APstorageSensorDescription(
         key="system_state",
-        name="System State",
+        name="System Mode",
         device_class=None,
         state_class=None,
         value_fn=lambda d: _format_system_state(d.system_state),
