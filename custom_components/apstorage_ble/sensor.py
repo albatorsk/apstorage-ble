@@ -265,7 +265,7 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
     ),
     APstorageSensorDescription(
         key="system_mode_payload_read",
-        name="System Mode Payload Read",
+        name="System Mode Payload",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda d: None,
     ),
@@ -383,16 +383,8 @@ class APstorageSensor(
         if self.entity_description.key == "system_mode_payload_read":
             last_read = self.coordinator.last_system_mode_payload_read
             if last_read is None:
-                return None
-            if not bool(last_read.get("ok", False)):
-                return "error"
-            payload = last_read.get("payload") or {}
-            mode = payload.get("mode", "?")
-            discharge = payload.get("peakTime", [])
-            charge = payload.get("valleyTime", [])
-            w_days = payload.get("W", [])
-            days_str = f", days={w_days}" if w_days else ""
-            return f"mode={mode}, discharge={len(discharge)}, charge={len(charge)}{days_str}"
+                return "Unread"
+            return "Read" if bool(last_read.get("ok", False)) else "Failed"
 
         if self.coordinator.data is None:
             return None
