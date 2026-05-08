@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.21.1 - 2026-05-08
+
+### Changed
+- Rename `System Mode Payload Read` sensor state labels: `peak` → `discharge`, `valley` → `charge` for clarity.
+
 ## v0.21.0 - 2026-05-08
 
 ### Added
