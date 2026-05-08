@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.21.3 - 2026-05-08
+
+### Changed
+- Rename diagnostic sensor `System Mode Payload Read` to `System Mode Payload`.
+- Update diagnostic sensor state mapping to `Unread` (no read yet), `Failed` (last read failed), and `Read` (last read succeeded).
+
 ## v0.21.2 - 2026-05-08
 
 ### Changed
