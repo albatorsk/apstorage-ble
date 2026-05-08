@@ -2956,6 +2956,116 @@ class APstorageSocClient:
             payload_mutator=_mutator,
         )
 
+    async def async_get_system_mode_payload(
+        self,
+        ble_device: BLEDevice,
+        *,
+        device_name_hint: str | None = None,
+    ) -> dict[str, Any]:
+        """Read current getsysmode payload over BLE.
+
+        Returns the device payload as reported by getsysmode so callers can
+        inspect active schedule/flags/mode values.
+        """
+        if not HAS_CRYPTO:
+            _LOGGER.error("pycryptodome required; install with: pip install pycryptodome")
+            return {"ok": False, "code": None, "message": "pycryptodome missing"}
+
+        client: BleakClient | None = None
+        try:
+            async with asyncio.timeout(CONNECT_TIMEOUT_SECONDS):
+                client = await establish_connection(
+                    BleakClientWithServiceCache,
+                    ble_device,
+                    ble_device.address,
+                    max_attempts=3,
+                    use_services_cache=True,
+                )
+                await self._ensure_services_ready(client)
+
+                device_name = ""
+                try:
+                    name_raw = await client.read_gatt_char(DEVICE_NAME_CHAR)
+                    device_name = bytes(name_raw).decode("utf-8", errors="ignore").strip("\x00\r\n ")
+                except Exception:  # noqa: BLE001
+                    device_name = ""
+
+                if not device_name:
+                    device_name = device_name_hint or ""
+                if not device_name:
+                    device_name = ble_device.name or ""
+
+                storage_ids = _derive_storage_id_candidates(
+                    self._preferred_storage_id,
+                    device_name,
+                    device_name_hint,
+                    ble_device.name,
+                )
+
+                if not storage_ids:
+                    _LOGGER.warning("Could not derive storage ID for getsysmode read")
+                    return {
+                        "ok": False,
+                        "code": None,
+                        "message": "could not derive storage id",
+                    }
+
+                await self._establish_blufi_session(client)
+
+                last_code: Any = None
+                last_message: str | None = None
+
+                for storage_id in storage_ids:
+                    get_resp = await self._send_property_request(
+                        client,
+                        method="get",
+                        identifier="getsysmode",
+                        storage_id=storage_id,
+                        params_extra={},
+                        system_id="",
+                    )
+                    if not isinstance(get_resp, dict):
+                        continue
+
+                    last_code = get_resp.get("code")
+                    last_message = str(get_resp.get("msg") or get_resp.get("message") or "")
+
+                    mode_data = _extract_sysmode_payload(get_resp.get("data"))
+                    if mode_data is None:
+                        continue
+
+                    self._preferred_storage_id = storage_id
+                    return {
+                        "ok": True,
+                        "code": last_code,
+                        "message": last_message,
+                        "storage_id": storage_id,
+                        "payload": dict(mode_data),
+                        "raw_data": get_resp.get("data"),
+                    }
+
+                return {
+                    "ok": False,
+                    "code": last_code,
+                    "message": last_message or "no getsysmode payload found",
+                }
+
+        except asyncio.TimeoutError:
+            _LOGGER.warning("getsysmode read timed out for %s", ble_device.address)
+            return {"ok": False, "code": "timeout", "message": "connection/read timeout"}
+        except BleakError as err:
+            _LOGGER.warning("BLE error during getsysmode read for %s: %s", ble_device.address, err)
+            return {"ok": False, "code": "ble_error", "message": str(err)}
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("Unexpected getsysmode read error for %s: %s", ble_device.address, err, exc_info=True)
+            return {"ok": False, "code": "exception", "message": str(err)}
+        finally:
+            if client and client.is_connected:
+                try:
+                    await _safe_disconnect(client)
+                except Exception:  # noqa: BLE001
+                    pass
+
     async def async_set_advanced_schedule(
         self,
         ble_device: BLEDevice,
