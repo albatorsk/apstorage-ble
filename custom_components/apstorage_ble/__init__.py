@@ -39,6 +39,7 @@ PLATFORMS: list[Platform] = [
 ]
 
 SERVICE_SET_SYSTEM_MODE = "set_system_mode"
+SERVICE_GET_SYSTEM_MODE_PAYLOAD = "get_system_mode_payload"
 SERVICE_SET_ADVANCED_SCHEDULE = "set_advanced_schedule"
 SERVICE_SET_PEAK_VALLEY_SCHEDULE = "set_peak_valley_schedule"
 SERVICE_SET_BUZZER_MODE = "set_buzzer_mode"
@@ -56,6 +57,7 @@ ATTR_VALLEY_TIME = "valley_time"
 ATTR_SCHEDULE = "schedule"
 ATTR_ENTRY_ID = "entry_id"
 ATTR_ADDRESS = "address"
+SYSTEM_MODE_PAYLOAD_EVENT = f"{DOMAIN}_system_mode_payload"
 
 _MODE_LABEL_TO_CODE: dict[str, int] = {
     "peak valley": 0,
@@ -70,6 +72,13 @@ _MODE_LABEL_TO_CODE: dict[str, int] = {
 SERVICE_SET_SYSTEM_MODE_SCHEMA = vol.Schema(
     {
         vol.Required(ATTR_MODE): vol.Any(vol.Coerce(int), cv.string),
+        vol.Optional(ATTR_ENTRY_ID): cv.string,
+        vol.Optional(ATTR_ADDRESS): cv.string,
+    }
+)
+
+SERVICE_GET_SYSTEM_MODE_PAYLOAD_SCHEMA = vol.Schema(
+    {
         vol.Optional(ATTR_ENTRY_ID): cv.string,
         vol.Optional(ATTR_ADDRESS): cv.string,
     }
@@ -451,6 +460,32 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             SERVICE_SET_ADVANCED_SCHEDULE,
             _async_handle_set_advanced_schedule,
             schema=SERVICE_SET_ADVANCED_SCHEDULE_SCHEMA,
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_GET_SYSTEM_MODE_PAYLOAD):
+
+        async def _async_handle_get_system_mode_payload(call: ServiceCall) -> None:
+            target = _resolve_target_coordinator(
+                hass,
+                entry_id=call.data.get(ATTR_ENTRY_ID),
+                address=call.data.get(ATTR_ADDRESS),
+            )
+            result = await target.async_read_system_mode_payload()
+            payload = {
+                "entry_id": call.data.get(ATTR_ENTRY_ID),
+                "address": target._address,  # pylint: disable=protected-access
+                "storage_id": result.get("storage_id"),
+                "code": result.get("code"),
+                "message": result.get("message"),
+                "payload": result.get("payload"),
+            }
+            hass.bus.async_fire(SYSTEM_MODE_PAYLOAD_EVENT, payload)
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_GET_SYSTEM_MODE_PAYLOAD,
+            _async_handle_get_system_mode_payload,
+            schema=SERVICE_GET_SYSTEM_MODE_PAYLOAD_SCHEMA,
         )
 
     if not hass.services.has_service(DOMAIN, SERVICE_SET_PEAK_VALLEY_SCHEDULE):

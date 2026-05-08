@@ -94,6 +94,12 @@ Service:
     - `mode`: required (`0..6` or mode label)
     - `entry_id`: optional (target config entry)
     - `address`: optional (target device MAC)
+- `apstorage_ble.get_system_mode_payload`
+    - reads current `getsysmode` payload from battery over BLE
+    - fires event `apstorage_ble_system_mode_payload` with fields:
+      `address`, `storage_id`, `code`, `message`, `payload`
+    - `entry_id`: optional (target config entry)
+    - `address`: optional (target device MAC)
 - `apstorage_ble.set_peak_valley_schedule`
     - `peak_time`: optional (`HH:MM-HH:MM` or `HHMMSSHHMMSS`, max 5)
     - `valley_time`: optional (`HH:MM-HH:MM` or `HHMMSSHHMMSS`, max 5)

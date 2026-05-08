@@ -37,6 +37,25 @@ set_system_mode:
       selector:
         text:
 
+get_system_mode_payload:
+  name: Get System Mode Payload
+  description: >-
+    Read current getsysmode payload over BLE (including mode/schedule fields)
+    and fire the event `apstorage_ble_system_mode_payload` with the result.
+  fields:
+    entry_id:
+      name: Config Entry ID
+      description: Optional target entry id. Required if multiple APstorage entries are loaded and address is not provided.
+      required: false
+      selector:
+        text:
+    address:
+      name: Bluetooth Address
+      description: Optional target device MAC address (AA:BB:CC:DD:EE:FF). Required if multiple entries are loaded and entry_id is not provided.
+      required: false
+      selector:
+        text:
+
 set_advanced_schedule:
   name: Set Advanced Schedule
   description: Set Advanced mode (mode 3) charge/discharge schedule over BLE.
