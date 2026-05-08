@@ -384,7 +384,15 @@ class APstorageSensor(
             last_read = self.coordinator.last_system_mode_payload_read
             if last_read is None:
                 return None
-            return "ok" if bool(last_read.get("ok", False)) else "error"
+            if not bool(last_read.get("ok", False)):
+                return "error"
+            payload = last_read.get("payload") or {}
+            mode = payload.get("mode", "?")
+            discharge = payload.get("peakTime", [])
+            charge = payload.get("valleyTime", [])
+            w_days = payload.get("W", [])
+            days_str = f", days={w_days}" if w_days else ""
+            return f"mode={mode}, discharge={len(discharge)}, charge={len(charge)}{days_str}"
 
         if self.coordinator.data is None:
             return None
