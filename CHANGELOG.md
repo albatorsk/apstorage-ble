@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.21.2 - 2026-05-08
+
+### Changed
+- Rename `System State` sensor to `System Mode` to match the select entity.
+- Fix capitalisation: `Self-consumption` → `Self-Consumption` in sensor state labels.
+
 ## v0.21.1 - 2026-05-08
 
 ### Changed
