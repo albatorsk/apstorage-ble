@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.22.0 - 2026-05-15
+
+### Changed
+- Remove dead sensor icon branch for non-existent `buzzer` sensor key.
+- Remove unused imports and leftover placeholder line in sensor platform module.
+- Update README architecture tree to reflect current integration files (`soc_client.py`, `services.yaml`).
+
+### Notes
+- `manifest.json` version bumped to `0.22.0`.
+
 ## v0.21.3 - 2026-05-08
 
 ### Changed
