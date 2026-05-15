@@ -1,8 +1,6 @@
-    # ...existing code...
 """Sensor platform for the APstorage BLE integration."""
 from __future__ import annotations
 
-from datetime import datetime
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -18,8 +16,6 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     CONF_ADDRESS,
     PERCENTAGE,
-    UnitOfElectricCurrent,
-    UnitOfElectricPotential,
     UnitOfEnergy,
     UnitOfFrequency,
     UnitOfPower,
@@ -49,12 +45,6 @@ SYSTEM_STATE_LABELS: dict[str, str] = {
     "5": "Peak-Shaving",
     "6": "Intelligent",
 }
-
-BUZZER_LABELS: dict[int, str] = {
-    0: "Silent",
-    1: "Normal",
-}
-
 
 def _format_system_state(value: Any) -> Any:
     """Return human-readable label for known system state codes."""
@@ -395,8 +385,6 @@ class APstorageSensor(
         """Return a dynamic icon for selected sensors."""
         value = self.native_value
         key = self.entity_description.key
-        if key == "buzzer":
-            return "mdi:bell-off" if value == "Silent" else "mdi:bell"
         if key == "battery_flow_state":
             if value == "Charging":
                 return "mdi:battery-arrow-up"
