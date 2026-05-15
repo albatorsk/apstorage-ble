@@ -196,11 +196,11 @@ custom_components/apstorage_ble/
 ├── const.py           # GATT UUIDs, constants          ← update UUIDs here
 ├── config_flow.py     # Auto-discovery + manual MAC entry
 ├── coordinator.py     # ActiveBluetoothDataUpdateCoordinator
-├── ble_client.py      # GATT session (connect / write / notify)
-├── parser.py          # Protocol framing & parsing      ← main edit target
+├── soc_client.py      # BLE protocol client (query + control)
 ├── models.py          # PCSData dataclass
 ├── sensor.py          # Sensor entities
 ├── strings.json       # UI strings
+├── services.yaml      # Service definitions
 └── translations/
     └── en.json
 ```
