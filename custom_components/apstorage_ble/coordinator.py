@@ -145,10 +145,9 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
 
     async def async_initialize(self) -> None:
         """Schedule one-time startup version discovery outside the poll path."""
-        if self._startup_version_task is None:
-            self._startup_version_task = self.hass.async_create_task(
-                self._async_fetch_startup_version_info()
-            )
+        # Version polling is disabled: it opens a second BLE connection that
+        # conflicts with the PCS single-connection limit.
+        pass
 
     async def async_shutdown(self) -> None:
         """Block new BLE activity once the config entry is unloading."""
@@ -331,59 +330,8 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         )
 
     async def _async_fetch_startup_version_info(self) -> None:
-        """Fetch firmware version once at startup, then prepare persistent polling."""
-        if self._shutdown or self._startup_version_fetch_attempted:
-            return
-
-        self._startup_version_fetch_attempted = True
-
-        async with self._poll_lock:
-            if self._shutdown:
-                return
-
-            ble_device = self._resolve_ble_device()
-            if ble_device is None:
-                _LOGGER.debug("[%s] Startup version fetch skipped; no connectable BLE device", self._name)
-                return
-
-            version_info: dict[str, str] = {}
-            try:
-                async with asyncio.timeout(POLL_WATCHDOG_TIMEOUT_SECONDS):
-                    if self._persistent_session_enabled and not self._soc_client.session_open:
-                        await self._soc_client.async_open_session(
-                            ble_device,
-                            device_name_hint=self._name,
-                        )
-                        _LOGGER.debug("[%s] Startup persistent BLE session established", self._name)
-
-                    if self._soc_client.session_open:
-                        version_info = await self._soc_client.async_query_session_version_info()
-            except Exception as err:  # noqa: BLE001
-                _LOGGER.debug(
-                    "[%s] Startup version fetch failed (non-fatal): %s: %s",
-                    self._name,
-                    type(err).__name__,
-                    err,
-                )
-
-            if version_info:
-                self._apply_version_info(version_info)
-                self.async_update_listeners()
-                _LOGGER.debug("[%s] Startup version info fetched: %s", self._name, version_info)
-            elif self._persistent_session_enabled and not self._soc_client.session_open:
-                try:
-                    await self._soc_client.async_open_session(
-                        ble_device,
-                        device_name_hint=self._name,
-                    )
-                    _LOGGER.debug("[%s] Startup persistent BLE session established after version fallback", self._name)
-                except Exception as err:  # noqa: BLE001
-                    _LOGGER.debug(
-                        "[%s] Startup persistent session open failed; will retry on next poll (%s: %s)",
-                        self._name,
-                        type(err).__name__,
-                        err,
-                    )
+        """Disabled — version polling is not run to avoid conflicting BLE connections."""
+        pass
 
     # ------------------------------------------------------------------
     # ActiveBluetoothDataUpdateCoordinator callbacks
@@ -697,33 +645,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     if metrics.battery_discharged_energy is not None:
                         self.data.battery_discharged_energy = float(metrics.battery_discharged_energy)
 
-                    # If startup version fetch failed or raced, keep retrying over the
-                    # same persistent session until all version fields are populated.
-                    now = datetime.now(timezone.utc)
-                    due_for_retry = (
-                        self._last_version_retry_at is None
-                        or (now - self._last_version_retry_at).total_seconds() >= VERSION_RETRY_INTERVAL_SECONDS
-                    )
-                    if (
-                        due_for_retry
-                        and self._persistent_session_enabled
-                        and self._soc_client.session_open
-                        and self._version_info_missing()
-                    ):
-                        self._last_version_retry_at = now
-                        try:
-                            version_info = await self._soc_client.async_query_session_version_info()
-                        except Exception as err:  # noqa: BLE001
-                            _LOGGER.debug(
-                                "[%s] Poll-path version retry failed (non-fatal): %s: %s",
-                                self._name,
-                                type(err).__name__,
-                                err,
-                            )
-                        else:
-                            if version_info:
-                                self._apply_version_info(version_info)
-                                _LOGGER.debug("[%s] Poll-path version info fetched: %s", self._name, version_info)
+                # Version polling is disabled; version entities will remain Unknown.
 
                 # Push the update to all subscribed entities.
                 self.async_update_listeners()
