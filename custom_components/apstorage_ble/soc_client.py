@@ -122,6 +122,11 @@ DISCONNECT_TIMEOUT_SECONDS = 5
 NOTIFY_SETTLE_DELAY_SECONDS = 0.10
 PACKET_WRITE_DELAY_SECONDS = 0.05
 POST_SECURITY_SETTLE_DELAY_SECONDS = 0.10
+# After a BLE disconnect the ESPHome proxy takes several seconds to fully
+# release the connection slot on the PCS side.  Waiting this long before the
+# next establish_connection prevents the proxy showing two simultaneous
+# connections to a device that only accepts one.
+POST_DISCONNECT_SETTLE_SECONDS = 4.0
 VERSION_DISCOVERY_RETRY_SECONDS = 30
 VERSION_REFRESH_INTERVAL_SECONDS = 60 * 60
 DIAGNOSTIC_QUERY_TIMEOUT_SECONDS = 8
@@ -1826,6 +1831,9 @@ class APstorageSocClient:
         # Persistent BLE session state (kept open between polls to avoid repeated DH handshakes).
         self._session_ble_client: BleakClient | None = None
         self._session_storage_id: str | None = None
+        # Monotonic timestamp of the most recent BLE disconnect so we can
+        # enforce a post-disconnect settle delay before the next connect.
+        self._last_disconnect_at: float = 0.0
 
     def _reset_blufi_session_state(self) -> None:
         """Drop protocol state that must not leak across BLE sessions."""
@@ -1921,17 +1929,29 @@ class APstorageSocClient:
                     use_services_cache,
                 )
                 
-                # On first attempt, add a small delay to let BlueZ stack stabilize.
-                # This helps recovery after Home Assistant restarts.
-                if attempt == 1:
-                    await asyncio.sleep(0.2)
-                
+                # Enforce post-disconnect settle so the proxy has time to
+                # release the previous connection slot before we open a new one.
+                elapsed = asyncio.get_running_loop().time() - self._last_disconnect_at
+                remaining = POST_DISCONNECT_SETTLE_SECONDS - elapsed
+                if remaining > 0:
+                    _LOGGER.debug(
+                        "[BLE] Waiting %.1fs for proxy disconnect settle (attempt %d)",
+                        remaining,
+                        attempt,
+                    )
+                    await asyncio.sleep(remaining)
+
                 async with asyncio.timeout(CONNECT_TIMEOUT_SECONDS):
+                    # max_attempts=1: bleak_retry_connector must not open
+                    # multiple rapid connections internally — each attempt
+                    # creates a new BLE slot at the proxy before the prior
+                    # one is released.  We control retries at this level
+                    # with an explicit settle delay between them.
                     client = await establish_connection(
                         BleakClientWithServiceCache,
                         ble_device,
                         ble_device.address,
-                        max_attempts=3,
+                        max_attempts=1,
                         use_services_cache=use_services_cache,
                     )
 
@@ -1948,12 +1968,14 @@ class APstorageSocClient:
                             await _safe_disconnect(client)
                         except Exception:  # noqa: BLE001
                             pass
+                        self._last_disconnect_at = asyncio.get_running_loop().time()
+                        await asyncio.sleep(POST_DISCONNECT_SETTLE_SECONDS)
 
                         client = await establish_connection(
                             BleakClientWithServiceCache,
                             ble_device,
                             ble_device.address,
-                            max_attempts=3,
+                            max_attempts=1,
                             use_services_cache=False,
                         )
                         await self._ensure_services_ready(client)
@@ -2005,7 +2027,12 @@ class APstorageSocClient:
                     break
 
                 if attempt < max_retries:
-                    backoff = min(initial_backoff * (2 ** (attempt - 1)), max_backoff)
+                    # Backoff must be at least POST_DISCONNECT_SETTLE_SECONDS so
+                    # the proxy slot is released before we try to connect again.
+                    backoff = max(
+                        POST_DISCONNECT_SETTLE_SECONDS,
+                        min(initial_backoff * (2 ** (attempt - 1)), max_backoff),
+                    )
                     _LOGGER.debug("[BLE] Backing off for %.1fs before retrying", backoff)
                     await asyncio.sleep(backoff)
             finally:
@@ -2014,6 +2041,7 @@ class APstorageSocClient:
                         await _safe_disconnect(client)
                     except Exception:  # noqa: BLE001
                         pass
+                    self._last_disconnect_at = asyncio.get_running_loop().time()
                 self._reset_blufi_session_state()
 
         _LOGGER.error(
@@ -2138,15 +2166,34 @@ class APstorageSocClient:
         # Close any stale prior session first.
         await self.async_close_session()
 
+        # Give the ESPHome proxy time to release its connection slot on the
+        # PCS before we try to open a new one.  Without this delay the proxy
+        # can show two simultaneous connections to a device that only accepts
+        # one, causing the new connect to fail or to leave a ghost connection.
+        elapsed = asyncio.get_running_loop().time() - self._last_disconnect_at
+        remaining = POST_DISCONNECT_SETTLE_SECONDS - elapsed
+        if remaining > 0:
+            _LOGGER.debug(
+                "[BLE] Waiting %.1fs for proxy disconnect settle before reconnecting",
+                remaining,
+            )
+            await asyncio.sleep(remaining)
+
         client: BleakClient | None = None
         try:
             self._reset_blufi_session_state()
             async with asyncio.timeout(CONNECT_TIMEOUT_SECONDS):
+                # max_attempts=1: we must not let bleak_retry_connector open
+                # multiple rapid connections internally — each attempt creates a
+                # new BLE connection visible to the proxy before the previous one
+                # is fully released.  Higher-level retry logic in the coordinator
+                # handles reconnection with the required settle delay between
+                # attempts.
                 client = await establish_connection(
                     BleakClientWithServiceCache,
                     ble_device,
                     ble_device.address,
-                    max_attempts=3,
+                    max_attempts=1,
                     use_services_cache=False,
                 )
                 await self._ensure_services_ready(client)
@@ -2183,6 +2230,7 @@ class APstorageSocClient:
         except Exception:
             if client is not None and client.is_connected:
                 await _safe_disconnect(client)
+                self._last_disconnect_at = asyncio.get_running_loop().time()
             self._reset_blufi_session_state()
             self._session_ble_client = None
             self._session_storage_id = None
@@ -2197,6 +2245,7 @@ class APstorageSocClient:
         if client is not None and client.is_connected:
             _LOGGER.debug("[BLE] Closing persistent session")
             await _safe_disconnect(client)
+            self._last_disconnect_at = asyncio.get_running_loop().time()
 
     async def async_query_session(self) -> SocMetrics | None:
         """Query metrics over the existing persistent BLE session.
