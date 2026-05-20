@@ -43,6 +43,7 @@ VERSION_RETRY_INTERVAL_SECONDS = 300
 NO_DEVICE_STRONG_RESET_THRESHOLD = 6
 NO_DEVICE_STRONG_RESET_COOLDOWN_SECONDS = 300
 NO_DEVICE_FALLBACK_PROBE_INTERVAL_SECONDS = 90
+ONE_SHOT_FALLBACK_MAX_RETRIES = 2
 
 
 class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None]):
@@ -475,6 +476,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 try:
                     async with asyncio.timeout(POLL_WATCHDOG_TIMEOUT_SECONDS):
                         if self._persistent_session_enabled and not force_one_shot:
+                            persistent_failed = False
                             try:
                                 # Open a persistent BLE session if not already connected.
                                 # The DH handshake is only performed on (re)connect, not every poll.
@@ -492,14 +494,60 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                                 metrics = await self._soc_client.async_query_session()
                             except Exception as session_err:  # noqa: BLE001
                                 _LOGGER.warning(
-                                    "[%s] Persistent session failed (%s: %s); closing session and skipping this poll",
+                                    "[%s] Persistent session failed (%s: %s); closing session and falling back to one-shot",
                                     self._name,
                                     type(session_err).__name__,
                                     session_err,
                                 )
                                 await self._soc_client.async_close_session()
+                                persistent_failed = True
                                 metrics = None
+
+                            # Mirror the standalone script behavior: if a persistent
+                            # session breaks, immediately retry via a fresh one-shot
+                            # connect/query path within the same poll cycle.
+                            if metrics is None and persistent_failed:
+                                _LOGGER.debug(
+                                    "[%s] Trying one-shot fallback after persistent failure",
+                                    self._name,
+                                )
+                                if self._soc_client.session_open:
+                                    _LOGGER.debug(
+                                        "[%s] Closing persistent session before one-shot fallback",
+                                        self._name,
+                                    )
+                                    await self._soc_client.async_close_session()
+                                metrics = await self._soc_client.async_query_metrics(
+                                    ble_device,
+                                    device_name_hint=self._name,
+                                    max_retries=ONE_SHOT_FALLBACK_MAX_RETRIES,
+                                )
+
+                            # Persistent session can remain connected yet return an
+                            # empty payload intermittently; recover with one-shot.
+                            if metrics is None and not persistent_failed:
+                                _LOGGER.debug(
+                                    "[%s] Persistent session returned empty metrics; trying one-shot fallback",
+                                    self._name,
+                                )
+                                if self._soc_client.session_open:
+                                    _LOGGER.debug(
+                                        "[%s] Closing persistent session before empty-metrics fallback",
+                                        self._name,
+                                    )
+                                    await self._soc_client.async_close_session()
+                                metrics = await self._soc_client.async_query_metrics(
+                                    ble_device,
+                                    device_name_hint=self._name,
+                                    max_retries=ONE_SHOT_FALLBACK_MAX_RETRIES,
+                                )
                         else:
+                            if self._soc_client.session_open:
+                                _LOGGER.debug(
+                                    "[%s] Closing persistent session before one-shot polling path",
+                                    self._name,
+                                )
+                                await self._soc_client.async_close_session()
                             metrics = await self._soc_client.async_query_metrics(
                                 ble_device,
                                 device_name_hint=self._name,
