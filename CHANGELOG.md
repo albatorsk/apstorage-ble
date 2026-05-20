@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.22.2 - 2026-05-20
+
+### Fixed
+- Eliminate ghost BLE connections on the ESPHome proxy that caused the proxy to show two simultaneous connections to the PCS (which only accepts one).
+- Reduce `establish_connection` `max_attempts` from 3 to 1 in all persistent-session and one-shot connect paths. Each internal retry attempt was opening a new BLE connection at the proxy layer before the previous slot was released, creating the duplicate-connection symptom.
+- Add a `POST_DISCONNECT_SETTLE_SECONDS` (4 s) delay between a BLE disconnect and the next `establish_connection` call, giving the proxy time to fully release the PCS connection slot before the next attempt.
+- Enforce the settle delay as a floor for the between-retry backoff in one-shot polling, so rapid retries can no longer bypass the proxy release window.
+
+### Notes
+- `manifest.json` version bumped to `0.22.2`.
+
 ## v0.22.1 - 2026-05-20
 
 ### Fixed
