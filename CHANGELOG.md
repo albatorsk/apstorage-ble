@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.22.3 - 2026-05-20
+
+### Fixed
+- Disable all version polling (startup fetch and poll-path retry).
+  Version queries open an additional BLE query on the same session which
+  conflicts with the PCS single-connection limit and causes integration
+  failures.  Firmware version entities will remain Unknown until a safe
+  polling mechanism is designed.
+
+### Notes
+- `manifest.json` version bumped to `0.22.3`.
+
 ## v0.22.2 - 2026-05-20
 
 ### Fixed
