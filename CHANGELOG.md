@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.22.1 - 2026-05-20
+
+### Fixed
+- Improve PCS polling reliability by falling back to one-shot connect/query in the same poll cycle when persistent-session polling fails or returns empty metrics.
+- Enforce strict single-connection behavior by always closing any open persistent session before starting one-shot poll paths.
+- Reduce risk of duplicate BLE proxy connections to the same PCS, which only supports one active connection at a time.
+
+### Notes
+- `manifest.json` version bumped to `0.22.1`.
+
 ## v0.22.0 - 2026-05-15
 
 ### Changed
