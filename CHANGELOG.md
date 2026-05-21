@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.23.8 - 2026-05-21
+
+### Fixed
+- Close persistent session before deferred version probe to prevent Blufi state machine confusion during concurrent DH handshakes. The deferred probe now properly isolates its session setup from the active telemetry session.
+
+### Notes
+- `manifest.json` version bumped to `0.23.8`.
+
 ## v0.23.7 - 2026-05-21
 
 ### Fixed
