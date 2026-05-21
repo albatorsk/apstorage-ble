@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.23.11 - 2026-05-22
+
+### Changed
+- Disable optional PCS hardware-version probing by restricting version requests to the primary `pcsVersion` identifier.
+- Remove the PCS Hardware Version diagnostic sensor to avoid persistent Unknown state for non-essential metadata.
+- Add entity-registry migration cleanup to remove existing `pcs_hardware_version` sensor entities.
+
+### Notes
+- `manifest.json` version bumped to `0.23.11`.
+
 ## v0.23.10 - 2026-05-22
 
 ### Changed

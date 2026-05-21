@@ -242,12 +242,6 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         value_fn=lambda d: d.pcs_latest_firmware_version_3,
     ),
     APstorageSensorDescription(
-        key="pcs_hardware_version",
-        name="PCS Hardware Version",
-        entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda d: d.pcs_hardware_version,
-    ),
-    APstorageSensorDescription(
         key="ble_connection",
         name="BLE Connection",
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -275,6 +269,7 @@ async def _async_migrate_sensor_unique_ids(hass: HomeAssistant, entry: ConfigEnt
         f"{address}-alarm_summary",
         f"{address}-pcs_alarm",
         f"{address}-battery_alarm",
+        f"{address}-pcs_hardware_version",
     }
 
     for old_unique_id, new_unique_id in migrations.items():
