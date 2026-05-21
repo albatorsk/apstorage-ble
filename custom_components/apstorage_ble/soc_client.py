@@ -2081,6 +2081,18 @@ class APstorageSocClient:
         client: BleakClient | None = None
         try:
             self._reset_blufi_session_state()
+
+            # If a persistent session was just closed, wait for the ESPHome
+            # proxy to release the PCS connection slot before reconnecting.
+            elapsed = asyncio.get_running_loop().time() - self._last_disconnect_at
+            remaining = POST_DISCONNECT_SETTLE_SECONDS - elapsed
+            if remaining > 0:
+                _LOGGER.debug(
+                    "[BLE] Waiting %.1fs for proxy disconnect settle before version probe",
+                    remaining,
+                )
+                await asyncio.sleep(remaining)
+
             async with asyncio.timeout(CONNECT_TIMEOUT_SECONDS):
                 # max_attempts=1: prevents bleak_retry_connector opening multiple
                 # rapid connections before the proxy releases the prior slot.
