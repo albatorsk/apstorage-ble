@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.23.7 - 2026-05-21
+
+### Fixed
+- Restore firmware version queries to frame type 1, subtype 19 (1/19). The reverse-engineered EMA app probes `pcsVersion` and `storageConfigInfo` as normal property requests over the Bluetooth local path, and the PCS replies on the same 1/19 response frame observed in logs.
+
+### Notes
+- `manifest.json` version bumped to `0.23.7`.
+
 ## v0.23.6 - 2026-05-21
 
 ### Fixed
