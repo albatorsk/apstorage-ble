@@ -82,6 +82,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._last_system_mode_write: dict[str, Any] | None = None
         self._last_backup_soc_write: dict[str, Any] | None = None
         self._last_system_mode_payload_read: dict[str, Any] | None = None
+        self._last_version_probe_read: dict[str, Any] | None = None
         self._last_advanced_schedule_write: dict[str, Any] | None = None
         self._last_peak_valley_schedule_write: dict[str, Any] | None = None
         self._last_buzzer_mode_write: dict[str, Any] | None = None
@@ -876,6 +877,78 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
     def last_system_mode_payload_read(self) -> dict[str, Any] | None:
         """Return the most recent getsysmode read attempt."""
         return self._last_system_mode_payload_read
+
+    async def async_probe_version_once(self) -> dict[str, Any]:
+        """Run one manual one-shot version query and update coordinator data."""
+        async with self._poll_lock:
+            await self._soc_client.async_close_session()
+            service_info: BluetoothServiceInfoBleak | None = self._last_service_info
+
+            if service_info is not None and service_info.connectable:
+                ble_device = service_info.device
+            elif service_info is not None:
+                ble_device = bluetooth.async_ble_device_from_address(
+                    self.hass,
+                    service_info.device.address,
+                    connectable=True,
+                )
+            else:
+                ble_device = bluetooth.async_ble_device_from_address(
+                    self.hass,
+                    self._address,
+                    connectable=True,
+                )
+
+            if ble_device is None:
+                result = {
+                    "ok": False,
+                    "message": "No connectable BLE device found for version probe",
+                    "versions": {},
+                    "at": datetime.now(timezone.utc).isoformat(),
+                }
+                self._last_version_probe_read = result
+                raise RuntimeError(result["message"])
+
+            _LOGGER.debug("[%s] Running one-shot version probe", self._name)
+            try:
+                versions = await self._soc_client.async_query_version_info_once(
+                    ble_device,
+                    device_name_hint=self._name,
+                )
+            except Exception as err:  # noqa: BLE001
+                result = {
+                    "ok": False,
+                    "message": f"{type(err).__name__}: {err}",
+                    "versions": {},
+                    "at": datetime.now(timezone.utc).isoformat(),
+                }
+                self._last_version_probe_read = result
+                raise
+
+            if versions:
+                self._apply_version_info(versions)
+                self.async_update_listeners()
+                result = {
+                    "ok": True,
+                    "message": "version probe successful",
+                    "versions": dict(versions),
+                    "at": datetime.now(timezone.utc).isoformat(),
+                }
+            else:
+                result = {
+                    "ok": False,
+                    "message": "version probe returned no data",
+                    "versions": {},
+                    "at": datetime.now(timezone.utc).isoformat(),
+                }
+
+            self._last_version_probe_read = result
+            return result
+
+    @property
+    def last_version_probe_read(self) -> dict[str, Any] | None:
+        """Return the most recent manual version-probe attempt."""
+        return self._last_version_probe_read
 
     async def async_set_advanced_schedule(
         self,
