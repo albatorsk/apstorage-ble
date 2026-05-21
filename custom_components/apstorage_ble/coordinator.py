@@ -98,6 +98,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._active_poll_task: asyncio.Task[Any] | None = None
         self._startup_version_task: asyncio.Task[Any] | None = None
         self._startup_version_fetch_attempted = False
+        self._deferred_version_probe_attempted = False
         self._last_version_retry_at: datetime | None = None
         self._last_successful_poll_at: datetime | None = None
         self._consecutive_no_device_polls = 0
@@ -689,6 +690,32 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                         self.data.battery_charged_energy = float(metrics.battery_charged_energy)
                     if metrics.battery_discharged_energy is not None:
                         self.data.battery_discharged_energy = float(metrics.battery_discharged_energy)
+
+                # Attempt a deferred one-time version probe after first successful telemetry poll.
+                # This gives firmware version fields a second chance to populate if the startup
+                # probe failed (e.g., due to timing or BLE availability at boot).
+                if self._version_info_missing() and not self._deferred_version_probe_attempted:
+                    self._deferred_version_probe_attempted = True
+                    _LOGGER.debug("[%s] Attempting deferred version probe after successful telemetry poll", self._name)
+                    try:
+                        ble_device = self._resolve_ble_device()
+                        if ble_device is not None:
+                            version_info = await self._soc_client.async_query_version_info_once(
+                                ble_device,
+                                device_name_hint=self._name,
+                            )
+                            if version_info:
+                                self._apply_version_info(version_info)
+                                _LOGGER.debug("[%s] Deferred version probe succeeded: %s", self._name, version_info)
+                        else:
+                            _LOGGER.debug("[%s] Deferred version probe skipped; no connectable BLE device", self._name)
+                    except Exception as err:  # noqa: BLE001
+                        _LOGGER.debug(
+                            "[%s] Deferred version probe failed (non-fatal): %s: %s",
+                            self._name,
+                            type(err).__name__,
+                            err,
+                        )
 
                 # Version polling is disabled; version entities will remain Unknown.
 
