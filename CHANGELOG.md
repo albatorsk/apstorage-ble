@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.23.6 - 2026-05-21
+
+### Fixed
+- Fix version query frame type mismatch: PCS firmware responds to property requests (`pcsVersion`, `storageConfigInfo`) with frame type 1, subtype 18 (not 19). Changed property request/response handling to use frame 1/18 instead of 1/19, allowing version queries to complete successfully instead of timing out.
+
+### Notes
+- `manifest.json` version bumped to `0.23.6`.
+
 ## v0.23.5 - 2026-05-21
 
 ### Added
