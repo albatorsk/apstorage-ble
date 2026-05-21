@@ -331,7 +331,13 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         )
 
     async def _async_fetch_startup_version_info(self) -> None:
-        """Fetch firmware version once at startup, then prepare persistent polling."""
+        """Fetch firmware version once via a dedicated one-shot BLE connection.
+
+        This runs before the persistent telemetry session is opened so that
+        both queries use their own clean Blufi state machine.  The one-shot
+        connection disconnects fully before the persistent session opens,
+        so the PCS never sees two simultaneous connections.
+        """
         if self._shutdown or self._startup_version_fetch_attempted:
             return
 
@@ -346,18 +352,16 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 _LOGGER.debug("[%s] Startup version fetch skipped; no connectable BLE device", self._name)
                 return
 
+            _LOGGER.debug("[%s] Fetching version info via dedicated one-shot connection", self._name)
             version_info: dict[str, str] = {}
             try:
                 async with asyncio.timeout(POLL_WATCHDOG_TIMEOUT_SECONDS):
-                    if self._persistent_session_enabled and not self._soc_client.session_open:
-                        await self._soc_client.async_open_session(
-                            ble_device,
-                            device_name_hint=self._name,
-                        )
-                        _LOGGER.debug("[%s] Startup persistent BLE session established", self._name)
-
-                    if self._soc_client.session_open:
-                        version_info = await self._soc_client.async_query_session_version_info()
+                    # One-shot: connects, queries, disconnects — no shared state with
+                    # the persistent telemetry session that opens on the first poll.
+                    version_info = await self._soc_client.async_query_version_info_once(
+                        ble_device,
+                        device_name_hint=self._name,
+                    )
             except Exception as err:  # noqa: BLE001
                 _LOGGER.debug(
                     "[%s] Startup version fetch failed (non-fatal): %s: %s",
@@ -370,20 +374,8 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 self._apply_version_info(version_info)
                 self.async_update_listeners()
                 _LOGGER.debug("[%s] Startup version info fetched: %s", self._name, version_info)
-            elif self._persistent_session_enabled and not self._soc_client.session_open:
-                try:
-                    await self._soc_client.async_open_session(
-                        ble_device,
-                        device_name_hint=self._name,
-                    )
-                    _LOGGER.debug("[%s] Startup persistent BLE session established after version fallback", self._name)
-                except Exception as err:  # noqa: BLE001
-                    _LOGGER.debug(
-                        "[%s] Startup persistent session open failed; will retry on next poll (%s: %s)",
-                        self._name,
-                        type(err).__name__,
-                        err,
-                    )
+            else:
+                _LOGGER.debug("[%s] Startup version fetch returned no data; version entities will remain Unknown", self._name)
 
     # ------------------------------------------------------------------
     # ActiveBluetoothDataUpdateCoordinator callbacks

@@ -2082,11 +2082,13 @@ class APstorageSocClient:
         try:
             self._reset_blufi_session_state()
             async with asyncio.timeout(CONNECT_TIMEOUT_SECONDS):
+                # max_attempts=1: prevents bleak_retry_connector opening multiple
+                # rapid connections before the proxy releases the prior slot.
                 client = await establish_connection(
                     BleakClientWithServiceCache,
                     ble_device,
                     ble_device.address,
-                    max_attempts=3,
+                    max_attempts=1,
                     use_services_cache=False,
                 )
                 await self._ensure_services_ready(client)
@@ -2143,6 +2145,7 @@ class APstorageSocClient:
                     await _safe_disconnect(client)
                 except Exception:  # noqa: BLE001
                     pass
+                self._last_disconnect_at = asyncio.get_running_loop().time()
             self._reset_blufi_session_state()
 
     async def async_open_session(
