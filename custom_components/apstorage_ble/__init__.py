@@ -505,7 +505,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 entry_id=call.data.get(ATTR_ENTRY_ID),
                 address=call.data.get(ATTR_ADDRESS),
             )
-            result = await target.async_probe_version_once()
+            try:
+                result = await target.async_probe_version_once()
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.debug(
+                    "Version probe service failed for %s: %s: %s",
+                    target._address,  # pylint: disable=protected-access
+                    type(err).__name__,
+                    err,
+                )
+                result = target.last_version_probe_read or {
+                    "ok": False,
+                    "message": f"{type(err).__name__}: {err}",
+                    "versions": {},
+                    "at": None,
+                }
             payload = {
                 "entry_id": call.data.get(ATTR_ENTRY_ID),
                 "address": target._address,  # pylint: disable=protected-access
