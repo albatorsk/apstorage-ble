@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.23.3 - 2026-05-21
+
+### Fixed
+- Increase one-shot version-probe timeout budget to avoid premature `TimeoutError` while iterating multiple version identifiers (`pcsVersion`, `storageConfigInfo`, etc.).
+
+### Notes
+- `manifest.json` version bumped to `0.23.3`.
+
 ## v0.23.2 - 2026-05-21
 
 ### Fixed
