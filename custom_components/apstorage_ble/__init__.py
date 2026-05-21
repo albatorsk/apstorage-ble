@@ -40,6 +40,7 @@ PLATFORMS: list[Platform] = [
 
 SERVICE_SET_SYSTEM_MODE = "set_system_mode"
 SERVICE_GET_SYSTEM_MODE_PAYLOAD = "get_system_mode_payload"
+SERVICE_PROBE_VERSION_ONCE = "probe_version_once"
 SERVICE_SET_ADVANCED_SCHEDULE = "set_advanced_schedule"
 SERVICE_SET_PEAK_VALLEY_SCHEDULE = "set_peak_valley_schedule"
 SERVICE_SET_BUZZER_MODE = "set_buzzer_mode"
@@ -58,6 +59,7 @@ ATTR_SCHEDULE = "schedule"
 ATTR_ENTRY_ID = "entry_id"
 ATTR_ADDRESS = "address"
 SYSTEM_MODE_PAYLOAD_EVENT = f"{DOMAIN}_system_mode_payload"
+VERSION_PROBE_EVENT = f"{DOMAIN}_version_probe"
 
 _MODE_LABEL_TO_CODE: dict[str, int] = {
     "peak valley": 0,
@@ -78,6 +80,13 @@ SERVICE_SET_SYSTEM_MODE_SCHEMA = vol.Schema(
 )
 
 SERVICE_GET_SYSTEM_MODE_PAYLOAD_SCHEMA = vol.Schema(
+    {
+        vol.Optional(ATTR_ENTRY_ID): cv.string,
+        vol.Optional(ATTR_ADDRESS): cv.string,
+    }
+)
+
+SERVICE_PROBE_VERSION_ONCE_SCHEMA = vol.Schema(
     {
         vol.Optional(ATTR_ENTRY_ID): cv.string,
         vol.Optional(ATTR_ADDRESS): cv.string,
@@ -486,6 +495,32 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             SERVICE_GET_SYSTEM_MODE_PAYLOAD,
             _async_handle_get_system_mode_payload,
             schema=SERVICE_GET_SYSTEM_MODE_PAYLOAD_SCHEMA,
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_PROBE_VERSION_ONCE):
+
+        async def _async_handle_probe_version_once(call: ServiceCall) -> None:
+            target = _resolve_target_coordinator(
+                hass,
+                entry_id=call.data.get(ATTR_ENTRY_ID),
+                address=call.data.get(ATTR_ADDRESS),
+            )
+            result = await target.async_probe_version_once()
+            payload = {
+                "entry_id": call.data.get(ATTR_ENTRY_ID),
+                "address": target._address,  # pylint: disable=protected-access
+                "ok": bool(result.get("ok", False)),
+                "message": result.get("message"),
+                "versions": result.get("versions"),
+                "at": result.get("at"),
+            }
+            hass.bus.async_fire(VERSION_PROBE_EVENT, payload)
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_PROBE_VERSION_ONCE,
+            _async_handle_probe_version_once,
+            schema=SERVICE_PROBE_VERSION_ONCE_SCHEMA,
         )
 
     if not hass.services.has_service(DOMAIN, SERVICE_SET_PEAK_VALLEY_SCHEDULE):
