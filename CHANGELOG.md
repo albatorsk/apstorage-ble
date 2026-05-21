@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.23.1 - 2026-05-21
+
+### Added
+- New service `apstorage_ble.probe_version_once` to run a manual one-shot firmware-version probe on demand.
+- New event `apstorage_ble_version_probe` emitted with probe result payload (`ok`, `message`, `versions`, `address`, `at`).
+
+### Changed
+- Manual version probe closes the persistent telemetry session first, runs a dedicated one-shot version query, and updates version entities immediately when data is returned.
+
+### Notes
+- `manifest.json` version bumped to `0.23.1`.
+
 ## v0.23.0 - 2026-05-21
 
 ### Changed
