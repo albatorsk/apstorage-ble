@@ -133,6 +133,10 @@ DIAGNOSTIC_QUERY_TIMEOUT_SECONDS = 8
 DIAGNOSTIC_ENRICH_BUDGET_SECONDS = 4
 QUERY_ATTEMPT_TIMEOUT_SECONDS = 40
 DIAGNOSTIC_MIN_REMAINING_BUDGET_SECONDS = 1.5
+# Version probing may query several identifiers sequentially (pcsVersion,
+# storageConfigInfo, etc.). Allow a larger one-shot budget so the probe does
+# not time out while telemetry remains healthy.
+VERSION_QUERY_ONESHOT_TIMEOUT_SECONDS = 90
 
 try:
     from Crypto.Cipher import AES
@@ -2093,7 +2097,7 @@ class APstorageSocClient:
                 )
                 await asyncio.sleep(remaining)
 
-            async with asyncio.timeout(CONNECT_TIMEOUT_SECONDS):
+            async with asyncio.timeout(VERSION_QUERY_ONESHOT_TIMEOUT_SECONDS):
                 # max_attempts=1: prevents bleak_retry_connector opening multiple
                 # rapid connections before the proxy releases the prior slot.
                 client = await establish_connection(
