@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.23.10 - 2026-05-22
+
+### Changed
+- Release version bump for GitHub distribution.
+
+### Notes
+- `manifest.json` version bumped to `0.23.10`.
+
 ## v0.23.9 - 2026-05-22
 
 ### Fixed
