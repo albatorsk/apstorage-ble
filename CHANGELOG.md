@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.22.4 - 2026-05-21
+
+### Changed
+- Re-enable version fetch as a one-time startup task only.
+- Keep periodic poll-path version retries disabled.
+- Version information is now queried once during startup and never retried during normal polling.
+
+### Notes
+- `manifest.json` version bumped to `0.22.4`.
+
 ## v0.22.3 - 2026-05-20
 
 ### Fixed
