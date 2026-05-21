@@ -3742,16 +3742,10 @@ class APstorageSocClient:
     ) -> dict[str, str]:
         """Query PCS version-related information via app-compatible requests."""
         combined: dict[str, str] = dict(cached_info or {})
-        identifiers = (
-            ("pcsVersion",)
-            if _version_info_is_complete_enough(cached_info)
-            else (
-                "pcsVersion",
-                "storageConfigInfo",
-                "getStorageConfigurationInfo",
-                "get/initializationInfo",
-            )
-        )
+        # Keep version polling bounded to the primary endpoint. Secondary
+        # identifiers are only needed for optional hardware metadata and can
+        # time out on some proxy paths.
+        identifiers = ("pcsVersion",)
 
         for identifier in identifiers:
             try:
@@ -3774,12 +3768,6 @@ class APstorageSocClient:
             version_info = _extract_version_info(response)
             for field_name, field_value in version_info.items():
                 combined.setdefault(field_name, field_value)
-
-            # Keep startup/version probes bounded: once the primary
-            # app-equivalent identifier has yielded useful fields, avoid
-            # slower secondary lookups that can time out on some proxies.
-            if identifier == "pcsVersion" and combined:
-                break
 
             if _version_info_is_complete_enough(combined):
                 break
