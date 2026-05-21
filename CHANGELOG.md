@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.23.5 - 2026-05-21
+
+### Added
+- Implement single deferred automatic version probe that runs exactly once after the first successful telemetry poll, restoring eventual-consistency behavior while maintaining the safe one-shot connection architecture. This gives firmware version fields a second chance to populate if the startup probe failed due to timing or BLE availability at boot.
+
+### Notes
+- `manifest.json` version bumped to `0.23.5`.
+
 ## v0.23.4 - 2026-05-21
 
 ### Fixed
