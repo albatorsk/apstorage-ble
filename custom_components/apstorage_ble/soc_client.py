@@ -3661,7 +3661,7 @@ class APstorageSocClient:
         request_json = json.dumps(request, separators=(",", ":"))
         payload = self._encrypt_request_json_hexascii(request_json)
 
-        cmd_custom = _make_cmd(1, 19)
+        cmd_custom = _make_cmd(1, 18)
         packets = self._codec.build_packets(cmd_custom, payload, encrypt=True, checksum=True, aes_key=self.session_key)
 
         frame: BlufiFrame | None = None
@@ -3812,7 +3812,7 @@ class APstorageSocClient:
             await client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
             await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
 
-        frame = await self._wait_frame(1, 19, response_timeout_seconds)
+        frame = await self._wait_frame(1, 18, response_timeout_seconds)
         decrypted = self._decrypt_response_payload(frame.payload)
         try:
             parsed = json.loads(decrypted)
