@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.23.2 - 2026-05-21
+
+### Fixed
+- Add proxy settle delay before manual one-shot version probe reconnects, preventing immediate reconnect races after closing the persistent telemetry session.
+- Make `apstorage_ble.probe_version_once` fail gracefully by returning event payloads with `ok: false`/`message` instead of surfacing full service tracebacks.
+
+### Notes
+- `manifest.json` version bumped to `0.23.2`.
+
 ## v0.23.1 - 2026-05-21
 
 ### Added
