@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.23.9 - 2026-05-22
+
+### Fixed
+- Treat firmware version discovery as complete once current/latest firmware fields are available, instead of requiring hardware version. This prevents unnecessary secondary identifier probes that can time out on some proxy paths.
+- Stop the version query sequence after `pcsVersion` returns usable data, avoiding long startup probe runtimes that could hit the one-shot outer timeout and leave entities as Unknown.
+
+### Notes
+- `manifest.json` version bumped to `0.23.9`.
+
 ## v0.23.8 - 2026-05-21
 
 ### Fixed
