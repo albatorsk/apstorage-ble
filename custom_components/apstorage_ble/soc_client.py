@@ -2133,6 +2133,12 @@ class APstorageSocClient:
                     )
                     return {}
 
+                # Version probes should complete quickly after startup/manual
+                # trigger. The first candidate is the app-equivalent primary ID
+                # and is sufficient in practice; probing case-variants can
+                # double/triple runtime and exceed the one-shot timeout budget.
+                storage_ids = [storage_ids[0]]
+
                 await self._establish_blufi_session(client)
 
                 for storage_id in storage_ids:

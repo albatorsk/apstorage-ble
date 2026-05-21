@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.23.4 - 2026-05-21
+
+### Fixed
+- Limit one-shot version probe to the primary storage-ID candidate only, avoiding case-variant retries that could multiply diagnostic query time and trigger timeout failures.
+
+### Notes
+- `manifest.json` version bumped to `0.23.4`.
+
 ## v0.23.3 - 2026-05-21
 
 ### Fixed
