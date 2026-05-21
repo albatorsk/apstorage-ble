@@ -2100,6 +2100,8 @@ class APstorageSocClient:
             async with asyncio.timeout(VERSION_QUERY_ONESHOT_TIMEOUT_SECONDS):
                 # max_attempts=1: prevents bleak_retry_connector opening multiple
                 # rapid connections before the proxy releases the prior slot.
+                _LOGGER.debug("[BLE] Starting one-shot BLE connection for version probe")
+                start_connect = asyncio.get_running_loop().time()
                 client = await establish_connection(
                     BleakClientWithServiceCache,
                     ble_device,
@@ -2107,6 +2109,8 @@ class APstorageSocClient:
                     max_attempts=1,
                     use_services_cache=False,
                 )
+                elapsed_connect = asyncio.get_running_loop().time() - start_connect
+                _LOGGER.debug("[BLE] One-shot BLE connection established in %.1fs", elapsed_connect)
                 await self._ensure_services_ready(client)
 
                 try:
@@ -2139,7 +2143,11 @@ class APstorageSocClient:
                 # double/triple runtime and exceed the one-shot timeout budget.
                 storage_ids = [storage_ids[0]]
 
+                _LOGGER.debug("[BLE] Starting Blufi DH handshake for version probe")
+                start_dh = asyncio.get_running_loop().time()
                 await self._establish_blufi_session(client)
+                elapsed_dh = asyncio.get_running_loop().time() - start_dh
+                _LOGGER.debug("[BLE] Blufi DH handshake completed in %.1fs", elapsed_dh)
 
                 for storage_id in storage_ids:
                     try:
@@ -3569,8 +3577,11 @@ class APstorageSocClient:
 
     async def _establish_blufi_session(self, client: BleakClient) -> None:
         """Perform Blufi DH and security setup."""
+        _LOGGER.debug("[BLE] _establish_blufi_session: Starting DH handshake")
         self._reset_blufi_session_state()
+        _LOGGER.debug("[BLE] _establish_blufi_session: Blufi state reset; parsed_frames cleared")
         await self._select_protocol_profile(client)
+        _LOGGER.debug("[BLE] _establish_blufi_session: Protocol profile selected: %s", self._profile_name)
 
         # Generate DH keypair
         p = int(BLUFI_DH_P_HEX, 16)
@@ -3603,15 +3614,24 @@ class APstorageSocClient:
         packets_0 = self._codec.build_packets(cmd_nego, nego_payload_0, encrypt=False, checksum=False)
         packets_1 = self._codec.build_packets(cmd_nego, nego_payload_1, encrypt=False, checksum=False)
 
-        await client.start_notify(self._profile.notify_char_uuid, self._on_notify)
+        _LOGGER.debug("[BLE] Registering notification callback for DH handshake")
+        try:
+            await client.start_notify(self._profile.notify_char_uuid, self._on_notify)
+            _LOGGER.debug("[BLE] Notification callback registered; waiting for settle delay")
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("[BLE] Failed to register notification callback: %s", err)
+            raise
         await asyncio.sleep(NOTIFY_SETTLE_DELAY_SECONDS)
 
+        _LOGGER.debug("[BLE] Sending DH negotiation packets")
         for pkt in packets_0 + packets_1:
             await client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
             await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
 
         # Wait for device public key response
+        _LOGGER.debug("[BLE] Waiting for DH response frame (1,0) with %ss timeout", RESPONSE_TIMEOUT_SECONDS)
         frame = await self._wait_frame(1, 0, RESPONSE_TIMEOUT_SECONDS)
+        _LOGGER.debug("[BLE] DH response frame received: %d bytes", len(frame.payload) if frame else 0)
         dev_pub = int(frame.payload.hex(), 16)
         shared = pow(dev_pub, priv, p)
         shared_hex = format(shared, "x")
@@ -3623,12 +3643,14 @@ class APstorageSocClient:
         # Keep notifications active for the remainder of the secured session.
         # Some PCS/BlueZ combinations miss the first encrypted reply if the
         # subscription is torn down and recreated between DH and the request.
+        _LOGGER.debug("[BLE] Sending security setup packet")
         cmd_sec = _make_cmd(0, 1)
         sec_packets = self._codec.build_packets(cmd_sec, bytes([0x03]), encrypt=False, checksum=True, aes_key=self.session_key)
         for pkt in sec_packets:
             await client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
             await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
         await asyncio.sleep(POST_SECURITY_SETTLE_DELAY_SECONDS)
+        _LOGGER.debug("[BLE] _establish_blufi_session: DH handshake complete")
 
     async def _send_soc_request(
         self,
@@ -3823,6 +3845,7 @@ class APstorageSocClient:
 
     def _on_notify(self, _sender: Any, data: bytearray) -> None:
         """Notification callback used during DH/security setup."""
+        _LOGGER.debug("[BLE] Notification received: %d bytes", len(data))
         self._on_notify_impl(_sender, data)
 
     def _on_notify_impl(self, _sender: Any, data: bytearray) -> None:
@@ -3831,28 +3854,39 @@ class APstorageSocClient:
         try:
             frame = self._codec.parse_notify(raw, aes_key=self.session_key)
             if frame:
+                _LOGGER.debug("[BLE] Frame parsed: type=%d subtype=%d payload=%d bytes", 
+                             frame.frame_type, frame.subtype, len(frame.payload))
                 self.parsed_frames.append(frame)
-        except Exception:  # noqa: BLE001
-            pass
+            else:
+                _LOGGER.debug("[BLE] Parse returned None for %d byte notification", len(raw))
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("[BLE] Exception parsing notification: %s", err)
 
     async def _wait_frame(
         self, frame_type: int, subtype: int, timeout_seconds: float
     ) -> BlufiFrame:
         """Wait for a specific frame type/subtype."""
+        _LOGGER.debug("[BLE] _wait_frame: waiting for frame type=%d subtype=%d (timeout=%.1fs, have %d frames so far)", 
+                     frame_type, subtype, timeout_seconds, len(self.parsed_frames))
         start = asyncio.get_event_loop().time()
         while asyncio.get_event_loop().time() - start < timeout_seconds:
             while self._frame_cursor < len(self.parsed_frames):
                 frame = self.parsed_frames[self._frame_cursor]
                 self._frame_cursor += 1
                 if frame.frame_type == frame_type and frame.subtype == subtype:
+                    _LOGGER.debug("[BLE] _wait_frame: found target frame after %.1fs", 
+                                 asyncio.get_event_loop().time() - start)
                     return frame
 
             await asyncio.sleep(0.05)
 
+        elapsed = asyncio.get_event_loop().time() - start
         observed = [
             f"{frame.frame_type}/{frame.subtype}"
             for frame in self.parsed_frames[max(0, self._frame_cursor - 5):]
         ]
+        _LOGGER.debug("[BLE] _wait_frame: timeout after %.1fs; total frames collected: %d; observed: %s", 
+                     elapsed, len(self.parsed_frames), observed or ['none'])
         raise TimeoutError(
             f"No frame type={frame_type} subtype={subtype} received"
             f"; observed={observed or ['none']}"
