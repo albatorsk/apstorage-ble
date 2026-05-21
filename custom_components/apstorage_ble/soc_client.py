@@ -417,17 +417,16 @@ def _should_refresh_version_info(
 def _version_info_is_complete_enough(info: dict[str, str] | None) -> bool:
     """Return True when key firmware metadata has been captured.
 
-    Current and latest versions are usually returned by `pcsVersion`, while
-    hardware version may come from initialization/configuration endpoints.
-    Keep discovery active until hardware has also been found.
+    Current and latest versions are usually returned by `pcsVersion` and are
+    sufficient for stable entity values. Hardware version can be missing on
+    some firmware/proxy paths, so do not require it for completion.
     """
     if not info:
         return False
 
     current = _to_text(info.get("pcs_firmware_version")) or _to_text(info.get("pcs_software_version"))
     latest = _to_text(info.get("pcs_latest_firmware_version"))
-    hardware = _to_text(info.get("pcs_hardware_version"))
-    return current is not None and latest is not None and hardware is not None
+    return current is not None and latest is not None
 
 
 def _parse_jsonish(value: Any) -> Any:
@@ -3775,6 +3774,12 @@ class APstorageSocClient:
             version_info = _extract_version_info(response)
             for field_name, field_value in version_info.items():
                 combined.setdefault(field_name, field_value)
+
+            # Keep startup/version probes bounded: once the primary
+            # app-equivalent identifier has yielded useful fields, avoid
+            # slower secondary lookups that can time out on some proxies.
+            if identifier == "pcsVersion" and combined:
+                break
 
             if _version_info_is_complete_enough(combined):
                 break
