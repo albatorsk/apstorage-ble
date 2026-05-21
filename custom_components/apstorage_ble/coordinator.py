@@ -700,6 +700,11 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     try:
                         ble_device = self._resolve_ble_device()
                         if ble_device is not None:
+                            # Close the persistent session before starting the one-shot version probe
+                            # to avoid Blufi state machine confusion from concurrent DH handshakes.
+                            if self._soc_client.session_open:
+                                _LOGGER.debug("[%s] Closing persistent session before deferred version probe", self._name)
+                                await self._soc_client.async_close_session()
                             version_info = await self._soc_client.async_query_version_info_once(
                                 ble_device,
                                 device_name_hint=self._name,
