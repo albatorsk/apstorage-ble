@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.23.0 - 2026-05-21
+
+### Changed
+- Firmware version query now uses a dedicated one-shot BLE connection that
+  connects, queries, and fully disconnects before the persistent telemetry
+  session opens. Previously both shared the same session, which caused the
+  PCS Blufi state machine to receive mixed command types and return garbled
+  or empty version responses.
+- The 4-second post-disconnect settle delay is now stamped after the version
+  query disconnects, so the persistent session always waits for the proxy to
+  release the connection slot before reconnecting.
+- Reduced `establish_connection` `max_attempts` to 1 in the version one-shot
+  path to prevent ghost connections at the proxy layer.
+
+### Notes
+- `manifest.json` version bumped to `0.23.0`.
+
 ## v0.22.4 - 2026-05-21
 
 ### Changed
