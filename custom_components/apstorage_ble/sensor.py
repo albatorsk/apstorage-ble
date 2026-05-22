@@ -25,6 +25,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
+from homeassistant.helpers.entity_registry import EntityRegistryEnabledDefault
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
@@ -245,6 +246,13 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         key="ble_connection",
         name="BLE Connection",
         entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=EntityRegistryEnabledDefault.DISABLED,
+        value_fn=lambda d: None,
+    ),
+    APstorageSensorDescription(
+        key="entity_values_source",
+        name="Entity Values Source",
+        entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda d: None,
     ),
     APstorageSensorDescription(
@@ -355,7 +363,7 @@ class APstorageSensor(
         maintained by PassiveBluetoothDataUpdateCoordinator based on
         whether the device is still advertising.
         """
-        if self.entity_description.key in {"ble_connection", "system_mode_payload_read"}:
+        if self.entity_description.key in {"ble_connection", "entity_values_source", "system_mode_payload_read"}:
             return True
         return self.coordinator.runtime_available
 
@@ -364,6 +372,9 @@ class APstorageSensor(
         """Return the current sensor value."""
         if self.entity_description.key == "ble_connection":
             return self.coordinator.ble_connection_mode
+
+        if self.entity_description.key == "entity_values_source":
+            return self.coordinator.entity_values_source
 
         if self.entity_description.key == "system_mode_payload_read":
             last_read = self.coordinator.last_system_mode_payload_read
@@ -388,6 +399,12 @@ class APstorageSensor(
             return "mdi:battery"
         if key == "ble_connection":
             return "mdi:bluetooth-connect" if value == "Persistent" else "mdi:bluetooth"
+        if key == "entity_values_source":
+            if value == "Live":
+                return "mdi:database-check"
+            if value == "Cached":
+                return "mdi:database-clock"
+            return "mdi:database-question"
         return None
 
     @property
