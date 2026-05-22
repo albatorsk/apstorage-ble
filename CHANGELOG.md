@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.23.12 - 2026-05-22
+
+### Added
+- Add `Entity Values Source` diagnostic sensor to show whether exposed entity values are `Live`, `Cached`, or `Unknown`.
+
+### Changed
+- Keep the last successful battery SoC value cached when a telemetry poll fails, instead of forcing SoC to `Unknown` after repeated failures.
+- Disable the `BLE Connection` diagnostic sensor by default in the entity registry (existing enabled entities are unchanged).
+
+### Notes
+- `manifest.json` version bumped to `0.23.12`.
+
 ## v0.23.11 - 2026-05-22
 
 ### Changed
