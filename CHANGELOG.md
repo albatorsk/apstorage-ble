@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.23.13 - 2026-05-22
+
+### Fixed
+- Preload integration platform modules (`sensor`, `select`, `button`, `switch`, `number`) in the executor before `async_forward_entry_setups` to avoid Home Assistant blocking-operation warnings for `import_module` in the event loop.
+
+### Notes
+- `manifest.json` version bumped to `0.23.13`.
+
 ## v0.23.12 - 2026-05-22
 
 ### Added
