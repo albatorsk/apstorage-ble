@@ -25,7 +25,6 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
-from homeassistant.helpers.entity_registry import EntityRegistryEnabledDefault
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
@@ -246,7 +245,7 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         key="ble_connection",
         name="BLE Connection",
         entity_category=EntityCategory.DIAGNOSTIC,
-        entity_registry_enabled_default=EntityRegistryEnabledDefault.DISABLED,
+        entity_registry_enabled_default=False,
         value_fn=lambda d: None,
     ),
     APstorageSensorDescription(
