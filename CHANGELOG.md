@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.23.14 - 2026-05-22
+
+### Fixed
+- Restore compatibility with Home Assistant versions that do not export `EntityRegistryEnabledDefault` by using `entity_registry_enabled_default=False` for the `BLE Connection` diagnostic sensor.
+
+### Notes
+- `manifest.json` version bumped to `0.23.14`.
+
 ## v0.23.13 - 2026-05-22
 
 ### Fixed
