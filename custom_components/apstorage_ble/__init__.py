@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+import importlib
 import json
 import logging
 import re
@@ -70,6 +71,23 @@ _MODE_LABEL_TO_CODE: dict[str, int] = {
     "peak-shaving": 5,
     "intelligent": 6,
 }
+
+
+async def _async_preload_platform_modules(
+    hass: HomeAssistant,
+    platforms: list[Platform],
+) -> None:
+    """Pre-import platform modules outside the event loop.
+
+    Home Assistant can flag importlib usage during async platform forwarding as
+    a blocking operation if modules are imported for the first time on-loop.
+    Preloading in the executor keeps setup compliant.
+    """
+    for platform in platforms:
+        await hass.async_add_executor_job(
+            importlib.import_module,
+            f"{__package__}.{platform.value}",
+        )
 
 SERVICE_SET_SYSTEM_MODE_SCHEMA = vol.Schema(
     {
@@ -673,6 +691,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             schema=SERVICE_SET_PEAK_POWER_SCHEMA,
         )
 
+    await _async_preload_platform_modules(hass, PLATFORMS)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     # Start listening for Bluetooth advertisements *after* the platform has had
