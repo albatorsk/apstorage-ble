@@ -33,13 +33,10 @@ _LOGGER = logging.getLogger(__name__)
 # (2 × RESPONSE_TIMEOUT_SECONDS + connection overhead ≈ 75 s).
 POLL_WATCHDOG_TIMEOUT_SECONDS = 120
 
-# After this many consecutive poll failures, expose SoC as unknown instead of
-# keeping a stale last-known value. This avoids misleading flat-line artifacts
-# in history when BLE polling is temporarily unavailable.
-SOC_STALE_AFTER_FAILURES = 3
 SHUTDOWN_WAIT_SECONDS = 10
 DEFAULT_PERSISTENT_SESSION_ENABLED = True
 VERSION_RETRY_INTERVAL_SECONDS = 300
+POLL_FAILURE_RECONNECT_THRESHOLD = 3
 NO_DEVICE_STRONG_RESET_THRESHOLD = 6
 NO_DEVICE_STRONG_RESET_COOLDOWN_SECONDS = 300
 NO_DEVICE_FALLBACK_PROBE_INTERVAL_SECONDS = 90
@@ -101,6 +98,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._deferred_version_probe_attempted = False
         self._last_version_retry_at: datetime | None = None
         self._last_successful_poll_at: datetime | None = None
+        self._last_poll_used_cached_data: bool | None = None
         self._consecutive_no_device_polls = 0
         self._last_no_device_probe_at: datetime | None = None
         self._last_no_device_strong_reset_at: datetime | None = None
@@ -144,6 +142,20 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         if self._persistent_session_enabled and self._soc_client.session_open:
             return "Persistent"
         return "One-shot"
+
+    @property
+    def entity_values_source(self) -> str:
+        """Return whether entity values are live or cached.
+
+        - Unknown: no successful telemetry poll yet.
+        - Live: the most recent poll received fresh telemetry.
+        - Cached: latest entity values come from prior successful telemetry.
+        """
+        if self._last_successful_poll_at is None:
+            return "Unknown"
+        if self._last_poll_used_cached_data:
+            return "Cached"
+        return "Live"
 
     async def async_initialize(self) -> None:
         """Schedule one-time startup version discovery outside the poll path."""
@@ -254,15 +266,6 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         """
         self._consecutive_no_device_polls += 1
         self._consecutive_poll_failures += 1
-
-        if self.data is not None and self._consecutive_poll_failures >= SOC_STALE_AFTER_FAILURES:
-            self.data.battery_soc = None
-            _LOGGER.debug(
-                "[%s] Marked battery SoC unknown after %d consecutive poll failures",
-                self._name,
-                self._consecutive_poll_failures,
-            )
-            self.async_update_listeners()
 
         should_strong_reset = (
             self._consecutive_no_device_polls >= NO_DEVICE_STRONG_RESET_THRESHOLD
@@ -451,6 +454,8 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 if ble_device is None:
                     ble_device = await self._async_handle_no_device_detected(now)
                     if ble_device is None:
+                        self._last_poll_used_cached_data = True
+                        self.async_update_listeners()
                         return
                     force_one_shot = True
                 elif self._consecutive_no_device_polls:
@@ -549,24 +554,19 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                             )
                 except TimeoutError:
                     self._consecutive_poll_failures += 1
+                    self._last_poll_used_cached_data = True
                     _LOGGER.warning(
                         "[%s] Poll watchdog timed out after %ss; closing BLE session",
                         self._name,
                         POLL_WATCHDOG_TIMEOUT_SECONDS,
                     )
                     await self._soc_client.async_close_session()
-                    if self.data is not None and self._consecutive_poll_failures >= SOC_STALE_AFTER_FAILURES:
-                        self.data.battery_soc = None
-                        _LOGGER.debug(
-                            "[%s] Marked battery SoC unknown after %d consecutive poll failures",
-                            self._name,
-                            self._consecutive_poll_failures,
-                        )
-                        self.async_update_listeners()
                     self._last_service_info = None
+                    self.async_update_listeners()
                     return
                 except Exception as err:  # noqa: BLE001
                     self._consecutive_poll_failures += 1
+                    self._last_poll_used_cached_data = True
                     _LOGGER.warning(
                         "[%s] Poll failed with %s: %s; closing BLE session",
                         self._name,
@@ -574,28 +574,15 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                         err,
                     )
                     await self._soc_client.async_close_session()
-                    if self.data is not None and self._consecutive_poll_failures >= SOC_STALE_AFTER_FAILURES:
-                        self.data.battery_soc = None
-                        _LOGGER.debug(
-                            "[%s] Marked battery SoC unknown after %d consecutive poll failures",
-                            self._name,
-                            self._consecutive_poll_failures,
-                        )
-                        self.async_update_listeners()
                     self._last_service_info = None
+                    self.async_update_listeners()
                     return
 
                 if metrics is None:
                     self._consecutive_poll_failures += 1
+                    self._last_poll_used_cached_data = True
                     _LOGGER.info("[%s] SoC query returned no metrics", self._name)
-                    if self.data is not None and self._consecutive_poll_failures >= SOC_STALE_AFTER_FAILURES:
-                        self.data.battery_soc = None
-                        _LOGGER.debug(
-                            "[%s] Marked battery SoC unknown after %d consecutive poll failures",
-                            self._name,
-                            self._consecutive_poll_failures,
-                        )
-                    if self._consecutive_poll_failures >= SOC_STALE_AFTER_FAILURES:
+                    if self._consecutive_poll_failures >= POLL_FAILURE_RECONNECT_THRESHOLD:
                         _LOGGER.warning(
                             "[%s] Poll failed %d times in a row; closing BLE session to force reconnect",
                             self._name,
@@ -605,6 +592,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                         self._last_service_info = None
                 else:
                     self._consecutive_no_device_polls = 0
+                    self._last_poll_used_cached_data = False
                     if self._consecutive_poll_failures:
                         _LOGGER.debug(
                             "[%s] Poll recovered after %d consecutive failures",
