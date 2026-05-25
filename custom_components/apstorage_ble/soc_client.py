@@ -2112,16 +2112,17 @@ class APstorageSocClient:
                 _LOGGER.debug("[BLE] One-shot BLE connection established in %.1fs", elapsed_connect)
                 await self._ensure_services_ready(client)
 
-                try:
-                    name_raw = await client.read_gatt_char(DEVICE_NAME_CHAR)
-                    device_name = bytes(name_raw).decode("utf-8", errors="ignore").strip("\x00\r\n ")
-                except Exception:  # noqa: BLE001
-                    device_name = ""
-
-                if not device_name:
-                    device_name = device_name_hint or ""
-                if not device_name:
-                    device_name = ble_device.name or ""
+                # Use device_name_hint when available to avoid a GATT char read
+                # that stalls for 30 s (bleak default timeout) when the proxy is
+                # slow, by which time the connection is already dropped.
+                if device_name_hint:
+                    device_name = device_name_hint
+                else:
+                    try:
+                        name_raw = await client.read_gatt_char(DEVICE_NAME_CHAR)
+                        device_name = bytes(name_raw).decode("utf-8", errors="ignore").strip("\x00\r\n ")
+                    except Exception:  # noqa: BLE001
+                        device_name = ble_device.name or ""
 
                 storage_ids = _derive_storage_id_candidates(
                     self._preferred_storage_id,
