@@ -35,7 +35,8 @@ _LOGGER = logging.getLogger(__name__)
 POLL_WATCHDOG_TIMEOUT_SECONDS = 120
 
 SHUTDOWN_WAIT_SECONDS = 10
-DEFAULT_PERSISTENT_SESSION_ENABLED = True
+DEFAULT_PERSISTENT_SESSION_ENABLED = False
+AUTO_VERSION_PROBE_ENABLED = False
 VERSION_RETRY_INTERVAL_SECONDS = 300
 POLL_FAILURE_RECONNECT_THRESHOLD = 3
 NO_DEVICE_STRONG_RESET_THRESHOLD = 6
@@ -213,6 +214,8 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
 
     async def async_initialize(self) -> None:
         """Schedule one-time startup version discovery outside the poll path."""
+        if not AUTO_VERSION_PROBE_ENABLED:
+            return
         if self._startup_version_task is None:
             self._startup_version_task = self.hass.async_create_task(
                 self._async_fetch_startup_version_info()
@@ -736,7 +739,11 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     # Attempt a deferred one-time version probe after first successful telemetry poll.
                     # This gives firmware version fields a second chance to populate if the startup
                     # probe failed (e.g., due to timing or BLE availability at boot).
-                    if self._version_info_missing() and not self._deferred_version_probe_attempted:
+                    if (
+                        AUTO_VERSION_PROBE_ENABLED
+                        and self._version_info_missing()
+                        and not self._deferred_version_probe_attempted
+                    ):
                         self._deferred_version_probe_attempted = True
                         _LOGGER.debug("[%s] Attempting deferred version probe after successful telemetry poll", self._name)
                         try:
