@@ -88,6 +88,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._last_selling_first_write: dict[str, Any] | None = None
         self._last_valley_charge_write: dict[str, Any] | None = None
         self._last_peak_power_write: dict[str, Any] | None = None
+        self._last_listener_fingerprint: tuple[Any, ...] | None = None
         # Track write timestamps to avoid poll overwriting recent writes (5 second grace period)
         self._field_write_timestamps: dict[str, datetime] = {}
         self._consecutive_poll_failures = 0
@@ -156,6 +157,58 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         if self._last_poll_used_cached_data:
             return "Cached"
         return "Live"
+
+    def _freeze_state_value(self, value: Any) -> Any:
+        """Convert nested mutable values to immutable values for comparisons."""
+        if isinstance(value, dict):
+            return tuple(
+                (str(key), self._freeze_state_value(item))
+                for key, item in sorted(value.items(), key=lambda kv: str(kv[0]))
+            )
+        if isinstance(value, (list, tuple)):
+            return tuple(self._freeze_state_value(item) for item in value)
+        if isinstance(value, set):
+            return tuple(sorted(self._freeze_state_value(item) for item in value))
+        return value
+
+    def _data_state_fingerprint(self) -> tuple[tuple[str, Any], ...]:
+        """Return an immutable snapshot of decoded coordinator data."""
+        if self.data is None:
+            return ()
+
+        return tuple(
+            (name, self._freeze_state_value(value))
+            for name, value in sorted(vars(self.data).items(), key=lambda item: item[0])
+        )
+
+    def _listener_state_fingerprint(self) -> tuple[Any, ...]:
+        """Build a fingerprint containing all fields surfaced by entities."""
+        return (
+            self._data_state_fingerprint(),
+            self.runtime_available,
+            self.ble_connection_mode,
+            self.entity_values_source,
+            self._freeze_state_value(self._last_system_mode_payload_read),
+            self._freeze_state_value(self._last_system_mode_write),
+            self._freeze_state_value(self._last_backup_soc_write),
+            self._freeze_state_value(self._last_advanced_schedule_write),
+            self._freeze_state_value(self._last_peak_valley_schedule_write),
+            self._freeze_state_value(self._last_buzzer_mode_write),
+            self._freeze_state_value(self._last_clear_buzzer_write),
+            self._freeze_state_value(self._last_pcs_reboot_write),
+            self._freeze_state_value(self._last_selling_first_write),
+            self._freeze_state_value(self._last_valley_charge_write),
+            self._freeze_state_value(self._last_peak_power_write),
+        )
+
+    def _notify_if_state_changed(self) -> None:
+        """Notify listeners only when entity-facing state changes."""
+        fingerprint = self._listener_state_fingerprint()
+        if fingerprint == self._last_listener_fingerprint:
+            return
+
+        self._last_listener_fingerprint = fingerprint
+        self.async_update_listeners()
 
     async def async_initialize(self) -> None:
         """Schedule one-time startup version discovery outside the poll path."""
@@ -377,7 +430,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
 
             if version_info:
                 self._apply_version_info(version_info)
-                self.async_update_listeners()
+                self._notify_if_state_changed()
                 _LOGGER.debug("[%s] Startup version info fetched: %s", self._name, version_info)
             else:
                 _LOGGER.debug("[%s] Startup version fetch returned no data; version entities will remain Unknown", self._name)
@@ -455,7 +508,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     ble_device = await self._async_handle_no_device_detected(now)
                     if ble_device is None:
                         self._last_poll_used_cached_data = True
-                        self.async_update_listeners()
+                        self._notify_if_state_changed()
                         return
                     force_one_shot = True
                 elif self._consecutive_no_device_polls:
@@ -469,7 +522,6 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 # Start from the previous snapshot so transient query failures
                 # do not force all entities to Unknown.
                 previous = self.data
-                self.data = PCSData(**vars(previous)) if previous is not None else PCSData()
                 _LOGGER.debug("[%s] Starting metrics poll for %s", self._name, ble_device.address)
 
                 try:
@@ -562,7 +614,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     )
                     await self._soc_client.async_close_session()
                     self._last_service_info = None
-                    self.async_update_listeners()
+                    self._notify_if_state_changed()
                     return
                 except Exception as err:  # noqa: BLE001
                     self._consecutive_poll_failures += 1
@@ -575,7 +627,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     )
                     await self._soc_client.async_close_session()
                     self._last_service_info = None
-                    self.async_update_listeners()
+                    self._notify_if_state_changed()
                     return
 
                 if metrics is None:
@@ -591,6 +643,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                         await self._soc_client.async_close_session()
                         self._last_service_info = None
                 else:
+                    self.data = PCSData(**vars(previous)) if previous is not None else PCSData()
                     self._consecutive_no_device_polls = 0
                     self._last_poll_used_cached_data = False
                     if self._consecutive_poll_failures:
@@ -713,7 +766,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 # Version polling is disabled; version entities will remain Unknown.
 
                 # Push the update to all subscribed entities.
-                self.async_update_listeners()
+                self._notify_if_state_changed()
             finally:
                 self._active_poll_task = None
 
@@ -772,7 +825,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             if self.data is not None:
                 self.data.system_mode = str(mode)
                 self._field_write_timestamps["system_mode"] = datetime.now(timezone.utc)
-                self.async_update_listeners()
+                self._notify_if_state_changed()
 
         # Refresh immediately so entities reflect new state.
         await self._async_poll()
@@ -831,7 +884,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             if self.data is not None:
                 self.data.backup_soc = float(backup_soc)
                 self._field_write_timestamps["backup_soc"] = datetime.now(timezone.utc)
-                self.async_update_listeners()
+                self._notify_if_state_changed()
 
         # Refresh immediately so entities reflect new state.
         await self._async_poll()
@@ -889,7 +942,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 mode_value = payload.get("mode")
                 if mode_value is not None:
                     self.data.system_mode = str(mode_value)
-                    self.async_update_listeners()
+                    self._notify_if_state_changed()
 
             return result
 
@@ -947,7 +1000,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
 
             if versions:
                 self._apply_version_info(versions)
-                self.async_update_listeners()
+                self._notify_if_state_changed()
                 result = {
                     "ok": True,
                     "message": "version probe successful",
@@ -1098,7 +1151,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
 
             if self.data is not None:
                 self.data.system_mode = "0"
-                self.async_update_listeners()
+                self._notify_if_state_changed()
 
         await self._async_poll()
 
@@ -1156,7 +1209,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             if self.data is not None:
                 self.data.buzzer = int(mode)
                 self._field_write_timestamps["buzzer"] = datetime.now(timezone.utc)
-                self.async_update_listeners()
+                self._notify_if_state_changed()
 
         await self._async_poll()
 
@@ -1304,7 +1357,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
 
             if self.data is not None:
                 self.data.selling_first = bool(enabled)
-                self.async_update_listeners()
+                self._notify_if_state_changed()
 
         await self._async_poll()
 
@@ -1358,7 +1411,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
 
             if self.data is not None:
                 self.data.valley_charge = bool(enabled)
-                self.async_update_listeners()
+                self._notify_if_state_changed()
 
         await self._async_poll()
 
@@ -1415,7 +1468,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
 
             if self.data is not None:
                 self.data.peak_power = int(peak_power)
-                self.async_update_listeners()
+                self._notify_if_state_changed()
 
         await self._async_poll()
 

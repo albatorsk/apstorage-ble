@@ -64,6 +64,14 @@ class PCSData:
     pcs_latest_firmware_version: str | None = None  # latest available PCS firmware version (raw)
     pcs_software_version: str | None = None       # reported PCS software version
     pcs_hardware_version: str | None = None       # reported PCS hardware version
+    _cached_fw_version_source: str | None = field(default=None, init=False, repr=False)
+    _cached_fw_version_parts: tuple[str | None, str | None, str | None] = field(
+        default=(None, None, None), init=False, repr=False
+    )
+    _cached_latest_fw_version_source: str | None = field(default=None, init=False, repr=False)
+    _cached_latest_fw_version_parts: tuple[str | None, str | None, str | None] = field(
+        default=(None, None, None), init=False, repr=False
+    )
 
     def _split_version_parts(self, value: str | None) -> tuple[str | None, str | None, str | None]:
         """Split underscore-delimited version strings into up to three parts."""
@@ -75,29 +83,43 @@ class PCSData:
             parts.append(None)
         return (parts[0], parts[1], parts[2])
 
+    def _firmware_parts(self) -> tuple[str | None, str | None, str | None]:
+        """Return cached split parts for pcs_firmware_version."""
+        if self.pcs_firmware_version != self._cached_fw_version_source:
+            self._cached_fw_version_source = self.pcs_firmware_version
+            self._cached_fw_version_parts = self._split_version_parts(self.pcs_firmware_version)
+        return self._cached_fw_version_parts
+
+    def _latest_firmware_parts(self) -> tuple[str | None, str | None, str | None]:
+        """Return cached split parts for pcs_latest_firmware_version."""
+        if self.pcs_latest_firmware_version != self._cached_latest_fw_version_source:
+            self._cached_latest_fw_version_source = self.pcs_latest_firmware_version
+            self._cached_latest_fw_version_parts = self._split_version_parts(self.pcs_latest_firmware_version)
+        return self._cached_latest_fw_version_parts
+
     @property
     def pcs_firmware_version_1(self) -> str | None:
-        return self._split_version_parts(self.pcs_firmware_version)[0]
+        return self._firmware_parts()[0]
 
     @property
     def pcs_firmware_version_2(self) -> str | None:
-        return self._split_version_parts(self.pcs_firmware_version)[1]
+        return self._firmware_parts()[1]
 
     @property
     def pcs_firmware_version_3(self) -> str | None:
-        return self._split_version_parts(self.pcs_firmware_version)[2]
+        return self._firmware_parts()[2]
 
     @property
     def pcs_latest_firmware_version_1(self) -> str | None:
-        return self._split_version_parts(self.pcs_latest_firmware_version)[0]
+        return self._latest_firmware_parts()[0]
 
     @property
     def pcs_latest_firmware_version_2(self) -> str | None:
-        return self._split_version_parts(self.pcs_latest_firmware_version)[1]
+        return self._latest_firmware_parts()[1]
 
     @property
     def pcs_latest_firmware_version_3(self) -> str | None:
-        return self._split_version_parts(self.pcs_latest_firmware_version)[2]
+        return self._latest_firmware_parts()[2]
 
     @property
     def signed_battery_power(self) -> float | None:
