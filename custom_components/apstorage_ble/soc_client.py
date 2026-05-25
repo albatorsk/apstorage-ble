@@ -1625,7 +1625,13 @@ class BlufiCodec:
         payload_wire = raw[4 : 4 + data_len]
         if encrypt:
             if not aes_key:
-                raise RuntimeError("Encrypted notify received but AES key is not set")
+                _LOGGER.debug(
+                    "[BLE] Dropping encrypted notify without session key: type_subtype=0x%02x seq=%d data_len=%d",
+                    type_subtype,
+                    seq,
+                    data_len,
+                )
+                return None
             payload = _aes_cfb_decrypt(aes_key, seq, payload_wire)
         else:
             payload = bytes(payload_wire)
