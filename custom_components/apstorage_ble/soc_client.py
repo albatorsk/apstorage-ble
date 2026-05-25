@@ -1614,6 +1614,9 @@ class BlufiCodec:
         encrypt = (flags & 0x01) != 0
         checksum = (flags & 0x02) != 0
         frag = (flags & 0x10) != 0
+        
+        _LOGGER.debug("[BLE] Frame header: type_subtype=0x%02x flags=0x%02x seq=%d data_len=%d frag=%s encrypt=%s reassembling=%s", 
+                     type_subtype, flags, seq, data_len, frag, encrypt, self._rx_hdr is not None)
 
         need = 4 + data_len + (2 if checksum else 0)
         if len(raw) < need:
@@ -1653,6 +1656,11 @@ class BlufiCodec:
                 self._rx_hdr = (frame_type, subtype, flags)
                 self._rx_expect_total = frag_total
                 self._rx_buf.clear()
+                _LOGGER.debug("[BLE] Fragment reassembly started: type=%d subtype=%d total_expected=%d first_chunk=%d bytes", 
+                             frame_type, subtype, frag_total, len(data))
+            else:
+                _LOGGER.debug("[BLE] Fragment continuation: accumulated=%d bytes, adding %d bytes (total expected=%d)", 
+                             len(self._rx_buf), len(data), self._rx_expect_total)
             self._rx_buf.extend(data)
             return None
 
@@ -1660,6 +1668,8 @@ class BlufiCodec:
             self._rx_buf.extend(payload)
             data = bytes(self._rx_buf)
             frame_type, subtype, first_flags = self._rx_hdr
+            _LOGGER.debug("[BLE] Fragment reassembly complete: type=%d subtype=%d final_size=%d bytes", 
+                         frame_type, subtype, len(data))
             self._rx_hdr = None
             self._rx_expect_total = None
             self._rx_buf.clear()
@@ -1888,6 +1898,9 @@ class APstorageSocClient:
         """Decrypt response payload with active profile AES params."""
         if not HAS_CRYPTO:
             raise RuntimeError("pycryptodome required")
+
+        _LOGGER.debug("[BLE] Decrypting payload: %d bytes (multiple of 16: %s)", 
+                     len(payload), len(payload) % 16 == 0)
 
         key = _pad_key_16(self._profile.aes_key or AES_KEY_STR)
         iv = ((self._profile.aes_iv or AES_IV_STR).ljust(16, "\x00")).encode("utf-8")[:16]
