@@ -117,7 +117,8 @@ BLUFI_MTU = 20
 # Timeouts and BLE pacing tuned for shared ESPHome proxy environments.
 # Keep connect bounded so one stuck attempt cannot monopolize the poll window.
 CONNECT_TIMEOUT_SECONDS = 45
-RESPONSE_TIMEOUT_SECONDS = 30
+# Increased to 45s to handle slow ESPHome proxy + device response in DH handshake
+RESPONSE_TIMEOUT_SECONDS = 45
 DISCONNECT_TIMEOUT_SECONDS = 5
 NOTIFY_SETTLE_DELAY_SECONDS = 0.10
 PACKET_WRITE_DELAY_SECONDS = 0.05
@@ -131,7 +132,8 @@ VERSION_DISCOVERY_RETRY_SECONDS = 30
 VERSION_REFRESH_INTERVAL_SECONDS = 60 * 60
 DIAGNOSTIC_QUERY_TIMEOUT_SECONDS = 8
 DIAGNOSTIC_ENRICH_BUDGET_SECONDS = 4
-QUERY_ATTEMPT_TIMEOUT_SECONDS = 40
+# Must be > RESPONSE_TIMEOUT_SECONDS to allow DH handshake to complete (45s) + query overhead
+QUERY_ATTEMPT_TIMEOUT_SECONDS = 55
 DIAGNOSTIC_MIN_REMAINING_BUDGET_SECONDS = 1.5
 # Version probing may query several identifiers sequentially (pcsVersion,
 # storageConfigInfo, etc.). Allow a larger one-shot budget so the probe does
