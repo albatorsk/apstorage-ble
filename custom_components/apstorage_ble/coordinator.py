@@ -9,6 +9,7 @@ Uses HA's ActiveBluetoothDataUpdateCoordinator so that:
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace as dataclass_replace
 from contextlib import suppress
 from datetime import datetime, timedelta, timezone
 import logging
@@ -643,7 +644,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                         await self._soc_client.async_close_session()
                         self._last_service_info = None
                 else:
-                    self.data = PCSData(**vars(previous)) if previous is not None else PCSData()
+                    self.data = dataclass_replace(previous) if previous is not None else PCSData()
                     self._consecutive_no_device_polls = 0
                     self._last_poll_used_cached_data = False
                     if self._consecutive_poll_failures:
@@ -732,36 +733,36 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     if metrics.battery_discharged_energy is not None:
                         self.data.battery_discharged_energy = float(metrics.battery_discharged_energy)
 
-                # Attempt a deferred one-time version probe after first successful telemetry poll.
-                # This gives firmware version fields a second chance to populate if the startup
-                # probe failed (e.g., due to timing or BLE availability at boot).
-                if self._version_info_missing() and not self._deferred_version_probe_attempted:
-                    self._deferred_version_probe_attempted = True
-                    _LOGGER.debug("[%s] Attempting deferred version probe after successful telemetry poll", self._name)
-                    try:
-                        ble_device = self._resolve_ble_device()
-                        if ble_device is not None:
-                            # Close the persistent session before starting the one-shot version probe
-                            # to avoid Blufi state machine confusion from concurrent DH handshakes.
-                            if self._soc_client.session_open:
-                                _LOGGER.debug("[%s] Closing persistent session before deferred version probe", self._name)
-                                await self._soc_client.async_close_session()
-                            version_info = await self._soc_client.async_query_version_info_once(
-                                ble_device,
-                                device_name_hint=self._name,
+                    # Attempt a deferred one-time version probe after first successful telemetry poll.
+                    # This gives firmware version fields a second chance to populate if the startup
+                    # probe failed (e.g., due to timing or BLE availability at boot).
+                    if self._version_info_missing() and not self._deferred_version_probe_attempted:
+                        self._deferred_version_probe_attempted = True
+                        _LOGGER.debug("[%s] Attempting deferred version probe after successful telemetry poll", self._name)
+                        try:
+                            ble_device = self._resolve_ble_device()
+                            if ble_device is not None:
+                                # Close the persistent session before starting the one-shot version probe
+                                # to avoid Blufi state machine confusion from concurrent DH handshakes.
+                                if self._soc_client.session_open:
+                                    _LOGGER.debug("[%s] Closing persistent session before deferred version probe", self._name)
+                                    await self._soc_client.async_close_session()
+                                version_info = await self._soc_client.async_query_version_info_once(
+                                    ble_device,
+                                    device_name_hint=self._name,
+                                )
+                                if version_info:
+                                    self._apply_version_info(version_info)
+                                    _LOGGER.debug("[%s] Deferred version probe succeeded: %s", self._name, version_info)
+                            else:
+                                _LOGGER.debug("[%s] Deferred version probe skipped; no connectable BLE device", self._name)
+                        except Exception as err:  # noqa: BLE001
+                            _LOGGER.debug(
+                                "[%s] Deferred version probe failed (non-fatal): %s: %s",
+                                self._name,
+                                type(err).__name__,
+                                err,
                             )
-                            if version_info:
-                                self._apply_version_info(version_info)
-                                _LOGGER.debug("[%s] Deferred version probe succeeded: %s", self._name, version_info)
-                        else:
-                            _LOGGER.debug("[%s] Deferred version probe skipped; no connectable BLE device", self._name)
-                    except Exception as err:  # noqa: BLE001
-                        _LOGGER.debug(
-                            "[%s] Deferred version probe failed (non-fatal): %s: %s",
-                            self._name,
-                            type(err).__name__,
-                            err,
-                        )
 
                 # Version polling is disabled; version entities will remain Unknown.
 
