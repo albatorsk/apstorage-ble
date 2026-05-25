@@ -2199,6 +2199,106 @@ class APstorageSocClient:
                 self._last_disconnect_at = asyncio.get_running_loop().time()
             self._reset_blufi_session_state()
 
+    async def async_query_property_once(
+        self,
+        ble_device: BLEDevice,
+        *,
+        identifier: str,
+        device_name_hint: str | None = None,
+        system_id: str = "",
+        params_extra: dict[str, Any] | None = None,
+        response_timeout_seconds: float = DIAGNOSTIC_QUERY_TIMEOUT_SECONDS,
+    ) -> dict[str, Any] | None:
+        """Query a single readable property once over a short-lived BLE session."""
+        if not HAS_CRYPTO:
+            _LOGGER.error("pycryptodome required; install with: pip install pycryptodome")
+            return None
+
+        client: BleakClient | None = None
+        try:
+            self._reset_blufi_session_state()
+
+            elapsed = asyncio.get_running_loop().time() - self._last_disconnect_at
+            remaining = POST_DISCONNECT_SETTLE_SECONDS - elapsed
+            if remaining > 0:
+                _LOGGER.debug(
+                    "[BLE] Waiting %.1fs for proxy disconnect settle before property probe",
+                    remaining,
+                )
+                await asyncio.sleep(remaining)
+
+            async with asyncio.timeout(VERSION_QUERY_ONESHOT_TIMEOUT_SECONDS):
+                _LOGGER.debug("[BLE] Starting one-shot BLE connection for identifier=%s", identifier)
+                client = await establish_connection(
+                    BleakClientWithServiceCache,
+                    ble_device,
+                    ble_device.address,
+                    max_attempts=1,
+                    use_services_cache=False,
+                )
+                await self._ensure_services_ready(client)
+
+                if device_name_hint:
+                    device_name = device_name_hint
+                else:
+                    try:
+                        name_raw = await client.read_gatt_char(DEVICE_NAME_CHAR)
+                        device_name = bytes(name_raw).decode("utf-8", errors="ignore").strip("\x00\r\n ")
+                    except Exception:  # noqa: BLE001
+                        device_name = ble_device.name or ""
+
+                storage_ids = _derive_storage_id_candidates(
+                    self._preferred_storage_id,
+                    device_name,
+                    device_name_hint,
+                    ble_device.name,
+                )
+                if not storage_ids:
+                    _LOGGER.warning(
+                        "Could not derive storage ID for property query from device name: %s",
+                        device_name,
+                    )
+                    return None
+
+                storage_ids = [storage_ids[0]]
+
+                await self._establish_blufi_session(client)
+
+                for storage_id in storage_ids:
+                    try:
+                        response = await self._send_property_request(
+                            client,
+                            method="get",
+                            identifier=identifier,
+                            storage_id=storage_id,
+                            params_extra=dict(params_extra or {}),
+                            system_id=system_id,
+                            response_timeout_seconds=response_timeout_seconds,
+                        )
+                    except Exception as err:  # noqa: BLE001
+                        _LOGGER.debug(
+                            "Property query failed for identifier=%s storage_id=%s on %s: %s",
+                            identifier,
+                            storage_id,
+                            ble_device.address,
+                            err,
+                        )
+                        continue
+
+                    if isinstance(response, dict):
+                        self._preferred_storage_id = storage_id
+                        return response
+
+            return None
+        finally:
+            if client is not None and client.is_connected:
+                try:
+                    await _safe_disconnect(client)
+                except Exception:  # noqa: BLE001
+                    pass
+                self._last_disconnect_at = asyncio.get_running_loop().time()
+            self._reset_blufi_session_state()
+
     async def async_open_session(
         self,
         ble_device: BLEDevice,
@@ -3718,42 +3818,65 @@ class APstorageSocClient:
                 await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
 
             # Wait for custom data response on the existing notification session.
-            try:
-                frame = await self._wait_frame(1, 19, RESPONSE_TIMEOUT_SECONDS)
-                break
-            except TimeoutError:
-                if attempt >= 2:
-                    raise
-                _LOGGER.warning(
-                    "Timed out waiting for local-data response for storage_id=%s; retrying request once",
+            response_deadline = asyncio.get_running_loop().time() + RESPONSE_TIMEOUT_SECONDS
+            parsed: dict[str, Any] | None = None
+            while True:
+                remaining = response_deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    break
+
+                try:
+                    frame = await self._wait_frame(1, 19, remaining)
+                except TimeoutError:
+                    break
+
+                try:
+                    decrypted = self._decrypt_response_payload(frame.payload)
+                except ValueError as err:
+                    _LOGGER.debug(
+                        "Discarding malformed encrypted local-data frame for storage_id=%s: %s",
+                        storage_id,
+                        err,
+                    )
+                    continue
+
+                try:
+                    parsed_raw = json.loads(decrypted)
+                except json.JSONDecodeError:
+                    try:
+                        parsed_raw = json.loads(frame.payload.decode("utf-8", errors="ignore").strip())
+                    except json.JSONDecodeError:
+                        _LOGGER.debug("Discarding non-JSON local-data frame for storage_id=%s", storage_id)
+                        continue
+
+                if isinstance(parsed_raw, dict):
+                    parsed = parsed_raw
+                    break
+
+                _LOGGER.debug("Discarding non-dict local-data frame for storage_id=%s", storage_id)
+
+            if parsed is not None:
+                _LOGGER.debug(
+                    "Local-data response keys for storage_id=%s: %s",
                     storage_id,
+                    list(parsed.keys()),
                 )
-                await asyncio.sleep(NOTIFY_SETTLE_DELAY_SECONDS)
+                # Log the nested 'data' structure if present
+                data_root = parsed.get("data")
+                if isinstance(data_root, dict):
+                    _LOGGER.debug("Response 'data' field: %s", data_root)
+                elif isinstance(data_root, list):
+                    _LOGGER.debug("Response 'data' field (list): %s", data_root)
+                return parsed
 
-        if frame is None:
-            return None
-
-        decrypted = self._decrypt_response_payload(frame.payload)
-        try:
-            parsed = json.loads(decrypted)
-        except json.JSONDecodeError:
-            _LOGGER.debug("SoC response was not valid JSON for storage_id=%s", storage_id)
-            return None
-
-        if isinstance(parsed, dict):
-            _LOGGER.debug(
-                "Local-data response keys for storage_id=%s: %s",
+            if attempt >= 2:
+                raise TimeoutError(f"No valid local-data frame for storage_id={storage_id}")
+            _LOGGER.warning(
+                "Timed out waiting for valid local-data response for storage_id=%s; retrying request once",
                 storage_id,
-                list(parsed.keys()),
             )
-            # Log the nested 'data' structure if present
-            data_root = parsed.get("data")
-            if isinstance(data_root, dict):
-                _LOGGER.debug("Response 'data' field: %s", data_root)
-            elif isinstance(data_root, list):
-                _LOGGER.debug("Response 'data' field (list): %s", data_root)
-            return parsed
-        _LOGGER.debug("Local-data response was non-dict for storage_id=%s", storage_id)
+            await asyncio.sleep(NOTIFY_SETTLE_DELAY_SECONDS)
+
         return None
 
     async def _query_version_info(
