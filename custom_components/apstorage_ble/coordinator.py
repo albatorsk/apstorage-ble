@@ -36,7 +36,10 @@ POLL_WATCHDOG_TIMEOUT_SECONDS = 120
 
 SHUTDOWN_WAIT_SECONDS = 10
 DEFAULT_PERSISTENT_SESSION_ENABLED = False
-AUTO_VERSION_PROBE_ENABLED = False
+STARTUP_VERSION_PROBE_ENABLED = True
+STARTUP_VERSION_PROBE_RETRIES = 3
+STARTUP_VERSION_PROBE_RETRY_DELAY_SECONDS = 2
+DEFERRED_VERSION_PROBE_ENABLED = False
 VERSION_RETRY_INTERVAL_SECONDS = 300
 POLL_FAILURE_RECONNECT_THRESHOLD = 3
 NO_DEVICE_STRONG_RESET_THRESHOLD = 6
@@ -214,7 +217,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
 
     async def async_initialize(self) -> None:
         """Schedule one-time startup version discovery outside the poll path."""
-        if not AUTO_VERSION_PROBE_ENABLED:
+        if not STARTUP_VERSION_PROBE_ENABLED:
             return
         if self._startup_version_task is None:
             self._startup_version_task = self.hass.async_create_task(
@@ -406,38 +409,64 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._startup_version_fetch_attempted = True
 
         async with self._poll_lock:
-            if self._shutdown:
-                return
+            for attempt in range(1, STARTUP_VERSION_PROBE_RETRIES + 1):
+                if self._shutdown:
+                    return
 
-            ble_device = self._resolve_ble_device()
-            if ble_device is None:
-                _LOGGER.debug("[%s] Startup version fetch skipped; no connectable BLE device", self._name)
-                return
-
-            _LOGGER.debug("[%s] Fetching version info via dedicated one-shot connection", self._name)
-            version_info: dict[str, str] = {}
-            try:
-                async with asyncio.timeout(POLL_WATCHDOG_TIMEOUT_SECONDS):
-                    # One-shot: connects, queries, disconnects — no shared state with
-                    # the persistent telemetry session that opens on the first poll.
-                    version_info = await self._soc_client.async_query_version_info_once(
-                        ble_device,
-                        device_name_hint=self._name,
+                ble_device = self._resolve_ble_device()
+                if ble_device is None:
+                    _LOGGER.debug(
+                        "[%s] Startup version fetch attempt %d/%d skipped; no connectable BLE device",
+                        self._name,
+                        attempt,
+                        STARTUP_VERSION_PROBE_RETRIES,
                     )
-            except Exception as err:  # noqa: BLE001
-                _LOGGER.debug(
-                    "[%s] Startup version fetch failed (non-fatal): %s: %s",
-                    self._name,
-                    type(err).__name__,
-                    err,
-                )
+                else:
+                    _LOGGER.debug(
+                        "[%s] Fetching version info via dedicated one-shot connection (attempt %d/%d)",
+                        self._name,
+                        attempt,
+                        STARTUP_VERSION_PROBE_RETRIES,
+                    )
+                    version_info: dict[str, str] = {}
+                    try:
+                        async with asyncio.timeout(POLL_WATCHDOG_TIMEOUT_SECONDS):
+                            # One-shot: connects, queries, disconnects — no shared state with
+                            # the persistent telemetry session that opens on the first poll.
+                            version_info = await self._soc_client.async_query_version_info_once(
+                                ble_device,
+                                device_name_hint=self._name,
+                            )
+                    except Exception as err:  # noqa: BLE001
+                        _LOGGER.debug(
+                            "[%s] Startup version fetch attempt %d/%d failed (non-fatal): %s: %s",
+                            self._name,
+                            attempt,
+                            STARTUP_VERSION_PROBE_RETRIES,
+                            type(err).__name__,
+                            err,
+                        )
+                    else:
+                        if version_info:
+                            self._apply_version_info(version_info)
+                            self._notify_if_state_changed()
+                            _LOGGER.debug(
+                                "[%s] Startup version info fetched on attempt %d/%d: %s",
+                                self._name,
+                                attempt,
+                                STARTUP_VERSION_PROBE_RETRIES,
+                                version_info,
+                            )
+                            return
 
-            if version_info:
-                self._apply_version_info(version_info)
-                self._notify_if_state_changed()
-                _LOGGER.debug("[%s] Startup version info fetched: %s", self._name, version_info)
-            else:
-                _LOGGER.debug("[%s] Startup version fetch returned no data; version entities will remain Unknown", self._name)
+                if attempt < STARTUP_VERSION_PROBE_RETRIES:
+                    await asyncio.sleep(STARTUP_VERSION_PROBE_RETRY_DELAY_SECONDS)
+
+            _LOGGER.debug(
+                "[%s] Startup version fetch returned no data after %d attempts; version entities will remain Unknown",
+                self._name,
+                STARTUP_VERSION_PROBE_RETRIES,
+            )
 
     # ------------------------------------------------------------------
     # ActiveBluetoothDataUpdateCoordinator callbacks
@@ -740,7 +769,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     # This gives firmware version fields a second chance to populate if the startup
                     # probe failed (e.g., due to timing or BLE availability at boot).
                     if (
-                        AUTO_VERSION_PROBE_ENABLED
+                        DEFERRED_VERSION_PROBE_ENABLED
                         and self._version_info_missing()
                         and not self._deferred_version_probe_attempted
                     ):
