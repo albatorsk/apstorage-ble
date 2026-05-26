@@ -99,6 +99,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._consecutive_poll_failures = 0
         self._shutdown = False
         self._active_poll_task: asyncio.Task[Any] | None = None
+        self._post_write_refresh_task: asyncio.Task[Any] | None = None
         self._startup_version_task: asyncio.Task[Any] | None = None
         self._startup_version_fetch_attempted = False
         self._deferred_version_probe_attempted = False
@@ -215,6 +216,31 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._last_listener_fingerprint = fingerprint
         self.async_update_listeners()
 
+    async def _async_run_post_write_refresh(self) -> None:
+        """Refresh coordinator state after a write without blocking the caller."""
+        try:
+            await self._async_poll()
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("[%s] Post-write refresh failed: %s: %s", self._name, type(err).__name__, err)
+        finally:
+            task = asyncio.current_task()
+            if self._post_write_refresh_task is task:
+                self._post_write_refresh_task = None
+
+    @callback
+    def _schedule_post_write_refresh(self) -> None:
+        """Queue a follow-up poll after a write, unless one is already pending."""
+        if self._shutdown:
+            return
+
+        task = self._post_write_refresh_task
+        if task is not None and not task.done():
+            return
+
+        self._post_write_refresh_task = self.hass.async_create_task(
+            self._async_run_post_write_refresh()
+        )
+
     async def async_initialize(self) -> None:
         """Schedule one-time startup version discovery outside the poll path."""
         if not STARTUP_VERSION_PROBE_ENABLED:
@@ -232,6 +258,11 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             startup_task.cancel()
             with suppress(asyncio.CancelledError):
                 await startup_task
+        refresh_task = self._post_write_refresh_task
+        if refresh_task is not None and not refresh_task.done():
+            refresh_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await refresh_task
         task = self._active_poll_task
         if task is not None and not task.done():
             _LOGGER.debug("[%s] Cancelling in-flight poll during shutdown", self._name)
@@ -864,8 +895,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 self._field_write_timestamps["system_mode"] = datetime.now(timezone.utc)
                 self._notify_if_state_changed()
 
-        # Refresh immediately so entities reflect new state.
-        await self._async_poll()
+        self._schedule_post_write_refresh()
 
     @property
     def last_system_mode_write(self) -> dict[str, Any] | None:
@@ -923,8 +953,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 self._field_write_timestamps["backup_soc"] = datetime.now(timezone.utc)
                 self._notify_if_state_changed()
 
-        # Refresh immediately so entities reflect new state.
-        await self._async_poll()
+        self._schedule_post_write_refresh()
 
     @property
     def last_backup_soc_write(self) -> dict[str, Any] | None:
@@ -1123,8 +1152,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     f" (code={result.get('code')}, message={result.get('message')})"
                 )
 
-        # Refresh immediately so entities reflect new state.
-        await self._async_poll()
+        self._schedule_post_write_refresh()
 
     @property
     def last_advanced_schedule_write(self) -> dict[str, Any] | None:
@@ -1190,7 +1218,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 self.data.system_mode = "0"
                 self._notify_if_state_changed()
 
-        await self._async_poll()
+        self._schedule_post_write_refresh()
 
     @property
     def last_peak_valley_schedule_write(self) -> dict[str, Any] | None:
@@ -1248,7 +1276,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 self._field_write_timestamps["buzzer"] = datetime.now(timezone.utc)
                 self._notify_if_state_changed()
 
-        await self._async_poll()
+        self._schedule_post_write_refresh()
 
     @property
     def last_buzzer_mode_write(self) -> dict[str, Any] | None:
@@ -1296,7 +1324,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     f" (code={result.get('code')}, message={result.get('message')})"
                 )
 
-        await self._async_poll()
+        self._schedule_post_write_refresh()
 
     @property
     def last_clear_buzzer_write(self) -> dict[str, Any] | None:
@@ -1396,7 +1424,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 self.data.selling_first = bool(enabled)
                 self._notify_if_state_changed()
 
-        await self._async_poll()
+        self._schedule_post_write_refresh()
 
     @property
     def last_selling_first_write(self) -> dict[str, Any] | None:
@@ -1450,7 +1478,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 self.data.valley_charge = bool(enabled)
                 self._notify_if_state_changed()
 
-        await self._async_poll()
+        self._schedule_post_write_refresh()
 
     @property
     def last_valley_charge_write(self) -> dict[str, Any] | None:
@@ -1507,7 +1535,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 self.data.peak_power = int(peak_power)
                 self._notify_if_state_changed()
 
-        await self._async_poll()
+        self._schedule_post_write_refresh()
 
     @property
     def last_peak_power_write(self) -> dict[str, Any] | None:
