@@ -98,6 +98,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._field_write_timestamps: dict[str, datetime] = {}
         self._consecutive_poll_failures = 0
         self._shutdown = False
+        self._write_pending = False
         self._active_poll_task: asyncio.Task[Any] | None = None
         self._post_write_refresh_task: asyncio.Task[Any] | None = None
         self._startup_version_task: asyncio.Task[Any] | None = None
@@ -240,6 +241,23 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._post_write_refresh_task = self.hass.async_create_task(
             self._async_run_post_write_refresh()
         )
+
+    async def _async_prepare_for_write(self) -> None:
+        """Give writes priority over queued or active polls."""
+        self._write_pending = True
+
+        refresh_task = self._post_write_refresh_task
+        if refresh_task is not None and not refresh_task.done():
+            refresh_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await refresh_task
+
+        task = self._active_poll_task
+        if task is not None and task is not asyncio.current_task() and not task.done():
+            _LOGGER.debug("[%s] Cancelling in-flight poll before write", self._name)
+            task.cancel()
+            with suppress(asyncio.CancelledError, TimeoutError):
+                await asyncio.wait_for(task, timeout=SHUTDOWN_WAIT_SECONDS)
 
     async def async_initialize(self) -> None:
         """Schedule one-time startup version discovery outside the poll path."""
@@ -522,6 +540,9 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         if self.hass.state != CoreState.running:
             return False
 
+        if self._write_pending:
+            return False
+
         # Do not schedule another advertisement-triggered poll while one is
         # already running; this avoids repeated queued/skip churn.
         if self._poll_lock.locked():
@@ -547,6 +568,10 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         """Connect to the device via GATT and update coordinator data."""
         if self._shutdown:
             _LOGGER.debug("[%s] Poll skipped because coordinator is shutting down", self._name)
+            return
+
+        if self._write_pending:
+            _LOGGER.debug("[%s] Poll skipped because a write is pending", self._name)
             return
 
         # Skip this poll if another poll is already running.  Multiple
@@ -848,52 +873,56 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         if mode < 0 or mode > 6:
             raise ValueError(f"Invalid system mode: {mode}")
 
-        async with self._poll_lock:
-            # Close the persistent poll session so the write's own BLE connection does not conflict.
-            await self._soc_client.async_close_session()
-            service_info: BluetoothServiceInfoBleak | None = self._last_service_info
+        await self._async_prepare_for_write()
+        try:
+            async with self._poll_lock:
+                # Close the persistent poll session so the write's own BLE connection does not conflict.
+                await self._soc_client.async_close_session()
+                service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
-            if service_info is not None and service_info.connectable:
-                ble_device = service_info.device
-            elif service_info is not None:
-                ble_device = bluetooth.async_ble_device_from_address(
-                    self.hass,
-                    service_info.device.address,
-                    connectable=True,
+                if service_info is not None and service_info.connectable:
+                    ble_device = service_info.device
+                elif service_info is not None:
+                    ble_device = bluetooth.async_ble_device_from_address(
+                        self.hass,
+                        service_info.device.address,
+                        connectable=True,
+                    )
+                else:
+                    ble_device = bluetooth.async_ble_device_from_address(
+                        self.hass,
+                        self._address,
+                        connectable=True,
+                    )
+
+                if ble_device is None:
+                    raise RuntimeError("No connectable BLE device found for system mode write")
+
+                _LOGGER.debug("[%s] Setting system mode to %s", self._name, mode)
+                result = await self._soc_client.async_set_system_mode(
+                    ble_device,
+                    mode=mode,
+                    device_name_hint=self._name,
                 )
-            else:
-                ble_device = bluetooth.async_ble_device_from_address(
-                    self.hass,
-                    self._address,
-                    connectable=True,
-                )
+                self._last_system_mode_write = {
+                    "ok": bool(result.get("ok", False)),
+                    "code": result.get("code"),
+                    "message": result.get("message"),
+                    "requested_mode": str(mode),
+                    "at": datetime.now(timezone.utc).isoformat(),
+                }
+                if not bool(result.get("ok", False)):
+                    raise RuntimeError(
+                        "System mode write failed"
+                        f" (code={result.get('code')}, message={result.get('message')})"
+                    )
 
-            if ble_device is None:
-                raise RuntimeError("No connectable BLE device found for system mode write")
-
-            _LOGGER.debug("[%s] Setting system mode to %s", self._name, mode)
-            result = await self._soc_client.async_set_system_mode(
-                ble_device,
-                mode=mode,
-                device_name_hint=self._name,
-            )
-            self._last_system_mode_write = {
-                "ok": bool(result.get("ok", False)),
-                "code": result.get("code"),
-                "message": result.get("message"),
-                "requested_mode": str(mode),
-                "at": datetime.now(timezone.utc).isoformat(),
-            }
-            if not bool(result.get("ok", False)):
-                raise RuntimeError(
-                    "System mode write failed"
-                    f" (code={result.get('code')}, message={result.get('message')})"
-                )
-
-            if self.data is not None:
-                self.data.system_mode = str(mode)
-                self._field_write_timestamps["system_mode"] = datetime.now(timezone.utc)
-                self._notify_if_state_changed()
+                if self.data is not None:
+                    self.data.system_mode = str(mode)
+                    self._field_write_timestamps["system_mode"] = datetime.now(timezone.utc)
+                    self._notify_if_state_changed()
+        finally:
+            self._write_pending = False
 
         self._schedule_post_write_refresh()
 
@@ -907,51 +936,55 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         if backup_soc < 20 or backup_soc > 90:
             raise ValueError(f"Invalid backup SOC: {backup_soc}")
 
-        async with self._poll_lock:
-            await self._soc_client.async_close_session()
-            service_info: BluetoothServiceInfoBleak | None = self._last_service_info
+        await self._async_prepare_for_write()
+        try:
+            async with self._poll_lock:
+                await self._soc_client.async_close_session()
+                service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
-            if service_info is not None and service_info.connectable:
-                ble_device = service_info.device
-            elif service_info is not None:
-                ble_device = bluetooth.async_ble_device_from_address(
-                    self.hass,
-                    service_info.device.address,
-                    connectable=True,
+                if service_info is not None and service_info.connectable:
+                    ble_device = service_info.device
+                elif service_info is not None:
+                    ble_device = bluetooth.async_ble_device_from_address(
+                        self.hass,
+                        service_info.device.address,
+                        connectable=True,
+                    )
+                else:
+                    ble_device = bluetooth.async_ble_device_from_address(
+                        self.hass,
+                        self._address,
+                        connectable=True,
+                    )
+
+                if ble_device is None:
+                    raise RuntimeError("No connectable BLE device found for backup SOC write")
+
+                _LOGGER.debug("[%s] Setting backup SOC to %s", self._name, backup_soc)
+                result = await self._soc_client.async_set_backup_soc(
+                    ble_device,
+                    backup_soc=backup_soc,
+                    device_name_hint=self._name,
                 )
-            else:
-                ble_device = bluetooth.async_ble_device_from_address(
-                    self.hass,
-                    self._address,
-                    connectable=True,
-                )
+                self._last_backup_soc_write = {
+                    "ok": bool(result.get("ok", False)),
+                    "code": result.get("code"),
+                    "message": result.get("message"),
+                    "requested_backup_soc": str(backup_soc),
+                    "at": datetime.now(timezone.utc).isoformat(),
+                }
+                if not bool(result.get("ok", False)):
+                    raise RuntimeError(
+                        "Backup SOC write failed"
+                        f" (code={result.get('code')}, message={result.get('message')})"
+                    )
 
-            if ble_device is None:
-                raise RuntimeError("No connectable BLE device found for backup SOC write")
-
-            _LOGGER.debug("[%s] Setting backup SOC to %s", self._name, backup_soc)
-            result = await self._soc_client.async_set_backup_soc(
-                ble_device,
-                backup_soc=backup_soc,
-                device_name_hint=self._name,
-            )
-            self._last_backup_soc_write = {
-                "ok": bool(result.get("ok", False)),
-                "code": result.get("code"),
-                "message": result.get("message"),
-                "requested_backup_soc": str(backup_soc),
-                "at": datetime.now(timezone.utc).isoformat(),
-            }
-            if not bool(result.get("ok", False)):
-                raise RuntimeError(
-                    "Backup SOC write failed"
-                    f" (code={result.get('code')}, message={result.get('message')})"
-                )
-
-            if self.data is not None:
-                self.data.backup_soc = float(backup_soc)
-                self._field_write_timestamps["backup_soc"] = datetime.now(timezone.utc)
-                self._notify_if_state_changed()
+                if self.data is not None:
+                    self.data.backup_soc = float(backup_soc)
+                    self._field_write_timestamps["backup_soc"] = datetime.now(timezone.utc)
+                    self._notify_if_state_changed()
+        finally:
+            self._write_pending = False
 
         self._schedule_post_write_refresh()
 
@@ -1101,56 +1134,60 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         This maps to EMA app `setsysmode` writes with mode=3 and
         `peakTime`/`valleyTime` payload arrays.
         """
-        async with self._poll_lock:
-            await self._soc_client.async_close_session()
-            service_info: BluetoothServiceInfoBleak | None = self._last_service_info
+        await self._async_prepare_for_write()
+        try:
+            async with self._poll_lock:
+                await self._soc_client.async_close_session()
+                service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
-            if service_info is not None and service_info.connectable:
-                ble_device = service_info.device
-            elif service_info is not None:
-                ble_device = bluetooth.async_ble_device_from_address(
-                    self.hass,
-                    service_info.device.address,
-                    connectable=True,
-                )
-            else:
-                ble_device = bluetooth.async_ble_device_from_address(
-                    self.hass,
-                    self._address,
-                    connectable=True,
-                )
+                if service_info is not None and service_info.connectable:
+                    ble_device = service_info.device
+                elif service_info is not None:
+                    ble_device = bluetooth.async_ble_device_from_address(
+                        self.hass,
+                        service_info.device.address,
+                        connectable=True,
+                    )
+                else:
+                    ble_device = bluetooth.async_ble_device_from_address(
+                        self.hass,
+                        self._address,
+                        connectable=True,
+                    )
 
-            if ble_device is None:
-                raise RuntimeError("No connectable BLE device found for advanced schedule write")
+                if ble_device is None:
+                    raise RuntimeError("No connectable BLE device found for advanced schedule write")
 
-            _LOGGER.debug(
-                "[%s] Setting advanced schedule peak=%s valley=%s schedule_items=%s",
-                self._name,
-                peak_time,
-                valley_time,
-                0 if not schedule else len(schedule),
-            )
-            result = await self._soc_client.async_set_advanced_schedule(
-                ble_device,
-                peak_time=peak_time,
-                valley_time=valley_time,
-                schedule=schedule,
-                device_name_hint=self._name,
-            )
-            self._last_advanced_schedule_write = {
-                "ok": bool(result.get("ok", False)),
-                "code": result.get("code"),
-                "message": result.get("message"),
-                "requested_peak_time": list(peak_time),
-                "requested_valley_time": list(valley_time),
-                "requested_schedule": list(schedule or []),
-                "at": datetime.now(timezone.utc).isoformat(),
-            }
-            if not bool(result.get("ok", False)):
-                raise RuntimeError(
-                    "Advanced schedule write failed"
-                    f" (code={result.get('code')}, message={result.get('message')})"
+                _LOGGER.debug(
+                    "[%s] Setting advanced schedule peak=%s valley=%s schedule_items=%s",
+                    self._name,
+                    peak_time,
+                    valley_time,
+                    0 if not schedule else len(schedule),
                 )
+                result = await self._soc_client.async_set_advanced_schedule(
+                    ble_device,
+                    peak_time=peak_time,
+                    valley_time=valley_time,
+                    schedule=schedule,
+                    device_name_hint=self._name,
+                )
+                self._last_advanced_schedule_write = {
+                    "ok": bool(result.get("ok", False)),
+                    "code": result.get("code"),
+                    "message": result.get("message"),
+                    "requested_peak_time": list(peak_time),
+                    "requested_valley_time": list(valley_time),
+                    "requested_schedule": list(schedule or []),
+                    "at": datetime.now(timezone.utc).isoformat(),
+                }
+                if not bool(result.get("ok", False)):
+                    raise RuntimeError(
+                        "Advanced schedule write failed"
+                        f" (code={result.get('code')}, message={result.get('message')})"
+                    )
+        finally:
+            self._write_pending = False
 
         self._schedule_post_write_refresh()
 
@@ -1166,57 +1203,61 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         valley_time: list[str],
     ) -> None:
         """Set Peak Valley mode schedule over BLE using setsysmode."""
-        async with self._poll_lock:
-            await self._soc_client.async_close_session()
-            service_info: BluetoothServiceInfoBleak | None = self._last_service_info
+        await self._async_prepare_for_write()
+        try:
+            async with self._poll_lock:
+                await self._soc_client.async_close_session()
+                service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
-            if service_info is not None and service_info.connectable:
-                ble_device = service_info.device
-            elif service_info is not None:
-                ble_device = bluetooth.async_ble_device_from_address(
-                    self.hass,
-                    service_info.device.address,
-                    connectable=True,
+                if service_info is not None and service_info.connectable:
+                    ble_device = service_info.device
+                elif service_info is not None:
+                    ble_device = bluetooth.async_ble_device_from_address(
+                        self.hass,
+                        service_info.device.address,
+                        connectable=True,
+                    )
+                else:
+                    ble_device = bluetooth.async_ble_device_from_address(
+                        self.hass,
+                        self._address,
+                        connectable=True,
+                    )
+
+                if ble_device is None:
+                    raise RuntimeError("No connectable BLE device found for peak-valley schedule write")
+
+                _LOGGER.debug(
+                    "[%s] Setting peak-valley schedule peak=%s valley=%s",
+                    self._name,
+                    peak_time,
+                    valley_time,
                 )
-            else:
-                ble_device = bluetooth.async_ble_device_from_address(
-                    self.hass,
-                    self._address,
-                    connectable=True,
+                result = await self._soc_client.async_set_peak_valley_schedule(
+                    ble_device,
+                    peak_time=peak_time,
+                    valley_time=valley_time,
+                    device_name_hint=self._name,
                 )
+                self._last_peak_valley_schedule_write = {
+                    "ok": bool(result.get("ok", False)),
+                    "code": result.get("code"),
+                    "message": result.get("message"),
+                    "requested_peak_time": list(peak_time),
+                    "requested_valley_time": list(valley_time),
+                    "at": datetime.now(timezone.utc).isoformat(),
+                }
+                if not bool(result.get("ok", False)):
+                    raise RuntimeError(
+                        "Peak-valley schedule write failed"
+                        f" (code={result.get('code')}, message={result.get('message')})"
+                    )
 
-            if ble_device is None:
-                raise RuntimeError("No connectable BLE device found for peak-valley schedule write")
-
-            _LOGGER.debug(
-                "[%s] Setting peak-valley schedule peak=%s valley=%s",
-                self._name,
-                peak_time,
-                valley_time,
-            )
-            result = await self._soc_client.async_set_peak_valley_schedule(
-                ble_device,
-                peak_time=peak_time,
-                valley_time=valley_time,
-                device_name_hint=self._name,
-            )
-            self._last_peak_valley_schedule_write = {
-                "ok": bool(result.get("ok", False)),
-                "code": result.get("code"),
-                "message": result.get("message"),
-                "requested_peak_time": list(peak_time),
-                "requested_valley_time": list(valley_time),
-                "at": datetime.now(timezone.utc).isoformat(),
-            }
-            if not bool(result.get("ok", False)):
-                raise RuntimeError(
-                    "Peak-valley schedule write failed"
-                    f" (code={result.get('code')}, message={result.get('message')})"
-                )
-
-            if self.data is not None:
-                self.data.system_mode = "0"
-                self._notify_if_state_changed()
+                if self.data is not None:
+                    self.data.system_mode = "0"
+                    self._notify_if_state_changed()
+        finally:
+            self._write_pending = False
 
         self._schedule_post_write_refresh()
 
@@ -1230,51 +1271,55 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         if mode not in {0, 1}:
             raise ValueError(f"Invalid buzzer mode: {mode}")
 
-        async with self._poll_lock:
-            await self._soc_client.async_close_session()
-            service_info: BluetoothServiceInfoBleak | None = self._last_service_info
+        await self._async_prepare_for_write()
+        try:
+            async with self._poll_lock:
+                await self._soc_client.async_close_session()
+                service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
-            if service_info is not None and service_info.connectable:
-                ble_device = service_info.device
-            elif service_info is not None:
-                ble_device = bluetooth.async_ble_device_from_address(
-                    self.hass,
-                    service_info.device.address,
-                    connectable=True,
+                if service_info is not None and service_info.connectable:
+                    ble_device = service_info.device
+                elif service_info is not None:
+                    ble_device = bluetooth.async_ble_device_from_address(
+                        self.hass,
+                        service_info.device.address,
+                        connectable=True,
+                    )
+                else:
+                    ble_device = bluetooth.async_ble_device_from_address(
+                        self.hass,
+                        self._address,
+                        connectable=True,
+                    )
+
+                if ble_device is None:
+                    raise RuntimeError("No connectable BLE device found for buzzer mode write")
+
+                _LOGGER.debug("[%s] Setting buzzer mode to %s", self._name, mode)
+                result = await self._soc_client.async_set_buzzer_mode(
+                    ble_device,
+                    mode=mode,
+                    device_name_hint=self._name,
                 )
-            else:
-                ble_device = bluetooth.async_ble_device_from_address(
-                    self.hass,
-                    self._address,
-                    connectable=True,
-                )
+                self._last_buzzer_mode_write = {
+                    "ok": bool(result.get("ok", False)),
+                    "code": result.get("code"),
+                    "message": result.get("message"),
+                    "requested_buzzer_mode": str(mode),
+                    "at": datetime.now(timezone.utc).isoformat(),
+                }
+                if not bool(result.get("ok", False)):
+                    raise RuntimeError(
+                        "Buzzer mode write failed"
+                        f" (code={result.get('code')}, message={result.get('message')})"
+                    )
 
-            if ble_device is None:
-                raise RuntimeError("No connectable BLE device found for buzzer mode write")
-
-            _LOGGER.debug("[%s] Setting buzzer mode to %s", self._name, mode)
-            result = await self._soc_client.async_set_buzzer_mode(
-                ble_device,
-                mode=mode,
-                device_name_hint=self._name,
-            )
-            self._last_buzzer_mode_write = {
-                "ok": bool(result.get("ok", False)),
-                "code": result.get("code"),
-                "message": result.get("message"),
-                "requested_buzzer_mode": str(mode),
-                "at": datetime.now(timezone.utc).isoformat(),
-            }
-            if not bool(result.get("ok", False)):
-                raise RuntimeError(
-                    "Buzzer mode write failed"
-                    f" (code={result.get('code')}, message={result.get('message')})"
-                )
-
-            if self.data is not None:
-                self.data.buzzer = int(mode)
-                self._field_write_timestamps["buzzer"] = datetime.now(timezone.utc)
-                self._notify_if_state_changed()
+                if self.data is not None:
+                    self.data.buzzer = int(mode)
+                    self._field_write_timestamps["buzzer"] = datetime.now(timezone.utc)
+                    self._notify_if_state_changed()
+        finally:
+            self._write_pending = False
 
         self._schedule_post_write_refresh()
 
@@ -1285,44 +1330,48 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
 
     async def async_clear_buzzer(self) -> None:
         """Clear active buzzer alarm over BLE and refresh coordinator data."""
-        async with self._poll_lock:
-            await self._soc_client.async_close_session()
-            service_info: BluetoothServiceInfoBleak | None = self._last_service_info
+        await self._async_prepare_for_write()
+        try:
+            async with self._poll_lock:
+                await self._soc_client.async_close_session()
+                service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
-            if service_info is not None and service_info.connectable:
-                ble_device = service_info.device
-            elif service_info is not None:
-                ble_device = bluetooth.async_ble_device_from_address(
-                    self.hass,
-                    service_info.device.address,
-                    connectable=True,
-                )
-            else:
-                ble_device = bluetooth.async_ble_device_from_address(
-                    self.hass,
-                    self._address,
-                    connectable=True,
-                )
+                if service_info is not None and service_info.connectable:
+                    ble_device = service_info.device
+                elif service_info is not None:
+                    ble_device = bluetooth.async_ble_device_from_address(
+                        self.hass,
+                        service_info.device.address,
+                        connectable=True,
+                    )
+                else:
+                    ble_device = bluetooth.async_ble_device_from_address(
+                        self.hass,
+                        self._address,
+                        connectable=True,
+                    )
 
-            if ble_device is None:
-                raise RuntimeError("No connectable BLE device found for clear buzzer")
+                if ble_device is None:
+                    raise RuntimeError("No connectable BLE device found for clear buzzer")
 
-            _LOGGER.debug("[%s] Clearing buzzer alarm", self._name)
-            result = await self._soc_client.async_clear_buzzer(
-                ble_device,
-                device_name_hint=self._name,
-            )
-            self._last_clear_buzzer_write = {
-                "ok": bool(result.get("ok", False)),
-                "code": result.get("code"),
-                "message": result.get("message"),
-                "at": datetime.now(timezone.utc).isoformat(),
-            }
-            if not bool(result.get("ok", False)):
-                raise RuntimeError(
-                    "Clear buzzer failed"
-                    f" (code={result.get('code')}, message={result.get('message')})"
+                _LOGGER.debug("[%s] Clearing buzzer alarm", self._name)
+                result = await self._soc_client.async_clear_buzzer(
+                    ble_device,
+                    device_name_hint=self._name,
                 )
+                self._last_clear_buzzer_write = {
+                    "ok": bool(result.get("ok", False)),
+                    "code": result.get("code"),
+                    "message": result.get("message"),
+                    "at": datetime.now(timezone.utc).isoformat(),
+                }
+                if not bool(result.get("ok", False)):
+                    raise RuntimeError(
+                        "Clear buzzer failed"
+                        f" (code={result.get('code')}, message={result.get('message')})"
+                    )
+        finally:
+            self._write_pending = False
 
         self._schedule_post_write_refresh()
 
@@ -1333,44 +1382,48 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
 
     async def async_reboot_pcs(self) -> None:
         """Reboot the PCS over BLE."""
-        async with self._poll_lock:
-            await self._soc_client.async_close_session()
-            service_info: BluetoothServiceInfoBleak | None = self._last_service_info
+        await self._async_prepare_for_write()
+        try:
+            async with self._poll_lock:
+                await self._soc_client.async_close_session()
+                service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
-            if service_info is not None and service_info.connectable:
-                ble_device = service_info.device
-            elif service_info is not None:
-                ble_device = bluetooth.async_ble_device_from_address(
-                    self.hass,
-                    service_info.device.address,
-                    connectable=True,
-                )
-            else:
-                ble_device = bluetooth.async_ble_device_from_address(
-                    self.hass,
-                    self._address,
-                    connectable=True,
-                )
+                if service_info is not None and service_info.connectable:
+                    ble_device = service_info.device
+                elif service_info is not None:
+                    ble_device = bluetooth.async_ble_device_from_address(
+                        self.hass,
+                        service_info.device.address,
+                        connectable=True,
+                    )
+                else:
+                    ble_device = bluetooth.async_ble_device_from_address(
+                        self.hass,
+                        self._address,
+                        connectable=True,
+                    )
 
-            if ble_device is None:
-                raise RuntimeError("No connectable BLE device found for PCS reboot")
+                if ble_device is None:
+                    raise RuntimeError("No connectable BLE device found for PCS reboot")
 
-            _LOGGER.debug("[%s] Rebooting PCS", self._name)
-            result = await self._soc_client.async_reboot_pcs(
-                ble_device,
-                device_name_hint=self._name,
-            )
-            self._last_pcs_reboot_write = {
-                "ok": bool(result.get("ok", False)),
-                "code": result.get("code"),
-                "message": result.get("message"),
-                "at": datetime.now(timezone.utc).isoformat(),
-            }
-            if not bool(result.get("ok", False)):
-                raise RuntimeError(
-                    "PCS reboot failed"
-                    f" (code={result.get('code')}, message={result.get('message')})"
+                _LOGGER.debug("[%s] Rebooting PCS", self._name)
+                result = await self._soc_client.async_reboot_pcs(
+                    ble_device,
+                    device_name_hint=self._name,
                 )
+                self._last_pcs_reboot_write = {
+                    "ok": bool(result.get("ok", False)),
+                    "code": result.get("code"),
+                    "message": result.get("message"),
+                    "at": datetime.now(timezone.utc).isoformat(),
+                }
+                if not bool(result.get("ok", False)):
+                    raise RuntimeError(
+                        "PCS reboot failed"
+                        f" (code={result.get('code')}, message={result.get('message')})"
+                    )
+        finally:
+            self._write_pending = False
 
     @property
     def last_pcs_reboot_write(self) -> dict[str, Any] | None:
@@ -1379,50 +1432,54 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
 
     async def async_set_selling_first(self, enabled: bool) -> None:
         """Set sellingFirst over BLE and refresh coordinator data."""
-        async with self._poll_lock:
-            await self._soc_client.async_close_session()
-            service_info: BluetoothServiceInfoBleak | None = self._last_service_info
+        await self._async_prepare_for_write()
+        try:
+            async with self._poll_lock:
+                await self._soc_client.async_close_session()
+                service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
-            if service_info is not None and service_info.connectable:
-                ble_device = service_info.device
-            elif service_info is not None:
-                ble_device = bluetooth.async_ble_device_from_address(
-                    self.hass,
-                    service_info.device.address,
-                    connectable=True,
+                if service_info is not None and service_info.connectable:
+                    ble_device = service_info.device
+                elif service_info is not None:
+                    ble_device = bluetooth.async_ble_device_from_address(
+                        self.hass,
+                        service_info.device.address,
+                        connectable=True,
+                    )
+                else:
+                    ble_device = bluetooth.async_ble_device_from_address(
+                        self.hass,
+                        self._address,
+                        connectable=True,
+                    )
+
+                if ble_device is None:
+                    raise RuntimeError("No connectable BLE device found for sellingFirst write")
+
+                _LOGGER.debug("[%s] Setting sellingFirst to %s", self._name, enabled)
+                result = await self._soc_client.async_set_selling_first(
+                    ble_device,
+                    enabled=enabled,
+                    device_name_hint=self._name,
                 )
-            else:
-                ble_device = bluetooth.async_ble_device_from_address(
-                    self.hass,
-                    self._address,
-                    connectable=True,
-                )
+                self._last_selling_first_write = {
+                    "ok": bool(result.get("ok", False)),
+                    "code": result.get("code"),
+                    "message": result.get("message"),
+                    "requested_selling_first": bool(enabled),
+                    "at": datetime.now(timezone.utc).isoformat(),
+                }
+                if not bool(result.get("ok", False)):
+                    raise RuntimeError(
+                        "sellingFirst write failed"
+                        f" (code={result.get('code')}, message={result.get('message')})"
+                    )
 
-            if ble_device is None:
-                raise RuntimeError("No connectable BLE device found for sellingFirst write")
-
-            _LOGGER.debug("[%s] Setting sellingFirst to %s", self._name, enabled)
-            result = await self._soc_client.async_set_selling_first(
-                ble_device,
-                enabled=enabled,
-                device_name_hint=self._name,
-            )
-            self._last_selling_first_write = {
-                "ok": bool(result.get("ok", False)),
-                "code": result.get("code"),
-                "message": result.get("message"),
-                "requested_selling_first": bool(enabled),
-                "at": datetime.now(timezone.utc).isoformat(),
-            }
-            if not bool(result.get("ok", False)):
-                raise RuntimeError(
-                    "sellingFirst write failed"
-                    f" (code={result.get('code')}, message={result.get('message')})"
-                )
-
-            if self.data is not None:
-                self.data.selling_first = bool(enabled)
-                self._notify_if_state_changed()
+                if self.data is not None:
+                    self.data.selling_first = bool(enabled)
+                    self._notify_if_state_changed()
+        finally:
+            self._write_pending = False
 
         self._schedule_post_write_refresh()
 
@@ -1433,50 +1490,54 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
 
     async def async_set_valley_charge(self, enabled: bool) -> None:
         """Set valleycharge over BLE and refresh coordinator data."""
-        async with self._poll_lock:
-            await self._soc_client.async_close_session()
-            service_info: BluetoothServiceInfoBleak | None = self._last_service_info
+        await self._async_prepare_for_write()
+        try:
+            async with self._poll_lock:
+                await self._soc_client.async_close_session()
+                service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
-            if service_info is not None and service_info.connectable:
-                ble_device = service_info.device
-            elif service_info is not None:
-                ble_device = bluetooth.async_ble_device_from_address(
-                    self.hass,
-                    service_info.device.address,
-                    connectable=True,
+                if service_info is not None and service_info.connectable:
+                    ble_device = service_info.device
+                elif service_info is not None:
+                    ble_device = bluetooth.async_ble_device_from_address(
+                        self.hass,
+                        service_info.device.address,
+                        connectable=True,
+                    )
+                else:
+                    ble_device = bluetooth.async_ble_device_from_address(
+                        self.hass,
+                        self._address,
+                        connectable=True,
+                    )
+
+                if ble_device is None:
+                    raise RuntimeError("No connectable BLE device found for valleycharge write")
+
+                _LOGGER.debug("[%s] Setting valleycharge to %s", self._name, enabled)
+                result = await self._soc_client.async_set_valley_charge(
+                    ble_device,
+                    enabled=enabled,
+                    device_name_hint=self._name,
                 )
-            else:
-                ble_device = bluetooth.async_ble_device_from_address(
-                    self.hass,
-                    self._address,
-                    connectable=True,
-                )
+                self._last_valley_charge_write = {
+                    "ok": bool(result.get("ok", False)),
+                    "code": result.get("code"),
+                    "message": result.get("message"),
+                    "requested_valley_charge": bool(enabled),
+                    "at": datetime.now(timezone.utc).isoformat(),
+                }
+                if not bool(result.get("ok", False)):
+                    raise RuntimeError(
+                        "valleycharge write failed"
+                        f" (code={result.get('code')}, message={result.get('message')})"
+                    )
 
-            if ble_device is None:
-                raise RuntimeError("No connectable BLE device found for valleycharge write")
-
-            _LOGGER.debug("[%s] Setting valleycharge to %s", self._name, enabled)
-            result = await self._soc_client.async_set_valley_charge(
-                ble_device,
-                enabled=enabled,
-                device_name_hint=self._name,
-            )
-            self._last_valley_charge_write = {
-                "ok": bool(result.get("ok", False)),
-                "code": result.get("code"),
-                "message": result.get("message"),
-                "requested_valley_charge": bool(enabled),
-                "at": datetime.now(timezone.utc).isoformat(),
-            }
-            if not bool(result.get("ok", False)):
-                raise RuntimeError(
-                    "valleycharge write failed"
-                    f" (code={result.get('code')}, message={result.get('message')})"
-                )
-
-            if self.data is not None:
-                self.data.valley_charge = bool(enabled)
-                self._notify_if_state_changed()
+                if self.data is not None:
+                    self.data.valley_charge = bool(enabled)
+                    self._notify_if_state_changed()
+        finally:
+            self._write_pending = False
 
         self._schedule_post_write_refresh()
 
@@ -1490,50 +1551,54 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         if peak_power < 100 or peak_power > 50000:
             raise ValueError(f"Invalid peak power: {peak_power}")
 
-        async with self._poll_lock:
-            await self._soc_client.async_close_session()
-            service_info: BluetoothServiceInfoBleak | None = self._last_service_info
+        await self._async_prepare_for_write()
+        try:
+            async with self._poll_lock:
+                await self._soc_client.async_close_session()
+                service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
-            if service_info is not None and service_info.connectable:
-                ble_device = service_info.device
-            elif service_info is not None:
-                ble_device = bluetooth.async_ble_device_from_address(
-                    self.hass,
-                    service_info.device.address,
-                    connectable=True,
+                if service_info is not None and service_info.connectable:
+                    ble_device = service_info.device
+                elif service_info is not None:
+                    ble_device = bluetooth.async_ble_device_from_address(
+                        self.hass,
+                        service_info.device.address,
+                        connectable=True,
+                    )
+                else:
+                    ble_device = bluetooth.async_ble_device_from_address(
+                        self.hass,
+                        self._address,
+                        connectable=True,
+                    )
+
+                if ble_device is None:
+                    raise RuntimeError("No connectable BLE device found for peakPower write")
+
+                _LOGGER.debug("[%s] Setting peakPower to %s", self._name, peak_power)
+                result = await self._soc_client.async_set_peak_power(
+                    ble_device,
+                    peak_power=peak_power,
+                    device_name_hint=self._name,
                 )
-            else:
-                ble_device = bluetooth.async_ble_device_from_address(
-                    self.hass,
-                    self._address,
-                    connectable=True,
-                )
+                self._last_peak_power_write = {
+                    "ok": bool(result.get("ok", False)),
+                    "code": result.get("code"),
+                    "message": result.get("message"),
+                    "requested_peak_power": int(peak_power),
+                    "at": datetime.now(timezone.utc).isoformat(),
+                }
+                if not bool(result.get("ok", False)):
+                    raise RuntimeError(
+                        "peakPower write failed"
+                        f" (code={result.get('code')}, message={result.get('message')})"
+                    )
 
-            if ble_device is None:
-                raise RuntimeError("No connectable BLE device found for peakPower write")
-
-            _LOGGER.debug("[%s] Setting peakPower to %s", self._name, peak_power)
-            result = await self._soc_client.async_set_peak_power(
-                ble_device,
-                peak_power=peak_power,
-                device_name_hint=self._name,
-            )
-            self._last_peak_power_write = {
-                "ok": bool(result.get("ok", False)),
-                "code": result.get("code"),
-                "message": result.get("message"),
-                "requested_peak_power": int(peak_power),
-                "at": datetime.now(timezone.utc).isoformat(),
-            }
-            if not bool(result.get("ok", False)):
-                raise RuntimeError(
-                    "peakPower write failed"
-                    f" (code={result.get('code')}, message={result.get('message')})"
-                )
-
-            if self.data is not None:
-                self.data.peak_power = int(peak_power)
-                self._notify_if_state_changed()
+                if self.data is not None:
+                    self.data.peak_power = int(peak_power)
+                    self._notify_if_state_changed()
+        finally:
+            self._write_pending = False
 
         self._schedule_post_write_refresh()
 
