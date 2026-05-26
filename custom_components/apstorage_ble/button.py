@@ -9,6 +9,7 @@ from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -28,6 +29,13 @@ PCS_REBOOT_BUTTON = ButtonEntityDescription(
     icon="mdi:restart",
 )
 
+READ_SYSTEM_MODE_PAYLOAD_BUTTON = ButtonEntityDescription(
+    key="read_system_mode_payload",
+    name="Read System Mode Payload",
+    icon="mdi:file-search-outline",
+    entity_category=EntityCategory.DIAGNOSTIC,
+)
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -40,6 +48,11 @@ async def async_setup_entry(
         [
             APstorageClearBuzzerButton(coordinator, entry, CLEAR_BUZZER_BUTTON),
             APstoragePcsRebootButton(coordinator, entry, PCS_REBOOT_BUTTON),
+            APstorageReadSystemModePayloadButton(
+                coordinator,
+                entry,
+                READ_SYSTEM_MODE_PAYLOAD_BUTTON,
+            ),
         ]
     )
 
@@ -139,4 +152,55 @@ class APstoragePcsRebootButton(
             attrs["last_write_code"] = write.get("code")
             attrs["last_write_message"] = write.get("message")
             attrs["last_write_at"] = write.get("at")
+        return attrs or None
+
+
+class APstorageReadSystemModePayloadButton(
+    CoordinatorEntity[APstorageCoordinator],
+    ButtonEntity,
+):
+    """Diagnostic button that reads the current getsysmode payload."""
+
+    entity_description: ButtonEntityDescription
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: APstorageCoordinator,
+        entry: ConfigEntry,
+        description: ButtonEntityDescription,
+    ) -> None:
+        super().__init__(coordinator)
+        self.entity_description = description
+        address: str = entry.data[CONF_ADDRESS]
+        self._attr_unique_id = f"{address}-{description.key}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, address)},
+            connections={(dr.CONNECTION_BLUETOOTH, address)},
+            name=entry.title,
+            manufacturer=MANUFACTURER,
+            model=get_model(address),
+        )
+
+    @property
+    def available(self) -> bool:
+        """Return availability from Bluetooth coordinator reachability."""
+        return self.coordinator.runtime_available
+
+    async def async_press(self) -> None:
+        """Trigger a diagnostic getsysmode payload read."""
+        await self.coordinator.async_read_system_mode_payload()
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Expose latest getsysmode diagnostic read metadata."""
+        attrs: dict[str, Any] = {}
+        read = self.coordinator.last_system_mode_payload_read
+        if read is not None:
+            attrs["last_read_ok"] = read.get("ok")
+            attrs["last_read_code"] = read.get("code")
+            attrs["last_read_message"] = read.get("message")
+            attrs["last_read_storage_id"] = read.get("storage_id")
+            attrs["last_read_payload"] = read.get("payload")
+            attrs["last_read_at"] = read.get("at")
         return attrs or None
