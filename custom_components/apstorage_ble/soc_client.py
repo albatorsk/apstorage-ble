@@ -139,6 +139,10 @@ DIAGNOSTIC_MIN_REMAINING_BUDGET_SECONDS = 1.5
 # storageConfigInfo, etc.). Allow a larger one-shot budget so the probe does
 # not time out while telemetry remains healthy.
 VERSION_QUERY_ONESHOT_TIMEOUT_SECONDS = 90
+# System mode writes execute a multi-step flow (session setup + getsysmode +
+# setsysmode + optional read-back verification). Keep this above the per-request
+# response timeout to avoid aborting a valid but slow write attempt.
+SYSTEM_MODE_WRITE_TIMEOUT_SECONDS = 160
 
 try:
     from Crypto.Cipher import AES
@@ -2770,7 +2774,7 @@ class APstorageSocClient:
 
         client: BleakClient | None = None
         try:
-            async with asyncio.timeout(CONNECT_TIMEOUT_SECONDS):
+            async with asyncio.timeout(SYSTEM_MODE_WRITE_TIMEOUT_SECONDS):
                 client = await establish_connection(
                     BleakClientWithServiceCache,
                     ble_device,
