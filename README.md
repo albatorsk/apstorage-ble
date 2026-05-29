@@ -12,6 +12,12 @@ Designed to work with an **ESPHome Bluetooth proxy** placed near the PCS.
 
 ---
 
+## Screenshot
+
+![APstorage BLE device page in Home Assistant](docs/screenshots/dashboard.png)
+
+---
+
 ## Status
 
 | Component | Status |
