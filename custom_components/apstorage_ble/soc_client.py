@@ -1867,6 +1867,18 @@ class APstorageSocClient:
         self.parsed_frames = []
         self._frame_cursor = 0
 
+    async def _async_wait_for_disconnect_settle(self, *, context: str) -> None:
+        """Wait until post-disconnect settle delay has elapsed before reconnecting."""
+        elapsed = asyncio.get_running_loop().time() - self._last_disconnect_at
+        remaining = POST_DISCONNECT_SETTLE_SECONDS - elapsed
+        if remaining > 0:
+            _LOGGER.debug(
+                "[BLE] Waiting %.1fs for proxy disconnect settle %s",
+                remaining,
+                context,
+            )
+            await asyncio.sleep(remaining)
+
     async def _select_protocol_profile(self, client: BleakClient) -> None:
         """Pick BLE/crypto profile from device hints before DH handshake."""
         profile_hint: str | None = self._preferred_storage_id
@@ -2400,11 +2412,11 @@ class APstorageSocClient:
         client = self._session_ble_client
         self._session_ble_client = None
         self._session_storage_id = None
-        self._reset_blufi_session_state()
         if client is not None and client.is_connected:
             _LOGGER.debug("[BLE] Closing persistent session")
             await _safe_disconnect(client)
             self._last_disconnect_at = asyncio.get_running_loop().time()
+        self._reset_blufi_session_state()
 
     async def async_query_session(self) -> SocMetrics | None:
         """Query metrics over the existing persistent BLE session.
@@ -2518,12 +2530,13 @@ class APstorageSocClient:
 
         client: BleakClient | None = None
         try:
+            await self._async_wait_for_disconnect_settle(context=f"before {op_name}")
             async with asyncio.timeout(WRITE_OPERATION_TIMEOUT_SECONDS):
                 client = await establish_connection(
                     BleakClientWithServiceCache,
                     ble_device,
                     ble_device.address,
-                    max_attempts=3,
+                    max_attempts=1,
                     use_services_cache=True,
                 )
                 await self._ensure_services_ready(client)
@@ -2632,6 +2645,7 @@ class APstorageSocClient:
                     await _safe_disconnect(client)
                 except Exception:  # noqa: BLE001
                     pass
+                self._last_disconnect_at = asyncio.get_running_loop().time()
 
     async def _async_send_simple_property_command(
         self,
@@ -2649,12 +2663,13 @@ class APstorageSocClient:
 
         client: BleakClient | None = None
         try:
+            await self._async_wait_for_disconnect_settle(context=f"before {op_name}")
             async with asyncio.timeout(WRITE_OPERATION_TIMEOUT_SECONDS):
                 client = await establish_connection(
                     BleakClientWithServiceCache,
                     ble_device,
                     ble_device.address,
-                    max_attempts=3,
+                    max_attempts=1,
                     use_services_cache=True,
                 )
                 await self._ensure_services_ready(client)
@@ -2735,6 +2750,7 @@ class APstorageSocClient:
                     await _safe_disconnect(client)
                 except Exception:  # noqa: BLE001
                     pass
+                self._last_disconnect_at = asyncio.get_running_loop().time()
 
     async def async_set_system_mode(
         self,
@@ -2774,12 +2790,13 @@ class APstorageSocClient:
 
         client: BleakClient | None = None
         try:
+            await self._async_wait_for_disconnect_settle(context="before system mode write")
             async with asyncio.timeout(WRITE_OPERATION_TIMEOUT_SECONDS):
                 client = await establish_connection(
                     BleakClientWithServiceCache,
                     ble_device,
                     ble_device.address,
-                    max_attempts=3,
+                    max_attempts=1,
                     use_services_cache=True,
                 )
                 await self._ensure_services_ready(client)
@@ -2915,6 +2932,7 @@ class APstorageSocClient:
                     await _safe_disconnect(client)
                 except Exception:  # noqa: BLE001
                     pass
+                self._last_disconnect_at = asyncio.get_running_loop().time()
 
     async def async_set_backup_soc(
         self,
@@ -2938,12 +2956,13 @@ class APstorageSocClient:
 
         client: BleakClient | None = None
         try:
+            await self._async_wait_for_disconnect_settle(context="before backup SOC write")
             async with asyncio.timeout(WRITE_OPERATION_TIMEOUT_SECONDS):
                 client = await establish_connection(
                     BleakClientWithServiceCache,
                     ble_device,
                     ble_device.address,
-                    max_attempts=3,
+                    max_attempts=1,
                     use_services_cache=True,
                 )
                 await self._ensure_services_ready(client)
@@ -3055,6 +3074,7 @@ class APstorageSocClient:
                     await _safe_disconnect(client)
                 except Exception:  # noqa: BLE001
                     pass
+                self._last_disconnect_at = asyncio.get_running_loop().time()
 
     async def async_set_selling_first(
         self,
@@ -3181,12 +3201,13 @@ class APstorageSocClient:
 
         client: BleakClient | None = None
         try:
-            async with asyncio.timeout(CONNECT_TIMEOUT_SECONDS):
+            await self._async_wait_for_disconnect_settle(context="before getsysmode read")
+            async with asyncio.timeout(WRITE_OPERATION_TIMEOUT_SECONDS):
                 client = await establish_connection(
                     BleakClientWithServiceCache,
                     ble_device,
                     ble_device.address,
-                    max_attempts=3,
+                    max_attempts=1,
                     use_services_cache=True,
                 )
                 await self._ensure_services_ready(client)
@@ -3273,6 +3294,7 @@ class APstorageSocClient:
                     await _safe_disconnect(client)
                 except Exception:  # noqa: BLE001
                     pass
+                self._last_disconnect_at = asyncio.get_running_loop().time()
 
     async def async_set_advanced_schedule(
         self,
@@ -3326,12 +3348,13 @@ class APstorageSocClient:
 
         client: BleakClient | None = None
         try:
+            await self._async_wait_for_disconnect_settle(context="before advanced schedule write")
             async with asyncio.timeout(WRITE_OPERATION_TIMEOUT_SECONDS):
                 client = await establish_connection(
                     BleakClientWithServiceCache,
                     ble_device,
                     ble_device.address,
-                    max_attempts=3,
+                    max_attempts=1,
                     use_services_cache=True,
                 )
                 await self._ensure_services_ready(client)
@@ -3446,6 +3469,7 @@ class APstorageSocClient:
                     await _safe_disconnect(client)
                 except Exception:  # noqa: BLE001
                     pass
+                self._last_disconnect_at = asyncio.get_running_loop().time()
 
     async def async_set_buzzer_mode(
         self,
@@ -3465,12 +3489,13 @@ class APstorageSocClient:
 
         client: BleakClient | None = None
         try:
+            await self._async_wait_for_disconnect_settle(context="before buzzer mode write")
             async with asyncio.timeout(WRITE_OPERATION_TIMEOUT_SECONDS):
                 client = await establish_connection(
                     BleakClientWithServiceCache,
                     ble_device,
                     ble_device.address,
-                    max_attempts=3,
+                    max_attempts=1,
                     use_services_cache=True,
                 )
                 await self._ensure_services_ready(client)
@@ -3559,6 +3584,7 @@ class APstorageSocClient:
                     await _safe_disconnect(client)
                 except Exception:  # noqa: BLE001
                     pass
+                self._last_disconnect_at = asyncio.get_running_loop().time()
 
     async def async_clear_buzzer(
         self,
@@ -4011,19 +4037,19 @@ class APstorageSocClient:
         """Wait for a specific frame type/subtype."""
         _LOGGER.debug("[BLE] _wait_frame: waiting for frame type=%d subtype=%d (timeout=%.1fs, have %d frames so far)", 
                      frame_type, subtype, timeout_seconds, len(self.parsed_frames))
-        start = asyncio.get_event_loop().time()
-        while asyncio.get_event_loop().time() - start < timeout_seconds:
+        start = asyncio.get_running_loop().time()
+        while asyncio.get_running_loop().time() - start < timeout_seconds:
             while self._frame_cursor < len(self.parsed_frames):
                 frame = self.parsed_frames[self._frame_cursor]
                 self._frame_cursor += 1
                 if frame.frame_type == frame_type and frame.subtype == subtype:
                     _LOGGER.debug("[BLE] _wait_frame: found target frame after %.1fs", 
-                                 asyncio.get_event_loop().time() - start)
+                                 asyncio.get_running_loop().time() - start)
                     return frame
 
             await asyncio.sleep(0.05)
 
-        elapsed = asyncio.get_event_loop().time() - start
+        elapsed = asyncio.get_running_loop().time() - start
         observed = [
             f"{frame.frame_type}/{frame.subtype}"
             for frame in self.parsed_frames[max(0, self._frame_cursor - 5):]
