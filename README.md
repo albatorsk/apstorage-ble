@@ -115,9 +115,9 @@ Service:
     - `entry_id`: optional (target config entry)
     - `address`: optional (target device MAC)
 - `apstorage_ble.set_advanced_schedule`
-    - `peak_time`: optional (`HH:MM-HH:MM` or `HHMMSSHHMMSS`, max 5)
-    - `valley_time`: optional (`HH:MM-HH:MM` or `HHMMSSHHMMSS`, max 5)
-    - `schedule`: optional raw TOU list (use instead of `peak_time`/`valley_time`)
+    - `schedule`: optional list of windows with `startTime`, `endTime`, and `mode` (`charge` or `discharge`)
+    - `peak_time`: optional legacy peak/discharge ranges (`HH:MM-HH:MM` or `HHMMSSHHMMSS`, max 5)
+    - `valley_time`: optional legacy valley/charge ranges (`HH:MM-HH:MM` or `HHMMSSHHMMSS`, max 5)
     - `entry_id`: optional (target config entry)
     - `address`: optional (target device MAC)
 - `apstorage_ble.set_buzzer_mode`

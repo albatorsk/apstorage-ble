@@ -3307,8 +3307,8 @@ class APstorageSocClient:
     ) -> dict[str, Any]:
         """Set Advanced mode schedule using EMA-compatible setsysmode flow.
 
-        The EMA app writes mode=3 with `peakTime` / `valleyTime` arrays where
-        each entry is a compact `HHMMSSHHMMSS` time range string.
+        The EMA app writes mode=3 with either `peakTime` / `valleyTime` arrays
+        or a structured `schedule` list of time-window objects.
         """
         if not HAS_CRYPTO:
             _LOGGER.error("pycryptodome required; install with: pip install pycryptodome")
@@ -3418,10 +3418,11 @@ class APstorageSocClient:
                     if schedule_items:
                         payload["peakTime"] = None
                         payload["valleyTime"] = None
-                        payload["schedule"] = schedule_items
+                        payload["schedule"] = list(schedule_items)
                     else:
                         payload["peakTime"] = list(peak_time)
                         payload["valleyTime"] = list(valley_time)
+                        payload["schedule"] = None
 
                     # Defaults from app ViewModel for missing keys.
                     payload.setdefault("valleycharge", "1")
