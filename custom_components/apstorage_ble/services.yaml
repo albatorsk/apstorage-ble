@@ -77,14 +77,48 @@ probe_version_once:
 
 set_advanced_schedule:
   name: Set Advanced Schedule
-  description: Set Advanced mode (mode 3) charge/discharge schedule over BLE.
+  description: Set Advanced mode (mode 3) schedule windows over BLE.
   fields:
+    schedule:
+      name: Schedule Windows
+      description: >-
+        Add one or more time windows. Each window has a start time, end time,
+        and a mode.
+      required: false
+      example:
+        - startTime: "00:00"
+          endTime: "06:00"
+          mode: "charge"
+      selector:
+        object:
+          label_field: startTime
+          description_field: mode
+          multiple: true
+          fields:
+            startTime:
+              label: Start Time
+              selector:
+                time:
+            endTime:
+              label: End Time
+              selector:
+                time:
+            mode:
+              label: Mode
+              selector:
+                select:
+                  options:
+                    - label: Charge
+                      value: charge
+                    - label: Discharge
+                      value: discharge
     peak_time:
       name: Peak Time Ranges
       description: >-
         Peak/discharge time ranges. Each item must be 'HH:MM-HH:MM' or
         compact 'HHMMSSHHMMSS'. Max 5 ranges.
       required: false
+      advanced: true
       example:
         - "16:00-21:00"
       selector:
@@ -95,20 +129,9 @@ set_advanced_schedule:
         Valley/charge time ranges. Each item must be 'HH:MM-HH:MM' or
         compact 'HHMMSSHHMMSS'. Max 5 ranges.
       required: false
+      advanced: true
       example:
         - "00:00-06:00"
-      selector:
-        object:
-    schedule:
-      name: Raw Schedule
-      description: >-
-        Optional advanced Time-Of-Use schedule list as returned by the EMA app.
-        When provided, do not provide peak_time/valley_time.
-      required: false
-      example:
-        - startTime: "00:00"
-          endTime: "06:00"
-          mode: "charge"
       selector:
         object:
     entry_id:

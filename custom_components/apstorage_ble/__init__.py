@@ -113,9 +113,23 @@ SERVICE_PROBE_VERSION_ONCE_SCHEMA = vol.Schema(
 
 SERVICE_SET_ADVANCED_SCHEDULE_SCHEMA = vol.Schema(
     {
+        vol.Optional(ATTR_SCHEDULE): vol.Any(
+            cv.string,
+            [
+                {
+                    vol.Required("startTime"): cv.string,
+                    vol.Required("endTime"): cv.string,
+                    vol.Required("mode"): cv.string,
+                }
+            ],
+            {
+                vol.Required("startTime"): cv.string,
+                vol.Required("endTime"): cv.string,
+                vol.Required("mode"): cv.string,
+            },
+        ),
         vol.Optional(ATTR_PEAK_TIME): vol.Any(cv.string, [cv.string]),
         vol.Optional(ATTR_VALLEY_TIME): vol.Any(cv.string, [cv.string]),
-        vol.Optional(ATTR_SCHEDULE): vol.Any(cv.string, list),
         vol.Optional(ATTR_ENTRY_ID): cv.string,
         vol.Optional(ATTR_ADDRESS): cv.string,
     }
@@ -178,6 +192,7 @@ SERVICE_SET_PEAK_POWER_SCHEMA = vol.Schema(
 
 _RANGE_COMPACT_RE = re.compile(r"^(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$")
 _RANGE_HHMM_RE = re.compile(r"^(\d{2}):(\d{2})-(\d{2}):(\d{2})$")
+_SCHEDULE_TIME_RE = re.compile(r"^(\d{2}):(\d{2})(?::(\d{2}))?$")
 
 
 def _parse_hh_mm(hour: str, minute: str) -> tuple[int, int]:
@@ -280,7 +295,7 @@ def _validate_no_overlap(peak_ranges: list[str], valley_ranges: list[str]) -> No
 
 
 def _normalize_schedule_payload(value: Any) -> list[Any]:
-    """Normalize optional raw schedule payload returned by app TOU page."""
+    """Normalize Advanced schedule windows from the action payload."""
     if value is None:
         return []
 
@@ -294,12 +309,95 @@ def _normalize_schedule_payload(value: Any) -> list[Any]:
             raise HomeAssistantError(f"schedule must be valid JSON when provided as string: {err}") from err
         if not isinstance(parsed, list):
             raise HomeAssistantError("schedule JSON must decode to a list")
-        return parsed
+        value = parsed
 
-    if isinstance(value, list):
-        return value
+    if isinstance(value, dict):
+        value = [value]
 
-    raise HomeAssistantError("schedule must be a list or a JSON string")
+    if not isinstance(value, list):
+        raise HomeAssistantError("schedule must be a list, a dict, or a JSON string")
+
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(value, start=1):
+        if not isinstance(item, dict):
+            raise HomeAssistantError(f"schedule item {index} must be an object")
+
+        start_value = item.get("startTime", item.get("start_time"))
+        end_value = item.get("endTime", item.get("end_time"))
+        mode_value = str(item.get("mode", "")).strip().lower()
+
+        if mode_value not in {"charge", "discharge"}:
+            raise HomeAssistantError(
+                f"schedule item {index} mode must be 'charge' or 'discharge'"
+            )
+
+        start_time = _normalize_time_range_value(start_value, f"schedule item {index} startTime")
+        end_time = _normalize_time_range_value(end_value, f"schedule item {index} endTime")
+
+        normalized.append(
+            {
+                "startTime": start_time,
+                "endTime": end_time,
+                "mode": mode_value,
+            }
+        )
+
+    _validate_schedule_windows(normalized)
+    return normalized
+
+
+def _normalize_time_range_value(value: Any, field_name: str) -> str:
+    """Normalize a UI time value to HH:MM."""
+    if value is None:
+        raise HomeAssistantError(f"{field_name} is required")
+
+    text = str(value).strip()
+    match = _SCHEDULE_TIME_RE.fullmatch(text)
+    if not match:
+        raise HomeAssistantError(f"{field_name} must be in HH:MM or HH:MM:SS format")
+
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+    second = int(match.group(3) or 0)
+
+    if hour > 23 or minute > 59 or second > 59:
+        raise HomeAssistantError(f"{field_name} has invalid time values")
+
+    return f"{hour:02d}:{minute:02d}"
+
+
+def _schedule_window_to_segments(start_time: str, end_time: str) -> list[tuple[int, int]]:
+    """Convert HH:MM schedule window values into minute segments."""
+    start_hour, start_minute = (int(part) for part in start_time.split(":", 1))
+    end_hour, end_minute = (int(part) for part in end_time.split(":", 1))
+
+    start = start_hour * 60 + start_minute
+    end = end_hour * 60 + end_minute
+
+    if start == end:
+        raise HomeAssistantError(
+            f"Invalid schedule window {start_time}-{end_time}; start and end cannot be equal"
+        )
+
+    if end > start:
+        return [(start, end)]
+
+    return [(start, 24 * 60), (0, end)]
+
+
+def _validate_schedule_windows(schedule: list[dict[str, Any]]) -> None:
+    """Validate that all schedule windows are pairwise non-overlapping."""
+    segments: list[tuple[int, int]] = []
+    for item in schedule:
+        segments.extend(_schedule_window_to_segments(item["startTime"], item["endTime"]))
+
+    segments.sort(key=lambda seg: (seg[0], seg[1]))
+    prev_end = -1
+    for seg_start, seg_end in segments:
+        if seg_start < prev_end:
+            raise HomeAssistantError("Schedule windows overlap; schedule is invalid")
+        prev_end = max(prev_end, seg_end)
+
 
 
 def _parse_mode(value: Any) -> int:
@@ -469,7 +567,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
             if not schedule:
                 _validate_no_overlap(peak_time, valley_time)
-
 
             target = _resolve_target_coordinator(
                 hass,
