@@ -4045,27 +4045,77 @@ class APstorageSocClient:
                 await client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
                 await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
 
+            response_deadline = asyncio.get_running_loop().time() + response_timeout_seconds
+            parsed: dict[str, Any] | None = None
             try:
-                frame = await self._wait_frame(1, 19, response_timeout_seconds)
-                break
+                while True:
+                    remaining = response_deadline - asyncio.get_running_loop().time()
+                    if remaining <= 0:
+                        break
+
+                    frame = await self._wait_frame(1, 19, remaining)
+
+                    try:
+                        decrypted = self._decrypt_response_payload(frame.payload)
+                    except ValueError as err:
+                        _LOGGER.debug(
+                            "Discarding malformed encrypted property frame for identifier=%s: %s",
+                            identifier,
+                            err,
+                        )
+                        decrypted = frame.payload.decode("utf-8", errors="ignore").strip()
+
+                    if not decrypted:
+                        _LOGGER.debug(
+                            "Discarding empty property frame for identifier=%s",
+                            identifier,
+                        )
+                        continue
+
+                    try:
+                        parsed_raw = json.loads(decrypted)
+                    except json.JSONDecodeError:
+                        _LOGGER.debug(
+                            "Discarding non-JSON property frame for identifier=%s",
+                            identifier,
+                        )
+                        continue
+
+                    if isinstance(parsed_raw, dict):
+                        parsed = parsed_raw
+                        break
+
+                    _LOGGER.debug(
+                        "Discarding non-dict property frame for identifier=%s",
+                        identifier,
+                    )
+
+                if parsed is not None:
+                    return parsed
             except TimeoutError:
                 if write_attempt >= 2:
                     raise
                 _LOGGER.warning(
-                    "[BLE] property request '%s' timed out (attempt %d); retrying write",
+                    "[BLE] property request '%s' timed out waiting for valid response (attempt %d); retrying write",
                     identifier,
                     write_attempt,
                 )
                 await asyncio.sleep(NOTIFY_SETTLE_DELAY_SECONDS)
             # BleakError (disconnect) is not caught; propagates immediately.
 
-        decrypted = self._decrypt_response_payload(frame.payload)
-        try:
-            parsed = json.loads(decrypted)
-        except json.JSONDecodeError:
-            _LOGGER.debug("Response for identifier=%s was not valid JSON", identifier)
-            return None
-        return parsed if isinstance(parsed, dict) else None
+            if write_attempt >= 2:
+                raise TimeoutError(
+                    f"No valid property response for identifier={identifier}"
+                )
+
+            _LOGGER.warning(
+                "[BLE] property request '%s' returned no valid response on attempt %d; retrying write",
+                identifier,
+                write_attempt,
+            )
+            await asyncio.sleep(NOTIFY_SETTLE_DELAY_SECONDS)
+
+        return None
 
     def _on_notify(self, _sender: Any, data: bytearray) -> None:
         """Notification callback used during DH/security setup."""
