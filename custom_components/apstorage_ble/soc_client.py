@@ -3894,7 +3894,7 @@ class APstorageSocClient:
                     break
 
                 try:
-                    frame = await self._wait_frame(1, 19, remaining)
+                    frame = await self._wait_frame_any_subtype(1, (18, 19), remaining)
                 except TimeoutError:
                     break
 
@@ -4053,7 +4053,7 @@ class APstorageSocClient:
                     if remaining <= 0:
                         break
 
-                    frame = await self._wait_frame(1, 19, remaining)
+                    frame = await self._wait_frame_any_subtype(1, (18, 19), remaining)
 
                     try:
                         decrypted = self._decrypt_response_payload(frame.payload)
@@ -4197,6 +4197,70 @@ class APstorageSocClient:
             raise
         finally:
             # Remove this waiter if it was not already consumed (e.g. on timeout path).
+            self._pending_frame_waiters = [
+                (ft, st, f)
+                for ft, st, f in self._pending_frame_waiters
+                if f is not future
+            ]
+
+    async def _wait_frame_any_subtype(
+        self, frame_type: int, subtypes: tuple[int, ...], timeout_seconds: float
+    ) -> BlufiFrame:
+        """Wait for a frame matching frame_type and any subtype in subtypes."""
+        subtype_set = set(subtypes)
+        if not subtype_set:
+            raise ValueError("subtypes must not be empty")
+
+        _LOGGER.debug(
+            "[BLE] _wait_frame_any_subtype: waiting for type=%d subtypes=%s (timeout=%.1fs, buffered=%d)",
+            frame_type,
+            sorted(subtype_set),
+            timeout_seconds,
+            len(self.parsed_frames),
+        )
+        start = asyncio.get_running_loop().time()
+
+        # Fast-path: drain already-arrived frames before blocking.
+        while self._frame_cursor < len(self.parsed_frames):
+            frame = self.parsed_frames[self._frame_cursor]
+            self._frame_cursor += 1
+            if frame.frame_type == frame_type and frame.subtype in subtype_set:
+                _LOGGER.debug("[BLE] _wait_frame_any_subtype: found buffered frame immediately")
+                return frame
+
+        # Slow-path: one Future registered against each acceptable subtype.
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[BlufiFrame] = loop.create_future()
+        for subtype in sorted(subtype_set):
+            self._pending_frame_waiters.append((frame_type, subtype, future))
+
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                result = await future
+            elapsed = asyncio.get_running_loop().time() - start
+            _LOGGER.debug("[BLE] _wait_frame_any_subtype: resolved after %.2fs", elapsed)
+            return result
+        except asyncio.TimeoutError:
+            elapsed = asyncio.get_running_loop().time() - start
+            observed = [
+                f"{f.frame_type}/{f.subtype}"
+                for f in self.parsed_frames[max(0, self._frame_cursor - 5):]
+            ]
+            _LOGGER.debug(
+                "[BLE] _wait_frame_any_subtype: timeout after %.1fs; total frames=%d; observed=%s",
+                elapsed,
+                len(self.parsed_frames),
+                observed or ["none"],
+            )
+            raise TimeoutError(
+                f"No frame type={frame_type} subtype in {sorted(subtype_set)} received"
+                f"; observed={observed or ['none']}"
+            )
+        except BleakError:
+            elapsed = asyncio.get_running_loop().time() - start
+            _LOGGER.debug("[BLE] _wait_frame_any_subtype: BLE disconnect after %.2fs", elapsed)
+            raise
+        finally:
             self._pending_frame_waiters = [
                 (ft, st, f)
                 for ft, st, f in self._pending_frame_waiters
