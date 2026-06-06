@@ -1859,6 +1859,10 @@ class APstorageSocClient:
         # Monotonic timestamp of the most recent BLE disconnect so we can
         # enforce a post-disconnect settle delay before the next connect.
         self._last_disconnect_at: float = 0.0
+        # Pending asyncio Futures waiting for a specific frame type/subtype.
+        # Each entry is (frame_type, subtype, future). Resolved by _on_notify_impl
+        # or immediately cancelled by _on_ble_disconnect when the link drops.
+        self._pending_frame_waiters: list[tuple[int, int, asyncio.Future[Any]]] = []
 
     def _reset_blufi_session_state(self) -> None:
         """Drop protocol state that must not leak across BLE sessions."""
@@ -1866,6 +1870,27 @@ class APstorageSocClient:
         self._codec = BlufiCodec(mtu=BLUFI_MTU)
         self.parsed_frames = []
         self._frame_cursor = 0
+        # Cancel any futures that were waiting for frames from the old session.
+        for _, _, fut in self._pending_frame_waiters:
+            if not fut.done():
+                fut.cancel()
+        self._pending_frame_waiters = []
+
+    def _on_ble_disconnect(self, _client: BleakClient) -> None:
+        """BLE disconnect callback — unblock any pending _wait_frame futures immediately.
+
+        Without this, a dropped connection would leave _wait_frame spinning
+        until its full timeout (up to 45 s) before the caller learns that
+        the device is gone.  Signalling all pending futures here mirrors the
+        Yale-BLE pattern of using async_interrupt / disconnected_futures sets.
+        """
+        n = len(self._pending_frame_waiters)
+        _LOGGER.debug("[BLE] Disconnect callback: cancelling %d pending frame waiter(s)", n)
+        exc = BleakError("BLE client disconnected")
+        for _, _, fut in self._pending_frame_waiters:
+            if not fut.done():
+                fut.set_exception(exc)
+        self._pending_frame_waiters = []
 
     async def _async_wait_for_disconnect_settle(self, *, context: str) -> None:
         """Wait until post-disconnect settle delay has elapsed before reconnecting."""
@@ -1991,6 +2016,7 @@ class APstorageSocClient:
                         BleakClientWithServiceCache,
                         ble_device,
                         ble_device.address,
+                        self._on_ble_disconnect,
                         max_attempts=1,
                         use_services_cache=use_services_cache,
                     )
@@ -2015,6 +2041,7 @@ class APstorageSocClient:
                             BleakClientWithServiceCache,
                             ble_device,
                             ble_device.address,
+                            self._on_ble_disconnect,
                             max_attempts=1,
                             use_services_cache=False,
                         )
@@ -2142,6 +2169,7 @@ class APstorageSocClient:
                     BleakClientWithServiceCache,
                     ble_device,
                     ble_device.address,
+                    self._on_ble_disconnect,
                     max_attempts=1,
                     use_services_cache=False,
                 )
@@ -2249,6 +2277,7 @@ class APstorageSocClient:
                     BleakClientWithServiceCache,
                     ble_device,
                     ble_device.address,
+                    self._on_ble_disconnect,
                     max_attempts=1,
                     use_services_cache=False,
                 )
@@ -2363,6 +2392,7 @@ class APstorageSocClient:
                     BleakClientWithServiceCache,
                     ble_device,
                     ble_device.address,
+                    self._on_ble_disconnect,
                     max_attempts=1,
                     use_services_cache=False,
                 )
@@ -2536,6 +2566,7 @@ class APstorageSocClient:
                     BleakClientWithServiceCache,
                     ble_device,
                     ble_device.address,
+                    self._on_ble_disconnect,
                     max_attempts=1,
                     use_services_cache=True,
                 )
@@ -2669,6 +2700,7 @@ class APstorageSocClient:
                     BleakClientWithServiceCache,
                     ble_device,
                     ble_device.address,
+                    self._on_ble_disconnect,
                     max_attempts=1,
                     use_services_cache=True,
                 )
@@ -2796,6 +2828,7 @@ class APstorageSocClient:
                     BleakClientWithServiceCache,
                     ble_device,
                     ble_device.address,
+                    self._on_ble_disconnect,
                     max_attempts=1,
                     use_services_cache=True,
                 )
@@ -2962,6 +2995,7 @@ class APstorageSocClient:
                     BleakClientWithServiceCache,
                     ble_device,
                     ble_device.address,
+                    self._on_ble_disconnect,
                     max_attempts=1,
                     use_services_cache=True,
                 )
@@ -3207,6 +3241,7 @@ class APstorageSocClient:
                     BleakClientWithServiceCache,
                     ble_device,
                     ble_device.address,
+                    self._on_ble_disconnect,
                     max_attempts=1,
                     use_services_cache=True,
                 )
@@ -3354,6 +3389,7 @@ class APstorageSocClient:
                     BleakClientWithServiceCache,
                     ble_device,
                     ble_device.address,
+                    self._on_ble_disconnect,
                     max_attempts=1,
                     use_services_cache=True,
                 )
@@ -3496,6 +3532,7 @@ class APstorageSocClient:
                     BleakClientWithServiceCache,
                     ble_device,
                     ble_device.address,
+                    self._on_ble_disconnect,
                     max_attempts=1,
                     use_services_cache=True,
                 )
@@ -4000,11 +4037,28 @@ class APstorageSocClient:
         self.parsed_frames = []
         self._frame_cursor = 0
 
-        for pkt in packets:
-            await client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
-            await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
+        for write_attempt in range(1, 3):
+            self.parsed_frames = []
+            self._frame_cursor = 0
 
-        frame = await self._wait_frame(1, 19, response_timeout_seconds)
+            for pkt in packets:
+                await client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
+                await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
+
+            try:
+                frame = await self._wait_frame(1, 19, response_timeout_seconds)
+                break
+            except TimeoutError:
+                if write_attempt >= 2:
+                    raise
+                _LOGGER.warning(
+                    "[BLE] property request '%s' timed out (attempt %d); retrying write",
+                    identifier,
+                    write_attempt,
+                )
+                await asyncio.sleep(NOTIFY_SETTLE_DELAY_SECONDS)
+            # BleakError (disconnect) is not caught; propagates immediately.
+
         decrypted = self._decrypt_response_payload(frame.payload)
         try:
             parsed = json.loads(decrypted)
@@ -4027,6 +4081,12 @@ class APstorageSocClient:
                 _LOGGER.debug("[BLE] Frame parsed: type=%d subtype=%d payload=%d bytes", 
                              frame.frame_type, frame.subtype, len(frame.payload))
                 self.parsed_frames.append(frame)
+                # Resolve the first pending Future that is waiting for this frame type/subtype.
+                for i, (ft, st, fut) in enumerate(self._pending_frame_waiters):
+                    if ft == frame.frame_type and st == frame.subtype and not fut.done():
+                        fut.set_result(frame)
+                        self._pending_frame_waiters.pop(i)
+                        break
             else:
                 _LOGGER.debug("[BLE] Parse returned None for %d byte notification", len(raw))
         except Exception as err:  # noqa: BLE001
@@ -4035,29 +4095,60 @@ class APstorageSocClient:
     async def _wait_frame(
         self, frame_type: int, subtype: int, timeout_seconds: float
     ) -> BlufiFrame:
-        """Wait for a specific frame type/subtype."""
-        _LOGGER.debug("[BLE] _wait_frame: waiting for frame type=%d subtype=%d (timeout=%.1fs, have %d frames so far)", 
-                     frame_type, subtype, timeout_seconds, len(self.parsed_frames))
-        start = asyncio.get_running_loop().time()
-        while asyncio.get_running_loop().time() - start < timeout_seconds:
-            while self._frame_cursor < len(self.parsed_frames):
-                frame = self.parsed_frames[self._frame_cursor]
-                self._frame_cursor += 1
-                if frame.frame_type == frame_type and frame.subtype == subtype:
-                    _LOGGER.debug("[BLE] _wait_frame: found target frame after %.1fs", 
-                                 asyncio.get_running_loop().time() - start)
-                    return frame
+        """Wait for a specific frame type/subtype.
 
-            await asyncio.sleep(0.05)
-
-        elapsed = asyncio.get_running_loop().time() - start
-        observed = [
-            f"{frame.frame_type}/{frame.subtype}"
-            for frame in self.parsed_frames[max(0, self._frame_cursor - 5):]
-        ]
-        _LOGGER.debug("[BLE] _wait_frame: timeout after %.1fs; total frames collected: %d; observed: %s", 
-                     elapsed, len(self.parsed_frames), observed or ['none'])
-        raise TimeoutError(
-            f"No frame type={frame_type} subtype={subtype} received"
-            f"; observed={observed or ['none']}"
+        Uses an asyncio.Future signalled by _on_notify_impl so there is no
+        50 ms polling delay between notification arrival and detection.
+        More importantly, _on_ble_disconnect will immediately set an exception
+        on the future when the link drops, so a dead connection is detected in
+        < 1 s instead of waiting out the full timeout_seconds budget.
+        """
+        _LOGGER.debug(
+            "[BLE] _wait_frame: waiting for type=%d sub=%d (timeout=%.1fs, buffered=%d)",
+            frame_type, subtype, timeout_seconds, len(self.parsed_frames),
         )
+        start = asyncio.get_running_loop().time()
+
+        # Fast-path: drain already-arrived frames before blocking.
+        while self._frame_cursor < len(self.parsed_frames):
+            frame = self.parsed_frames[self._frame_cursor]
+            self._frame_cursor += 1
+            if frame.frame_type == frame_type and frame.subtype == subtype:
+                _LOGGER.debug("[BLE] _wait_frame: found buffered frame immediately")
+                return frame
+
+        # Slow-path: register a Future that _on_notify_impl or _on_ble_disconnect resolves.
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[BlufiFrame] = loop.create_future()
+        self._pending_frame_waiters.append((frame_type, subtype, future))
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                result = await future
+            elapsed = asyncio.get_running_loop().time() - start
+            _LOGGER.debug("[BLE] _wait_frame: resolved after %.2fs", elapsed)
+            return result
+        except asyncio.TimeoutError:
+            elapsed = asyncio.get_running_loop().time() - start
+            observed = [
+                f"{f.frame_type}/{f.subtype}"
+                for f in self.parsed_frames[max(0, self._frame_cursor - 5):]
+            ]
+            _LOGGER.debug(
+                "[BLE] _wait_frame: timeout after %.1fs; total frames=%d; observed=%s",
+                elapsed, len(self.parsed_frames), observed or ["none"],
+            )
+            raise TimeoutError(
+                f"No frame type={frame_type} subtype={subtype} received"
+                f"; observed={observed or ['none']}"
+            )
+        except BleakError:
+            elapsed = asyncio.get_running_loop().time() - start
+            _LOGGER.debug("[BLE] _wait_frame: BLE disconnect after %.2fs", elapsed)
+            raise
+        finally:
+            # Remove this waiter if it was not already consumed (e.g. on timeout path).
+            self._pending_frame_waiters = [
+                (ft, st, f)
+                for ft, st, f in self._pending_frame_waiters
+                if f is not future
+            ]
