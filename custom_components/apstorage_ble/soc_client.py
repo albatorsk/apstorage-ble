@@ -4025,95 +4025,126 @@ class APstorageSocClient:
         request_json = json.dumps(request, separators=(",", ":"))
         payload = self._encrypt_request_json_hexascii(request_json)
 
-        cmd_custom = _make_cmd(1, 19)
-        packets = self._codec.build_packets(
-            cmd_custom,
-            payload,
-            encrypt=True,
-            checksum=True,
-            aes_key=self.session_key,
-        )
-
         self.parsed_frames = []
         self._frame_cursor = 0
 
-        for write_attempt in range(1, 3):
-            self.parsed_frames = []
-            self._frame_cursor = 0
+        # Some firmware variants accept custom-data commands on subtype 18
+        # instead of 19. Try app-default first, then fallback.
+        for cmd_subtype in (19, 18):
+            cmd_custom = _make_cmd(1, cmd_subtype)
+            packets = self._codec.build_packets(
+                cmd_custom,
+                payload,
+                encrypt=True,
+                checksum=True,
+                aes_key=self.session_key,
+            )
 
-            for pkt in packets:
-                await client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
-                await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
+            for write_attempt in range(1, 3):
+                self.parsed_frames = []
+                self._frame_cursor = 0
 
-            response_deadline = asyncio.get_running_loop().time() + response_timeout_seconds
-            parsed: dict[str, Any] | None = None
-            try:
-                while True:
-                    remaining = response_deadline - asyncio.get_running_loop().time()
-                    if remaining <= 0:
+                for pkt in packets:
+                    await client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
+                    await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
+
+                response_deadline = asyncio.get_running_loop().time() + response_timeout_seconds
+                parsed: dict[str, Any] | None = None
+                ack_frames = 0
+                try:
+                    while True:
+                        remaining = response_deadline - asyncio.get_running_loop().time()
+                        if remaining <= 0:
+                            break
+
+                        frame = await self._wait_frame_any_subtype(1, (18, 19), remaining)
+
+                        # 1-byte subtype-18 frames are transport ACKs for each
+                        # written fragment, not the encrypted JSON payload.
+                        if frame.subtype == 18 and len(frame.payload) <= 1:
+                            ack_frames += 1
+                            continue
+
+                        try:
+                            decrypted = self._decrypt_response_payload(frame.payload)
+                        except ValueError as err:
+                            _LOGGER.debug(
+                                "Discarding malformed encrypted property frame for identifier=%s: %s",
+                                identifier,
+                                err,
+                            )
+                            decrypted = frame.payload.decode("utf-8", errors="ignore").strip()
+
+                        if not decrypted:
+                            _LOGGER.debug(
+                                "Discarding empty property frame for identifier=%s",
+                                identifier,
+                            )
+                            continue
+
+                        try:
+                            parsed_raw = json.loads(decrypted)
+                        except json.JSONDecodeError:
+                            _LOGGER.debug(
+                                "Discarding non-JSON property frame for identifier=%s",
+                                identifier,
+                            )
+                            continue
+
+                        if isinstance(parsed_raw, dict):
+                            parsed = parsed_raw
+                            break
+
+                        _LOGGER.debug(
+                            "Discarding non-dict property frame for identifier=%s",
+                            identifier,
+                        )
+
+                    if parsed is not None:
+                        return parsed
+                except TimeoutError:
+                    if write_attempt >= 2:
+                        _LOGGER.debug(
+                            "[BLE] property request '%s' timeout on subtype=%d after %d ACK frame(s)",
+                            identifier,
+                            cmd_subtype,
+                            ack_frames,
+                        )
                         break
-
-                    frame = await self._wait_frame_any_subtype(1, (18, 19), remaining)
-
-                    try:
-                        decrypted = self._decrypt_response_payload(frame.payload)
-                    except ValueError as err:
-                        _LOGGER.debug(
-                            "Discarding malformed encrypted property frame for identifier=%s: %s",
-                            identifier,
-                            err,
-                        )
-                        decrypted = frame.payload.decode("utf-8", errors="ignore").strip()
-
-                    if not decrypted:
-                        _LOGGER.debug(
-                            "Discarding empty property frame for identifier=%s",
-                            identifier,
-                        )
-                        continue
-
-                    try:
-                        parsed_raw = json.loads(decrypted)
-                    except json.JSONDecodeError:
-                        _LOGGER.debug(
-                            "Discarding non-JSON property frame for identifier=%s",
-                            identifier,
-                        )
-                        continue
-
-                    if isinstance(parsed_raw, dict):
-                        parsed = parsed_raw
-                        break
-
-                    _LOGGER.debug(
-                        "Discarding non-dict property frame for identifier=%s",
+                    _LOGGER.warning(
+                        "[BLE] property request '%s' timed out waiting for valid response (subtype=%d attempt %d); retrying write",
                         identifier,
+                        cmd_subtype,
+                        write_attempt,
                     )
+                    await asyncio.sleep(NOTIFY_SETTLE_DELAY_SECONDS)
+                    continue
+                # BleakError (disconnect) is not caught; propagates immediately.
 
-                if parsed is not None:
-                    return parsed
-            except TimeoutError:
                 if write_attempt >= 2:
-                    raise
+                    _LOGGER.debug(
+                        "[BLE] property request '%s' had no valid response on subtype=%d after %d ACK frame(s)",
+                        identifier,
+                        cmd_subtype,
+                        ack_frames,
+                    )
+                    break
+
                 _LOGGER.warning(
-                    "[BLE] property request '%s' timed out waiting for valid response (attempt %d); retrying write",
+                    "[BLE] property request '%s' returned no valid response (subtype=%d attempt %d); retrying write",
                     identifier,
+                    cmd_subtype,
                     write_attempt,
                 )
                 await asyncio.sleep(NOTIFY_SETTLE_DELAY_SECONDS)
-            # BleakError (disconnect) is not caught; propagates immediately.
 
-            if write_attempt >= 2:
-                raise TimeoutError(
-                    f"No valid property response for identifier={identifier}"
-                )
-
-            _LOGGER.warning(
-                "[BLE] property request '%s' returned no valid response on attempt %d; retrying write",
+            _LOGGER.debug(
+                "[BLE] property request '%s' did not yield valid JSON on cmd subtype=%d; trying next subtype",
                 identifier,
-                write_attempt,
+                cmd_subtype,
             )
-            await asyncio.sleep(NOTIFY_SETTLE_DELAY_SECONDS)
+
+        raise TimeoutError(f"No valid property response for identifier={identifier}")
 
         return None
 
