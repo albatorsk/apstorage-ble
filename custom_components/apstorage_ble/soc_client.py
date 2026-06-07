@@ -4169,9 +4169,10 @@ class APstorageSocClient:
             cmd_ack = _make_cmd(1, 18)
             ack_packets = self._codec.build_packets(cmd_ack, bytes([seq]), encrypt=False, checksum=False)
             for pkt in ack_packets:
-                await self._current_client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
-                await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
-            _LOGGER.debug("[BLE] Sent ACK for fragment seq=%d", seq)
+                # Fragment ACKs must be sent quickly; extra pacing can cause the device
+                # to stop sending continuation fragments.
+                await self._current_client.write_gatt_char(self._profile.write_char_uuid, pkt, response=False)
+            _LOGGER.debug("[BLE] Sent immediate ACK for fragment seq=%d", seq)
         except Exception as err:  # noqa: BLE001
             _LOGGER.debug("[BLE] Failed to send ACK: %s", err)
 
