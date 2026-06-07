@@ -1498,22 +1498,22 @@ class BlufiCodec:
 
     @staticmethod
     def _flags(encrypt: bool, checksum: bool, frag: bool) -> int:
-        """Build Blufi frame flags byte per standard Blufi spec.
+        """Build Blufi frame flags byte.
         
-        Bit layout (from decompiled EMA app):
-        - bit 0: continuation (fragmented, more frames follow)
-        - bit 1: acknowledge request (device should ACK this frame)
-        - bit 2: checksum present (CRC-16 at end of frame)
-        - bit 3: encrypted (AES/CFB encrypted payload)
+        NOTE: Device uses non-standard Blufi flag layout:
+        - bit 0: encrypt (0x01)
+        - bit 1: checksum (0x02)
+        - bit 4: continuation/fragmented (0x10)
+        
+        This is NOT the standard Blufi spec but matches the actual device behavior.
         """
         flags = 0
-        if frag:
-            flags |= 0x01  # bit 0: continuation
-        # bit 1 (0x02) is ACK request - not currently set by this code
-        if checksum:
-            flags |= 0x04  # bit 2: checksum
         if encrypt:
-            flags |= 0x08  # bit 3: encrypted
+            flags |= 0x01
+        if checksum:
+            flags |= 0x02
+        if frag:
+            flags |= 0x10
         return flags
 
     def _build_single_packet(
@@ -1616,7 +1616,7 @@ class BlufiCodec:
     def parse_notify(
         self, raw: bytes, aes_key: bytes | None = None
     ) -> BlufiFrame | None:
-        """Parse a Blufi notification frame per standard Blufi spec."""
+        """Parse a Blufi notification frame using device's flag layout."""
         if len(raw) < 4:
             return None
 
@@ -1625,14 +1625,13 @@ class BlufiCodec:
         seq = raw[2]
         data_len = raw[3]
         
-        # Bit layout (per decompiled EMA app):
-        # bit 0: continuation (fragmented)
-        # bit 1: acknowledge request
-        # bit 2: checksum present
-        # bit 3: encrypted
-        frag = (flags & 0x01) != 0
-        checksum = (flags & 0x04) != 0
-        encrypt = (flags & 0x08) != 0
+        # Device flag layout (non-standard):
+        # bit 0: encrypt (0x01)
+        # bit 1: checksum (0x02)
+        # bit 4: fragmented (0x10)
+        encrypt = (flags & 0x01) != 0
+        checksum = (flags & 0x02) != 0
+        frag = (flags & 0x10) != 0
         
         _LOGGER.debug("[BLE] Frame header: type_subtype=0x%02x flags=0x%02x seq=%d data_len=%d frag=%s encrypt=%s reassembling=%s", 
                      type_subtype, flags, seq, data_len, frag, encrypt, self._rx_hdr is not None)
