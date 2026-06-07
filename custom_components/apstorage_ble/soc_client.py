@@ -3989,9 +3989,11 @@ class APstorageSocClient:
     ) -> dict[str, Any] | None:
         """Send encrypted property request and parse JSON response.
         
-        Handles interim (1,19) frames that may not be valid JSON by continuing
-        to collect frames until a valid dict JSON response is received.
-        Skips frames with decryption or parsing errors.
+        Implements v0.29.2 robust approach:
+        - Accepts both (1,18) ACK and (1,19) response frames
+        - Loops until finding valid JSON dict response
+        - Skips frames with decryption or JSON errors
+        - Retries entire write operation on timeout
         """
         request = {
             "company": "apsystems",
@@ -4027,69 +4029,107 @@ class APstorageSocClient:
             aes_key=self.session_key,
         )
 
-        # Reset codec reassembly state before receiving fragmented response
-        self._codec = BlufiCodec(mtu=BLUFI_MTU)
-        self.parsed_frames = []
-        self._frame_cursor = 0
-        
-        # Set current client for ACK sending in callback
-        self._current_client = client
-
-        try:
-            for pkt in packets:
-                await client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
-                await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
-
-            start_time = asyncio.get_running_loop().time()
+        # Retry loop: attempt write up to 2 times
+        for write_attempt in range(1, 3):
+            # Reset codec reassembly state before each attempt
+            self._codec = BlufiCodec(mtu=BLUFI_MTU)
+            self.parsed_frames = []
+            self._frame_cursor = 0
             
-            # Keep reading frames until we get a valid JSON dict response.
-            # Skip interim frames that fail decryption or JSON parsing.
-            while True:
-                elapsed = asyncio.get_running_loop().time() - start_time
-                remaining = response_timeout_seconds - elapsed
-                
-                if remaining <= 0:
-                    _LOGGER.warning(
-                        "Property request for identifier=%s timed out without valid response",
-                        identifier
-                    )
-                    return None
+            # Set current client for ACK sending in callback
+            self._current_client = client
+
+            try:
+                # Send request packets
+                for pkt in packets:
+                    await client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
+                    await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
+
+                response_deadline = asyncio.get_running_loop().time() + response_timeout_seconds
+                parsed: dict[str, Any] | None = None
                 
                 try:
-                    frame = await self._wait_frame(1, 19, remaining, skip_subtypes=(18,))
+                    # Loop: accept both ACK (1,18) and response (1,19) frames
+                    # until we find a valid JSON dict
+                    while True:
+                        remaining = response_deadline - asyncio.get_running_loop().time()
+                        if remaining <= 0:
+                            break
+
+                        try:
+                            # Accept either ACK or response frame
+                            frame = await self._wait_frame_any_subtype(1, (18, 19), remaining)
+                        except TimeoutError:
+                            break
+
+                        # Skip ACK frames (subtype 18) - they're not responses
+                        if frame.subtype == 18:
+                            _LOGGER.debug("[BLE] Skipping ACK frame for identifier=%s", identifier)
+                            continue
+
+                        # Try to decrypt and parse response frame (subtype 19)
+                        try:
+                            decrypted = self._decrypt_response_payload(frame.payload)
+                        except (ValueError, UnicodeDecodeError) as e:
+                            _LOGGER.debug(
+                                "Failed to decrypt response frame for identifier=%s: %s; skipping",
+                                identifier, e
+                            )
+                            continue
+
+                        if not decrypted:
+                            _LOGGER.debug("Empty response frame for identifier=%s", identifier)
+                            continue
+
+                        try:
+                            parsed_raw = json.loads(decrypted)
+                        except json.JSONDecodeError as e:
+                            _LOGGER.debug(
+                                "Non-JSON response frame for identifier=%s: %s; skipping",
+                                identifier, e
+                            )
+                            continue
+
+                        # Accept only dict responses
+                        if isinstance(parsed_raw, dict):
+                            parsed = parsed_raw
+                            break
+                        else:
+                            _LOGGER.debug(
+                                "Non-dict response for identifier=%s: %s; skipping",
+                                identifier, type(parsed_raw)
+                            )
+
+                    if parsed is not None:
+                        return parsed
+                        
                 except TimeoutError:
-                    return None
-                
-                try:
-                    decrypted = self._decrypt_response_payload(frame.payload)
-                except (ValueError, UnicodeDecodeError) as e:
-                    _LOGGER.debug(
-                        "Failed to decrypt interim (1,19) frame for identifier=%s: %s; skipping",
-                        identifier, e
+                    if write_attempt >= 2:
+                        _LOGGER.warning(
+                            "Property request '%s' timed out waiting for valid response (attempt %d)",
+                            identifier, write_attempt
+                        )
+                        raise
+                    _LOGGER.warning(
+                        "Property request '%s' timed out (attempt %d); retrying write",
+                        identifier, write_attempt
                     )
+                    await asyncio.sleep(NOTIFY_SETTLE_DELAY_SECONDS)
                     continue
-                
-                try:
-                    parsed = json.loads(decrypted)
-                except json.JSONDecodeError as e:
-                    _LOGGER.debug(
-                        "Interim (1,19) frame for identifier=%s was not valid JSON: %s; skipping",
-                        identifier, e
-                    )
-                    continue
-                
-                # Accept only dict responses
-                if isinstance(parsed, dict):
-                    return parsed
-                else:
-                    _LOGGER.debug(
-                        "Response for identifier=%s was not a dict: %s; skipping",
-                        identifier, type(parsed)
-                    )
-                    continue
-        finally:
-            # Clear current client reference
-            self._current_client = None
+
+            finally:
+                # Clear current client reference
+                self._current_client = None
+
+            # If we get here without a valid response, retry
+            if write_attempt < 2:
+                _LOGGER.warning(
+                    "Property request '%s' returned no valid response (attempt %d); retrying write",
+                    identifier, write_attempt
+                )
+                await asyncio.sleep(NOTIFY_SETTLE_DELAY_SECONDS)
+
+        return None
 
     def _on_notify(self, _sender: Any, data: bytearray) -> None:
         """Notification callback used during DH/security setup."""
@@ -4153,6 +4193,65 @@ class APstorageSocClient:
         except Exception as err:  # noqa: BLE001
             _LOGGER.debug("[BLE] Exception parsing notification: %s", err)
 
+    async def _wait_frame_any_subtype(
+        self, frame_type: int, subtypes: tuple[int, ...], timeout_seconds: float
+    ) -> BlufiFrame:
+        """Wait for a frame matching frame_type and any subtype in subtypes tuple.
+        
+        Returns immediately if a matching frame is already buffered, otherwise
+        waits for the timeout. Useful for accepting both ACK (18) and response (19) frames.
+        """
+        subtype_set = set(subtypes)
+        if not subtype_set:
+            raise ValueError("subtypes must not be empty")
+
+        _LOGGER.debug(
+            "[BLE] _wait_frame_any_subtype: waiting for type=%d subtypes=%s (timeout=%.1fs, buffered=%d)",
+            frame_type, sorted(subtype_set), timeout_seconds, len(self.parsed_frames),
+        )
+        start = asyncio.get_running_loop().time()
+
+        # Fast-path: drain already-arrived frames
+        while self._frame_cursor < len(self.parsed_frames):
+            frame = self.parsed_frames[self._frame_cursor]
+            self._frame_cursor += 1
+            if frame.frame_type == frame_type and frame.subtype in subtype_set:
+                _LOGGER.debug(
+                    "[BLE] _wait_frame_any_subtype: found buffered frame immediately (type=%d subtype=%d)",
+                    frame.frame_type, frame.subtype
+                )
+                return frame
+
+        # Slow-path: block with timeout
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                while self._frame_cursor < len(self.parsed_frames):
+                    frame = self.parsed_frames[self._frame_cursor]
+                    self._frame_cursor += 1
+                    if frame.frame_type == frame_type and frame.subtype in subtype_set:
+                        elapsed = asyncio.get_running_loop().time() - start
+                        _LOGGER.debug(
+                            "[BLE] _wait_frame_any_subtype: found frame after %.2fs (type=%d subtype=%d)",
+                            elapsed, frame.frame_type, frame.subtype
+                        )
+                        return frame
+                
+                # Wait for new frames to arrive
+                await asyncio.sleep(0.05)
+        except asyncio.TimeoutError:
+            elapsed = asyncio.get_running_loop().time() - start
+            observed = [
+                f"{f.frame_type}/{f.subtype}"
+                for f in self.parsed_frames[max(0, self._frame_cursor - 5):]
+            ]
+            _LOGGER.debug(
+                "[BLE] _wait_frame_any_subtype: timeout after %.1fs; total frames=%d; observed=%s",
+                elapsed, len(self.parsed_frames), observed or ["none"],
+            )
+            raise TimeoutError(
+                f"No frame type={frame_type} subtypes={sorted(subtype_set)} received within {timeout_seconds}s"
+            )
+
     async def _wait_frame(
         self, frame_type: int, subtype: int, timeout_seconds: float, skip_subtypes: tuple[int, ...] = ()
     ) -> BlufiFrame:
@@ -4186,3 +4285,4 @@ class APstorageSocClient:
             f"No frame type={frame_type} subtype={subtype} received"
             f"; observed={observed or ['none']}"
         )
+
