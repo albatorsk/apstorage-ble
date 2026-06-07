@@ -4171,7 +4171,8 @@ class APstorageSocClient:
             for pkt in ack_packets:
                 # Fragment ACKs must be sent quickly; extra pacing can cause the device
                 # to stop sending continuation fragments.
-                await self._current_client.write_gatt_char(self._profile.write_char_uuid, pkt, response=False)
+                # Use confirmed write so the ACK is reliably delivered on proxy links.
+                await self._current_client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
             _LOGGER.debug("[BLE] Sent immediate ACK for fragment seq=%d", seq)
         except Exception as err:  # noqa: BLE001
             _LOGGER.debug("[BLE] Failed to send ACK: %s", err)
