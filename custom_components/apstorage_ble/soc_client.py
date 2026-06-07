@@ -4054,6 +4054,38 @@ class APstorageSocClient:
             aes_key=self.session_key,
         )
 
+        # Compatibility path: restore v0.27 behavior for system-mode requests.
+        # This avoids newer subtype-18 ACK handshake logic that can stall
+        # continuation frames on some proxy/device combinations.
+        if identifier in {"getsysmode", "setsysmode"}:
+            self.parsed_frames = []
+            self._frame_cursor = 0
+            self._current_client = None
+
+            for pkt in packets:
+                await client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
+                await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
+
+            frame = await self._wait_frame(1, 19, response_timeout_seconds)
+
+            try:
+                decrypted = self._decrypt_response_payload(frame.payload)
+            except (ValueError, UnicodeDecodeError) as err:
+                _LOGGER.debug(
+                    "Discarding malformed encrypted response for identifier=%s: %s",
+                    identifier,
+                    err,
+                )
+                return None
+
+            try:
+                parsed_raw = json.loads(decrypted)
+            except json.JSONDecodeError:
+                _LOGGER.debug("Response for identifier=%s was not valid JSON", identifier)
+                return None
+
+            return parsed_raw if isinstance(parsed_raw, dict) else None
+
         # Retry loop: attempt write up to 2 times
         for write_attempt in range(1, 3):
             # Reset codec reassembly state before each attempt
