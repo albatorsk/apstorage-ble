@@ -3973,7 +3973,12 @@ class APstorageSocClient:
         system_id: str = "",
         response_timeout_seconds: float = RESPONSE_TIMEOUT_SECONDS,
     ) -> dict[str, Any] | None:
-        """Send encrypted property request and parse JSON response."""
+        """Send encrypted property request and parse JSON response.
+        
+        Handles interim (1,19) frames that may not be valid JSON by continuing
+        to collect frames until a valid dict JSON response is received.
+        Skips frames with decryption or parsing errors.
+        """
         request = {
             "company": "apsystems",
             "companyKey": "AmS4SV9oy3gk",
@@ -4021,14 +4026,53 @@ class APstorageSocClient:
                 await client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
                 await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
 
-            frame = await self._wait_frame(1, 19, response_timeout_seconds, skip_subtypes=(18,))
-            decrypted = self._decrypt_response_payload(frame.payload)
-            try:
-                parsed = json.loads(decrypted)
-            except json.JSONDecodeError:
-                _LOGGER.debug("Response for identifier=%s was not valid JSON", identifier)
-                return None
-            return parsed if isinstance(parsed, dict) else None
+            start_time = asyncio.get_running_loop().time()
+            
+            # Keep reading frames until we get a valid JSON dict response.
+            # Skip interim frames that fail decryption or JSON parsing.
+            while True:
+                elapsed = asyncio.get_running_loop().time() - start_time
+                remaining = response_timeout_seconds - elapsed
+                
+                if remaining <= 0:
+                    _LOGGER.warning(
+                        "Property request for identifier=%s timed out without valid response",
+                        identifier
+                    )
+                    return None
+                
+                try:
+                    frame = await self._wait_frame(1, 19, remaining, skip_subtypes=(18,))
+                except TimeoutError:
+                    return None
+                
+                try:
+                    decrypted = self._decrypt_response_payload(frame.payload)
+                except (ValueError, UnicodeDecodeError) as e:
+                    _LOGGER.debug(
+                        "Failed to decrypt interim (1,19) frame for identifier=%s: %s; skipping",
+                        identifier, e
+                    )
+                    continue
+                
+                try:
+                    parsed = json.loads(decrypted)
+                except json.JSONDecodeError as e:
+                    _LOGGER.debug(
+                        "Interim (1,19) frame for identifier=%s was not valid JSON: %s; skipping",
+                        identifier, e
+                    )
+                    continue
+                
+                # Accept only dict responses
+                if isinstance(parsed, dict):
+                    return parsed
+                else:
+                    _LOGGER.debug(
+                        "Response for identifier=%s was not a dict: %s; skipping",
+                        identifier, type(parsed)
+                    )
+                    continue
         finally:
             # Clear current client reference
             self._current_client = None
