@@ -1859,6 +1859,8 @@ class APstorageSocClient:
         # Monotonic timestamp of the most recent BLE disconnect so we can
         # enforce a post-disconnect settle delay before the next connect.
         self._last_disconnect_at: float = 0.0
+        # Current client reference for sending ACKs from notification callback
+        self._current_client: BleakClient | None = None
 
     def _reset_blufi_session_state(self) -> None:
         """Drop protocol state that must not leak across BLE sessions."""
@@ -3812,105 +3814,112 @@ class APstorageSocClient:
         system_id: str = "",
     ) -> dict[str, Any] | None:
         """Send encrypted local-data query and return parsed JSON response."""
-        request = {
-            "company": "apsystems",
-            "companyKey": "AmS4SV9oy3gk",
-            "productKey": self._profile.product_key,
-            "version": "1.0",
-            "id": storage_id,
-            "deviceId": storage_id,
-            "type": "property",
-            "eid": "2972245456",
-            "method": "get",
-            "identifier": "getDeviceLastDataLocal",
-            "params": {
-                "T": "APS",
-                "V": "01",
-                "userId": "",
-                "EID": storage_id,
-                "systemId": system_id,
-                "storageId": storage_id,
-            },
-        }
+        # Set current client for ACK sending in callback
+        self._current_client = client
+        
+        try:
+            request = {
+                "company": "apsystems",
+                "companyKey": "AmS4SV9oy3gk",
+                "productKey": self._profile.product_key,
+                "version": "1.0",
+                "id": storage_id,
+                "deviceId": storage_id,
+                "type": "property",
+                "eid": "2972245456",
+                "method": "get",
+                "identifier": "getDeviceLastDataLocal",
+                "params": {
+                    "T": "APS",
+                    "V": "01",
+                    "userId": "",
+                    "EID": storage_id,
+                    "systemId": system_id,
+                    "storageId": storage_id,
+                },
+            }
 
-        request_json = json.dumps(request, separators=(",", ":"))
-        payload = self._encrypt_request_json_hexascii(request_json)
+            request_json = json.dumps(request, separators=(",", ":"))
+            payload = self._encrypt_request_json_hexascii(request_json)
 
-        cmd_custom = _make_cmd(1, 19)
-        packets = self._codec.build_packets(cmd_custom, payload, encrypt=True, checksum=True, aes_key=self.session_key)
+            cmd_custom = _make_cmd(1, 19)
+            packets = self._codec.build_packets(cmd_custom, payload, encrypt=True, checksum=True, aes_key=self.session_key)
 
-        frame: BlufiFrame | None = None
-        for attempt in range(1, 3):
-            # Reset codec reassembly state before receiving fragmented response
-            self._codec = BlufiCodec(mtu=BLUFI_MTU)
-            self.parsed_frames = []
-            self._frame_cursor = 0
+            frame: BlufiFrame | None = None
+            for attempt in range(1, 3):
+                # Reset codec reassembly state before receiving fragmented response
+                self._codec = BlufiCodec(mtu=BLUFI_MTU)
+                self.parsed_frames = []
+                self._frame_cursor = 0
 
-            for pkt in packets:
-                await client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
-                await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
+                for pkt in packets:
+                    await client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
+                    await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
 
-            # Wait for custom data response on the existing notification session.
-            response_deadline = asyncio.get_running_loop().time() + RESPONSE_TIMEOUT_SECONDS
-            parsed: dict[str, Any] | None = None
-            while True:
-                remaining = response_deadline - asyncio.get_running_loop().time()
-                if remaining <= 0:
-                    break
+                # Wait for custom data response on the existing notification session.
+                response_deadline = asyncio.get_running_loop().time() + RESPONSE_TIMEOUT_SECONDS
+                parsed: dict[str, Any] | None = None
+                while True:
+                    remaining = response_deadline - asyncio.get_running_loop().time()
+                    if remaining <= 0:
+                        break
 
-                try:
-                    frame = await self._wait_frame(1, 19, remaining)
-                except TimeoutError:
-                    break
-
-                try:
-                    decrypted = self._decrypt_response_payload(frame.payload)
-                except ValueError as err:
-                    _LOGGER.debug(
-                        "Discarding malformed encrypted local-data frame for storage_id=%s: %s",
-                        storage_id,
-                        err,
-                    )
-                    continue
-
-                try:
-                    parsed_raw = json.loads(decrypted)
-                except json.JSONDecodeError:
                     try:
-                        parsed_raw = json.loads(frame.payload.decode("utf-8", errors="ignore").strip())
-                    except json.JSONDecodeError:
-                        _LOGGER.debug("Discarding non-JSON local-data frame for storage_id=%s", storage_id)
+                        frame = await self._wait_frame(1, 19, remaining)
+                    except TimeoutError:
+                        break
+
+                    try:
+                        decrypted = self._decrypt_response_payload(frame.payload)
+                    except ValueError as err:
+                        _LOGGER.debug(
+                            "Discarding malformed encrypted local-data frame for storage_id=%s: %s",
+                            storage_id,
+                            err,
+                        )
                         continue
 
-                if isinstance(parsed_raw, dict):
-                    parsed = parsed_raw
-                    break
+                    try:
+                        parsed_raw = json.loads(decrypted)
+                    except json.JSONDecodeError:
+                        try:
+                            parsed_raw = json.loads(frame.payload.decode("utf-8", errors="ignore").strip())
+                        except json.JSONDecodeError:
+                            _LOGGER.debug("Discarding non-JSON local-data frame for storage_id=%s", storage_id)
+                            continue
 
-                _LOGGER.debug("Discarding non-dict local-data frame for storage_id=%s", storage_id)
+                    if isinstance(parsed_raw, dict):
+                        parsed = parsed_raw
+                        break
 
-            if parsed is not None:
-                _LOGGER.debug(
-                    "Local-data response keys for storage_id=%s: %s",
+                    _LOGGER.debug("Discarding non-dict local-data frame for storage_id=%s", storage_id)
+
+                if parsed is not None:
+                    _LOGGER.debug(
+                        "Local-data response keys for storage_id=%s: %s",
+                        storage_id,
+                        list(parsed.keys()),
+                    )
+                    # Log the nested 'data' structure if present
+                    data_root = parsed.get("data")
+                    if isinstance(data_root, dict):
+                        _LOGGER.debug("Response 'data' field: %s", data_root)
+                    elif isinstance(data_root, list):
+                        _LOGGER.debug("Response 'data' field (list): %s", data_root)
+                    return parsed
+
+                if attempt >= 2:
+                    raise TimeoutError(f"No valid local-data frame for storage_id={storage_id}")
+                _LOGGER.warning(
+                    "Timed out waiting for valid local-data response for storage_id=%s; retrying request once",
                     storage_id,
-                    list(parsed.keys()),
                 )
-                # Log the nested 'data' structure if present
-                data_root = parsed.get("data")
-                if isinstance(data_root, dict):
-                    _LOGGER.debug("Response 'data' field: %s", data_root)
-                elif isinstance(data_root, list):
-                    _LOGGER.debug("Response 'data' field (list): %s", data_root)
-                return parsed
+                await asyncio.sleep(NOTIFY_SETTLE_DELAY_SECONDS)
 
-            if attempt >= 2:
-                raise TimeoutError(f"No valid local-data frame for storage_id={storage_id}")
-            _LOGGER.warning(
-                "Timed out waiting for valid local-data response for storage_id=%s; retrying request once",
-                storage_id,
-            )
-            await asyncio.sleep(NOTIFY_SETTLE_DELAY_SECONDS)
-
-        return None
+            return None
+        finally:
+            # Clear current client reference
+            self._current_client = None
 
     async def _query_version_info(
         self,
@@ -4003,27 +4012,48 @@ class APstorageSocClient:
         self._codec = BlufiCodec(mtu=BLUFI_MTU)
         self.parsed_frames = []
         self._frame_cursor = 0
+        
+        # Set current client for ACK sending in callback
+        self._current_client = client
 
-        for pkt in packets:
-            await client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
-            await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
-
-        frame = await self._wait_frame(1, 19, response_timeout_seconds, skip_subtypes=(18,))
-        decrypted = self._decrypt_response_payload(frame.payload)
         try:
-            parsed = json.loads(decrypted)
-        except json.JSONDecodeError:
-            _LOGGER.debug("Response for identifier=%s was not valid JSON", identifier)
-            return None
-        return parsed if isinstance(parsed, dict) else None
+            for pkt in packets:
+                await client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
+                await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
+
+            frame = await self._wait_frame(1, 19, response_timeout_seconds, skip_subtypes=(18,))
+            decrypted = self._decrypt_response_payload(frame.payload)
+            try:
+                parsed = json.loads(decrypted)
+            except json.JSONDecodeError:
+                _LOGGER.debug("Response for identifier=%s was not valid JSON", identifier)
+                return None
+            return parsed if isinstance(parsed, dict) else None
+        finally:
+            # Clear current client reference
+            self._current_client = None
 
     def _on_notify(self, _sender: Any, data: bytearray) -> None:
         """Notification callback used during DH/security setup."""
         _LOGGER.debug("[BLE] Notification received: %d bytes", len(data))
         self._on_notify_impl(_sender, data)
 
+    async def _send_ack_async(self, seq: int) -> None:
+        """Send transport ACK (subtype 18) for a received fragment."""
+        if not self._current_client:
+            return
+        try:
+            cmd_ack = _make_cmd(1, 18)
+            ack_packets = self._codec.build_packets(cmd_ack, bytes([seq]), encrypt=False, checksum=False)
+            for pkt in ack_packets:
+                await self._current_client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
+                await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
+            _LOGGER.debug("[BLE] Sent ACK for fragment seq=%d", seq)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("[BLE] Failed to send ACK: %s", err)
+
     def _on_notify_impl(self, _sender: Any, data: bytearray) -> None:
-        """Internal notification accumulation."""
+        """Internal notification accumulation and fragment ACK handling."""
         raw = bytes(data)
         try:
             frame = self._codec.parse_notify(raw, aes_key=self.session_key)
@@ -4032,7 +4062,25 @@ class APstorageSocClient:
                              frame.frame_type, frame.subtype, len(frame.payload))
                 self.parsed_frames.append(frame)
             else:
-                _LOGGER.debug("[BLE] Parse returned None for %d byte notification", len(raw))
+                # parse_notify returned None, which means either:
+                # 1. Fragmented response in progress (needs ACK)
+                # 2. Parsing error
+                # Detect if this is a fragmented response by checking frame flags
+                try:
+                    header = raw[0]
+                    flags = raw[1]
+                    seq = raw[2] if len(raw) > 2 else 0
+                    
+                    # Check continuation flag (bit 5 in flags, 0x20)
+                    if flags & 0x20:  # Fragmented response detected
+                        # Schedule ACK send in the event loop
+                        if self._current_client:
+                            asyncio.create_task(self._send_ack_async(seq))
+                        _LOGGER.debug("[BLE] Fragment detected (seq=%d), ACK scheduled", seq)
+                    else:
+                        _LOGGER.debug("[BLE] Parse returned None for %d byte notification (non-fragmented)", len(raw))
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.debug("[BLE] Exception detecting fragmentation: %s", err)
         except Exception as err:  # noqa: BLE001
             _LOGGER.debug("[BLE] Exception parsing notification: %s", err)
 
