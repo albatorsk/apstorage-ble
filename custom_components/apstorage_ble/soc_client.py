@@ -4004,7 +4004,7 @@ class APstorageSocClient:
             await client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
             await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
 
-        frame = await self._wait_frame(1, 19, response_timeout_seconds)
+        frame = await self._wait_frame(1, 19, response_timeout_seconds, skip_subtypes=(18,))
         decrypted = self._decrypt_response_payload(frame.payload)
         try:
             parsed = json.loads(decrypted)
@@ -4033,9 +4033,9 @@ class APstorageSocClient:
             _LOGGER.debug("[BLE] Exception parsing notification: %s", err)
 
     async def _wait_frame(
-        self, frame_type: int, subtype: int, timeout_seconds: float
+        self, frame_type: int, subtype: int, timeout_seconds: float, skip_subtypes: tuple[int, ...] = ()
     ) -> BlufiFrame:
-        """Wait for a specific frame type/subtype."""
+        """Wait for a specific frame type/subtype, optionally skipping certain subtypes (e.g., ACKs)."""
         _LOGGER.debug("[BLE] _wait_frame: waiting for frame type=%d subtype=%d (timeout=%.1fs, have %d frames so far)", 
                      frame_type, subtype, timeout_seconds, len(self.parsed_frames))
         start = asyncio.get_running_loop().time()
@@ -4043,10 +4043,14 @@ class APstorageSocClient:
             while self._frame_cursor < len(self.parsed_frames):
                 frame = self.parsed_frames[self._frame_cursor]
                 self._frame_cursor += 1
-                if frame.frame_type == frame_type and frame.subtype == subtype:
-                    _LOGGER.debug("[BLE] _wait_frame: found target frame after %.1fs", 
-                                 asyncio.get_running_loop().time() - start)
-                    return frame
+                if frame.frame_type == frame_type:
+                    if frame.subtype in skip_subtypes:
+                        _LOGGER.debug("[BLE] _wait_frame: skipping subtype %d (ACK)", frame.subtype)
+                        continue
+                    if frame.subtype == subtype:
+                        _LOGGER.debug("[BLE] _wait_frame: found target frame after %.1fs", 
+                                     asyncio.get_running_loop().time() - start)
+                        return frame
 
             await asyncio.sleep(0.05)
 
