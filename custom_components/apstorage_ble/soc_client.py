@@ -4186,6 +4186,17 @@ class APstorageSocClient:
                 _LOGGER.debug("[BLE] Frame parsed: type=%d subtype=%d payload=%d bytes", 
                              frame.frame_type, frame.subtype, len(frame.payload))
                 self.parsed_frames.append(frame)
+
+                # Some devices/proxy paths emit transport ACK request frames (1/18)
+                # repeatedly until we echo-ack the requested sequence byte.
+                if (
+                    frame.frame_type == 1
+                    and frame.subtype == 18
+                    and self._current_client
+                    and len(frame.payload) >= 1
+                ):
+                    requested_seq = int(frame.payload[0])
+                    asyncio.create_task(self._send_ack_async(requested_seq))
             else:
                 # parse_notify returned None - likely fragmentation or error
                 # Try to detect fragmentation by validating frame header structure
