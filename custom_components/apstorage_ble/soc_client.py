@@ -1689,17 +1689,42 @@ class BlufiCodec:
             return None
 
         if self._rx_hdr is not None:
+            exp_type, exp_subtype, first_flags = self._rx_hdr
+            if frame_type != exp_type or subtype != exp_subtype:
+                # Transport ACKs can interleave with fragmented response payloads.
+                # Do not consume them into the reassembly buffer.
+                _LOGGER.debug(
+                    "[BLE] Ignoring non-matching frame during reassembly: got=%d/%d expected=%d/%d",
+                    frame_type,
+                    subtype,
+                    exp_type,
+                    exp_subtype,
+                )
+                return BlufiFrame(
+                    frame_type=frame_type,
+                    subtype=subtype,
+                    flags=flags,
+                    seq=seq,
+                    payload=payload,
+                )
+
             self._rx_buf.extend(payload)
             data = bytes(self._rx_buf)
-            frame_type, subtype, first_flags = self._rx_hdr
+            expected_total = self._rx_expect_total
+            if expected_total is not None and len(data) != expected_total:
+                _LOGGER.debug(
+                    "[BLE] Fragment reassembly size mismatch: expected=%d actual=%d",
+                    expected_total,
+                    len(data),
+                )
             _LOGGER.debug("[BLE] Fragment reassembly complete: type=%d subtype=%d final_size=%d bytes", 
-                         frame_type, subtype, len(data))
+                         exp_type, exp_subtype, len(data))
             self._rx_hdr = None
             self._rx_expect_total = None
             self._rx_buf.clear()
             return BlufiFrame(
-                frame_type=frame_type,
-                subtype=subtype,
+                frame_type=exp_type,
+                subtype=exp_subtype,
                 flags=first_flags,
                 seq=seq,
                 payload=data,
