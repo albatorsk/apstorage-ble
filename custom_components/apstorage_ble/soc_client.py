@@ -2812,7 +2812,7 @@ class APstorageSocClient:
                     BleakClientWithServiceCache,
                     ble_device,
                     ble_device.address,
-                    max_attempts=1,
+                    max_attempts=3,
                     use_services_cache=True,
                 )
                 await self._ensure_services_ready(client)
@@ -2978,7 +2978,7 @@ class APstorageSocClient:
                     BleakClientWithServiceCache,
                     ble_device,
                     ble_device.address,
-                    max_attempts=1,
+                    max_attempts=3,
                     use_services_cache=True,
                 )
                 await self._ensure_services_ready(client)
@@ -3223,7 +3223,7 @@ class APstorageSocClient:
                     BleakClientWithServiceCache,
                     ble_device,
                     ble_device.address,
-                    max_attempts=1,
+                    max_attempts=3,
                     use_services_cache=True,
                 )
                 await self._ensure_services_ready(client)
@@ -3370,7 +3370,7 @@ class APstorageSocClient:
                     BleakClientWithServiceCache,
                     ble_device,
                     ble_device.address,
-                    max_attempts=1,
+                    max_attempts=3,
                     use_services_cache=True,
                 )
                 await self._ensure_services_ready(client)
@@ -3512,7 +3512,7 @@ class APstorageSocClient:
                     BleakClientWithServiceCache,
                     ble_device,
                     ble_device.address,
-                    max_attempts=1,
+                    max_attempts=3,
                     use_services_cache=True,
                 )
                 await self._ensure_services_ready(client)
@@ -4222,22 +4222,22 @@ class APstorageSocClient:
                 )
                 return frame
 
-        # Slow-path: block with timeout
+        # Slow-path: poll until a matching frame arrives or timeout expires
         try:
             async with asyncio.timeout(timeout_seconds):
-                while self._frame_cursor < len(self.parsed_frames):
-                    frame = self.parsed_frames[self._frame_cursor]
-                    self._frame_cursor += 1
-                    if frame.frame_type == frame_type and frame.subtype in subtype_set:
-                        elapsed = asyncio.get_running_loop().time() - start
-                        _LOGGER.debug(
-                            "[BLE] _wait_frame_any_subtype: found frame after %.2fs (type=%d subtype=%d)",
-                            elapsed, frame.frame_type, frame.subtype
-                        )
-                        return frame
-                
-                # Wait for new frames to arrive
-                await asyncio.sleep(0.05)
+                while True:
+                    while self._frame_cursor < len(self.parsed_frames):
+                        frame = self.parsed_frames[self._frame_cursor]
+                        self._frame_cursor += 1
+                        if frame.frame_type == frame_type and frame.subtype in subtype_set:
+                            elapsed = asyncio.get_running_loop().time() - start
+                            _LOGGER.debug(
+                                "[BLE] _wait_frame_any_subtype: found frame after %.2fs (type=%d subtype=%d)",
+                                elapsed, frame.frame_type, frame.subtype
+                            )
+                            return frame
+                    # No matching frame yet; yield and check again
+                    await asyncio.sleep(0.05)
         except asyncio.TimeoutError:
             elapsed = asyncio.get_running_loop().time() - start
             observed = [
