@@ -3841,6 +3841,8 @@ class APstorageSocClient:
 
         frame: BlufiFrame | None = None
         for attempt in range(1, 3):
+            # Reset codec reassembly state before receiving fragmented response
+            self._codec = BlufiCodec(mtu=BLUFI_MTU)
             self.parsed_frames = []
             self._frame_cursor = 0
 
@@ -3997,6 +3999,8 @@ class APstorageSocClient:
             aes_key=self.session_key,
         )
 
+        # Reset codec reassembly state before receiving fragmented response
+        self._codec = BlufiCodec(mtu=BLUFI_MTU)
         self.parsed_frames = []
         self._frame_cursor = 0
 
