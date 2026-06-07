@@ -259,41 +259,6 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             with suppress(asyncio.CancelledError, TimeoutError):
                 await asyncio.wait_for(task, timeout=SHUTDOWN_WAIT_SECONDS)
 
-    async def _async_ble_write_with_retry(
-        self,
-        op_name: str,
-        coro_factory: Any,
-    ) -> dict[str, Any]:
-        """Run a BLE write coroutine and retry once on transient BLE errors.
-
-        The soc_client write methods catch BleakError internally and return a
-        dict with code='ble_error', leaving the BLE client disconnected and
-        _last_disconnect_at stamped.  Calling the factory a second time will
-        therefore naturally wait for the post-disconnect settle (inside
-        _async_wait_for_disconnect_settle) before re-establishing a fresh
-        connection and re-running the DH handshake + write sequence.
-
-        Other failure codes (timeout, exception, not_applicable) are not
-        retried because they either consumed the full budget or require user
-        intervention.
-        """
-        max_attempts = 2
-        result: dict[str, Any] = {"ok": False, "code": None, "message": ""}
-        for attempt in range(1, max_attempts + 1):
-            result = await coro_factory()
-            if result.get("ok") or result.get("code") != "ble_error":
-                return result
-            if attempt < max_attempts:
-                _LOGGER.warning(
-                    "[%s] BLE error on %s (attempt %d/%d): %s — retrying after BLE settle",
-                    self._name,
-                    op_name,
-                    attempt,
-                    max_attempts,
-                    result.get("message"),
-                )
-        return result
-
     async def async_initialize(self) -> None:
         """Schedule one-time startup version discovery outside the poll path."""
         if not STARTUP_VERSION_PROBE_ENABLED:
@@ -934,13 +899,10 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     raise RuntimeError("No connectable BLE device found for system mode write")
 
                 _LOGGER.debug("[%s] Setting system mode to %s", self._name, mode)
-                result = await self._async_ble_write_with_retry(
-                    "system mode write",
-                    lambda: self._soc_client.async_set_system_mode(
-                        ble_device,
-                        mode=mode,
-                        device_name_hint=self._name,
-                    ),
+                result = await self._soc_client.async_set_system_mode(
+                    ble_device,
+                    mode=mode,
+                    device_name_hint=self._name,
                 )
                 self._last_system_mode_write = {
                     "ok": bool(result.get("ok", False)),
@@ -999,13 +961,10 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     raise RuntimeError("No connectable BLE device found for backup SOC write")
 
                 _LOGGER.debug("[%s] Setting backup SOC to %s", self._name, backup_soc)
-                result = await self._async_ble_write_with_retry(
-                    "backup SOC write",
-                    lambda: self._soc_client.async_set_backup_soc(
-                        ble_device,
-                        backup_soc=backup_soc,
-                        device_name_hint=self._name,
-                    ),
+                result = await self._soc_client.async_set_backup_soc(
+                    ble_device,
+                    backup_soc=backup_soc,
+                    device_name_hint=self._name,
                 )
                 self._last_backup_soc_write = {
                     "ok": bool(result.get("ok", False)),
@@ -1206,15 +1165,12 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     valley_time,
                     0 if not schedule else len(schedule),
                 )
-                result = await self._async_ble_write_with_retry(
-                    "advanced schedule write",
-                    lambda: self._soc_client.async_set_advanced_schedule(
-                        ble_device,
-                        peak_time=peak_time,
-                        valley_time=valley_time,
-                        schedule=schedule,
-                        device_name_hint=self._name,
-                    ),
+                result = await self._soc_client.async_set_advanced_schedule(
+                    ble_device,
+                    peak_time=peak_time,
+                    valley_time=valley_time,
+                    schedule=schedule,
+                    device_name_hint=self._name,
                 )
                 self._last_advanced_schedule_write = {
                     "ok": bool(result.get("ok", False)),
@@ -1277,14 +1233,11 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     peak_time,
                     valley_time,
                 )
-                result = await self._async_ble_write_with_retry(
-                    "peak-valley schedule write",
-                    lambda: self._soc_client.async_set_peak_valley_schedule(
-                        ble_device,
-                        peak_time=peak_time,
-                        valley_time=valley_time,
-                        device_name_hint=self._name,
-                    ),
+                result = await self._soc_client.async_set_peak_valley_schedule(
+                    ble_device,
+                    peak_time=peak_time,
+                    valley_time=valley_time,
+                    device_name_hint=self._name,
                 )
                 self._last_peak_valley_schedule_write = {
                     "ok": bool(result.get("ok", False)),
@@ -1343,13 +1296,10 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     raise RuntimeError("No connectable BLE device found for buzzer mode write")
 
                 _LOGGER.debug("[%s] Setting buzzer mode to %s", self._name, mode)
-                result = await self._async_ble_write_with_retry(
-                    "buzzer mode write",
-                    lambda: self._soc_client.async_set_buzzer_mode(
-                        ble_device,
-                        mode=mode,
-                        device_name_hint=self._name,
-                    ),
+                result = await self._soc_client.async_set_buzzer_mode(
+                    ble_device,
+                    mode=mode,
+                    device_name_hint=self._name,
                 )
                 self._last_buzzer_mode_write = {
                     "ok": bool(result.get("ok", False)),
@@ -1405,12 +1355,9 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     raise RuntimeError("No connectable BLE device found for clear buzzer")
 
                 _LOGGER.debug("[%s] Clearing buzzer alarm", self._name)
-                result = await self._async_ble_write_with_retry(
-                    "clear buzzer",
-                    lambda: self._soc_client.async_clear_buzzer(
-                        ble_device,
-                        device_name_hint=self._name,
-                    ),
+                result = await self._soc_client.async_clear_buzzer(
+                    ble_device,
+                    device_name_hint=self._name,
                 )
                 self._last_clear_buzzer_write = {
                     "ok": bool(result.get("ok", False)),
@@ -1460,12 +1407,9 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     raise RuntimeError("No connectable BLE device found for PCS reboot")
 
                 _LOGGER.debug("[%s] Rebooting PCS", self._name)
-                result = await self._async_ble_write_with_retry(
-                    "PCS reboot",
-                    lambda: self._soc_client.async_reboot_pcs(
-                        ble_device,
-                        device_name_hint=self._name,
-                    ),
+                result = await self._soc_client.async_reboot_pcs(
+                    ble_device,
+                    device_name_hint=self._name,
                 )
                 self._last_pcs_reboot_write = {
                     "ok": bool(result.get("ok", False)),
@@ -1513,13 +1457,10 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     raise RuntimeError("No connectable BLE device found for sellingFirst write")
 
                 _LOGGER.debug("[%s] Setting sellingFirst to %s", self._name, enabled)
-                result = await self._async_ble_write_with_retry(
-                    "sellingFirst write",
-                    lambda: self._soc_client.async_set_selling_first(
-                        ble_device,
-                        enabled=enabled,
-                        device_name_hint=self._name,
-                    ),
+                result = await self._soc_client.async_set_selling_first(
+                    ble_device,
+                    enabled=enabled,
+                    device_name_hint=self._name,
                 )
                 self._last_selling_first_write = {
                     "ok": bool(result.get("ok", False)),
@@ -1574,13 +1515,10 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     raise RuntimeError("No connectable BLE device found for valleycharge write")
 
                 _LOGGER.debug("[%s] Setting valleycharge to %s", self._name, enabled)
-                result = await self._async_ble_write_with_retry(
-                    "valley charge write",
-                    lambda: self._soc_client.async_set_valley_charge(
-                        ble_device,
-                        enabled=enabled,
-                        device_name_hint=self._name,
-                    ),
+                result = await self._soc_client.async_set_valley_charge(
+                    ble_device,
+                    enabled=enabled,
+                    device_name_hint=self._name,
                 )
                 self._last_valley_charge_write = {
                     "ok": bool(result.get("ok", False)),
@@ -1638,13 +1576,10 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     raise RuntimeError("No connectable BLE device found for peakPower write")
 
                 _LOGGER.debug("[%s] Setting peakPower to %s", self._name, peak_power)
-                result = await self._async_ble_write_with_retry(
-                    "peak power write",
-                    lambda: self._soc_client.async_set_peak_power(
-                        ble_device,
-                        peak_power=peak_power,
-                        device_name_hint=self._name,
-                    ),
+                result = await self._soc_client.async_set_peak_power(
+                    ble_device,
+                    peak_power=peak_power,
+                    device_name_hint=self._name,
                 )
                 self._last_peak_power_write = {
                     "ok": bool(result.get("ok", False)),
