@@ -4062,23 +4062,34 @@ class APstorageSocClient:
                              frame.frame_type, frame.subtype, len(frame.payload))
                 self.parsed_frames.append(frame)
             else:
-                # parse_notify returned None, which means either:
-                # 1. Fragmented response in progress (needs ACK)
-                # 2. Parsing error
-                # Detect if this is a fragmented response by checking frame flags
+                # parse_notify returned None - likely fragmentation or error
+                # Try to detect fragmentation by validating frame header structure
+                # If we have a valid Blufi frame header and parse_notify still returned None,
+                # it means reassembly is in progress, so send ACK
                 try:
+                    if len(raw) < 4:
+                        _LOGGER.debug("[BLE] Parse returned None for %d byte notification (too short)", len(raw))
+                        return
+                    
+                    # Extract frame header
                     header = raw[0]
                     flags = raw[1]
-                    seq = raw[2] if len(raw) > 2 else 0
+                    seq = raw[2]
+                    data_len = raw[3]
                     
-                    # Check continuation flag (bit 5 in flags, 0x20)
-                    if flags & 0x20:  # Fragmented response detected
-                        # Schedule ACK send in the event loop
+                    # Validate that this looks like a complete Blufi frame chunk
+                    # (header + payload + optional CRC)
+                    checksum_enabled = flags & 0x02
+                    expected_size = 4 + data_len + (2 if checksum_enabled else 0)
+                    
+                    if len(raw) >= expected_size:
+                        # We have at least a complete frame chunk
+                        # If parse_notify returned None, it's reassembly in progress
+                        _LOGGER.debug("[BLE] Fragment detected (seq=%d, %d of expected %d bytes)", seq, len(raw) - 4, data_len)
                         if self._current_client:
                             asyncio.create_task(self._send_ack_async(seq))
-                        _LOGGER.debug("[BLE] Fragment detected (seq=%d), ACK scheduled", seq)
                     else:
-                        _LOGGER.debug("[BLE] Parse returned None for %d byte notification (non-fragmented)", len(raw))
+                        _LOGGER.debug("[BLE] Parse returned None for %d byte notification (incomplete frame)", len(raw))
                 except Exception as err:  # noqa: BLE001
                     _LOGGER.debug("[BLE] Exception detecting fragmentation: %s", err)
         except Exception as err:  # noqa: BLE001
