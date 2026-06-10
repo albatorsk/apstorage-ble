@@ -40,6 +40,8 @@ STARTUP_VERSION_PROBE_ENABLED = True
 STARTUP_VERSION_PROBE_RETRIES = 3
 STARTUP_VERSION_PROBE_RETRY_DELAY_SECONDS = 2
 DEFERRED_VERSION_PROBE_ENABLED = False
+STARTUP_SYSMODE_PROBE_ENABLED = True
+STARTUP_SYSMODE_PROBE_RETRIES = 2
 VERSION_RETRY_INTERVAL_SECONDS = 300
 POLL_FAILURE_RECONNECT_THRESHOLD = 3
 NO_DEVICE_STRONG_RESET_THRESHOLD = 6
@@ -103,6 +105,8 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._post_write_refresh_task: asyncio.Task[Any] | None = None
         self._startup_version_task: asyncio.Task[Any] | None = None
         self._startup_version_fetch_attempted = False
+        self._startup_sysmode_task: asyncio.Task[Any] | None = None
+        self._startup_sysmode_fetch_attempted = False
         self._deferred_version_probe_attempted = False
         self._last_version_retry_at: datetime | None = None
         self._last_successful_poll_at: datetime | None = None
@@ -260,12 +264,14 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 await asyncio.wait_for(task, timeout=SHUTDOWN_WAIT_SECONDS)
 
     async def async_initialize(self) -> None:
-        """Schedule one-time startup version discovery outside the poll path."""
-        if not STARTUP_VERSION_PROBE_ENABLED:
-            return
-        if self._startup_version_task is None:
+        """Schedule one-time startup probes outside the poll path."""
+        if STARTUP_VERSION_PROBE_ENABLED and self._startup_version_task is None:
             self._startup_version_task = self.hass.async_create_task(
                 self._async_fetch_startup_version_info()
+            )
+        if STARTUP_SYSMODE_PROBE_ENABLED and self._startup_sysmode_task is None:
+            self._startup_sysmode_task = self.hass.async_create_task(
+                self._async_fetch_startup_sysmode_info()
             )
 
     async def async_shutdown(self) -> None:
@@ -276,6 +282,11 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             startup_task.cancel()
             with suppress(asyncio.CancelledError):
                 await startup_task
+        sysmode_task = self._startup_sysmode_task
+        if sysmode_task is not None and not sysmode_task.done():
+            sysmode_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await sysmode_task
         refresh_task = self._post_write_refresh_task
         if refresh_task is not None and not refresh_task.done():
             refresh_task.cancel()
@@ -442,6 +453,89 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 self.data.pcs_latest_firmware_version,
                 self.data.pcs_hardware_version,
             )
+        )
+
+    async def _async_fetch_startup_sysmode_info(self) -> None:
+        """Fetch getsysmode once on startup to pre-populate backup_soc and system_mode.
+
+        Runs as a background task after integration setup, competing for _poll_lock
+        alongside the version probe.  Uses the same one-shot connect-query-disconnect
+        pattern so it does not conflict with the persistent telemetry session.
+        """
+        if self._shutdown or self._startup_sysmode_fetch_attempted:
+            return
+
+        self._startup_sysmode_fetch_attempted = True
+
+        async with self._poll_lock:
+            for attempt in range(1, STARTUP_SYSMODE_PROBE_RETRIES + 1):
+                if self._shutdown:
+                    return
+
+                ble_device = self._resolve_ble_device()
+                if ble_device is None:
+                    _LOGGER.debug(
+                        "[%s] Startup sysmode fetch attempt %d/%d skipped; no connectable BLE device",
+                        self._name,
+                        attempt,
+                        STARTUP_SYSMODE_PROBE_RETRIES,
+                    )
+                else:
+                    _LOGGER.debug(
+                        "[%s] Fetching getsysmode via one-shot connection (attempt %d/%d)",
+                        self._name,
+                        attempt,
+                        STARTUP_SYSMODE_PROBE_RETRIES,
+                    )
+                    result: dict[str, Any] = {}
+                    try:
+                        async with asyncio.timeout(POLL_WATCHDOG_TIMEOUT_SECONDS):
+                            result = await self._soc_client.async_get_system_mode_payload(
+                                ble_device,
+                                device_name_hint=self._name,
+                            )
+                    except Exception as err:  # noqa: BLE001
+                        _LOGGER.debug(
+                            "[%s] Startup sysmode fetch attempt %d/%d failed (non-fatal): %s: %s",
+                            self._name,
+                            attempt,
+                            STARTUP_SYSMODE_PROBE_RETRIES,
+                            type(err).__name__,
+                            err,
+                        )
+                    else:
+                        if result.get("ok"):
+                            payload = result.get("payload")
+                            if isinstance(payload, dict):
+                                if self.data is None:
+                                    self.data = PCSData()
+                                mode_value = payload.get("mode")
+                                if mode_value is not None and not self._is_field_recently_written("system_mode"):
+                                    self.data.system_mode = str(mode_value)
+                                backup_soc_raw = payload.get("backupSOC")
+                                if backup_soc_raw is not None and not self._is_field_recently_written("backup_soc"):
+                                    try:
+                                        self.data.backup_soc = float(backup_soc_raw)
+                                    except (TypeError, ValueError):
+                                        pass
+                                self._notify_if_state_changed()
+                                _LOGGER.debug(
+                                    "[%s] Startup sysmode info fetched on attempt %d/%d: mode=%s backup_soc=%s",
+                                    self._name,
+                                    attempt,
+                                    STARTUP_SYSMODE_PROBE_RETRIES,
+                                    payload.get("mode"),
+                                    payload.get("backupSOC"),
+                                )
+                                return
+
+                if attempt < STARTUP_SYSMODE_PROBE_RETRIES:
+                    await asyncio.sleep(STARTUP_VERSION_PROBE_RETRY_DELAY_SECONDS)
+
+        _LOGGER.debug(
+            "[%s] Startup sysmode fetch returned no data after %d attempts; backup_soc will remain Unknown",
+            self._name,
+            STARTUP_SYSMODE_PROBE_RETRIES,
         )
 
     async def _async_fetch_startup_version_info(self) -> None:
@@ -1039,9 +1133,15 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             payload = result.get("payload")
             if isinstance(payload, dict) and self.data is not None:
                 mode_value = payload.get("mode")
-                if mode_value is not None:
+                if mode_value is not None and not self._is_field_recently_written("system_mode"):
                     self.data.system_mode = str(mode_value)
-                    self._notify_if_state_changed()
+                backup_soc_raw = payload.get("backupSOC")
+                if backup_soc_raw is not None and not self._is_field_recently_written("backup_soc"):
+                    try:
+                        self.data.backup_soc = float(backup_soc_raw)
+                    except (TypeError, ValueError):
+                        pass
+                self._notify_if_state_changed()
 
             return result
 
