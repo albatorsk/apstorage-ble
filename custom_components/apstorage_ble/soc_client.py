@@ -4060,7 +4060,8 @@ class APstorageSocClient:
         if identifier in {"getsysmode", "setsysmode"}:
             self.parsed_frames = []
             self._frame_cursor = 0
-            self._current_client = None
+            # Keep ACK path enabled so fragmented replies can progress.
+            self._current_client = client
 
             for pkt in packets:
                 await client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
