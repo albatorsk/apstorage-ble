@@ -20,6 +20,8 @@ Designed to work with an **ESPHome Bluetooth proxy** placed near the PCS.
 
 ## Status
 
+Most core integration features are working in day-to-day use on ELT-12.
+
 | Component | Status |
 |---|---|
 | HA integration structure | ✅ Complete |
