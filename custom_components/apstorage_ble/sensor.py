@@ -32,25 +32,17 @@ from homeassistant.util import dt as dt_util
 from .const import DOMAIN, MANUFACTURER, get_model
 from .coordinator import APstorageCoordinator
 from .models import PCSData
+from .protocol import MODE_CODE_TO_OPTION
 
 _LOGGER = logging.getLogger(__name__)
 
-
-SYSTEM_STATE_LABELS: dict[str, str] = {
-    "0": "Peak Valley",
-    "1": "Self-Consumption",
-    "2": "Manual Control",
-    "3": "Advanced",
-    "4": "Backup power supply",
-    "5": "Peak-Shaving",
-    "6": "Intelligent",
-}
 
 def _format_system_state(value: Any) -> Any:
     """Return human-readable label for known system state codes."""
     if value is None:
         return None
-    return SYSTEM_STATE_LABELS.get(str(value), value)
+    # Keep backward-compatible behavior: only map canonical numeric codes.
+    return MODE_CODE_TO_OPTION.get(str(value), value)
 
 
 @dataclass(frozen=True, kw_only=True)
