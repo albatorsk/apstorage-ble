@@ -35,14 +35,12 @@ tests/
 *.pyc
 .mypy_cache/
 scripts/
-home-assistant_apstorage_ble_*.log
 
 # Keep scripts but ignore logs
 probe_logs/
 
 # Reverse engineering artifacts (local-only)
 reverse/
-*.apk
 
 # Local generated documentation artifacts (generated/build outputs only)
 docs/_build/
