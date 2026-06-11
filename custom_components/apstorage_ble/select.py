@@ -16,20 +16,16 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, MANUFACTURER, get_model
 from .coordinator import APstorageCoordinator
+from .protocol import (
+    MODE_CODE_TO_OPTION,
+    OPTION_TO_MODE_CODE,
+    mode_name,
+    resolve_mode_code,
+    supports_backup_soc,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
-MODE_CODE_TO_OPTION: dict[str, str] = {
-    "0": "Peak Valley",
-    "1": "Self-Consumption",
-    "2": "Manual Control",
-    "3": "Advanced",
-    "4": "Backup power supply",
-    "5": "Peak-Shaving",
-    "6": "Intelligent",
-}
-
-OPTION_TO_MODE_CODE: dict[str, str] = {v: k for k, v in MODE_CODE_TO_OPTION.items()}
 BACKUP_SOC_OPTIONS: list[str] = [str(value) for value in range(20, 91, 10)]
 BUZZER_MODE_CODE_TO_OPTION: dict[int, str] = {
     0: "Silent",
@@ -38,50 +34,6 @@ BUZZER_MODE_CODE_TO_OPTION: dict[int, str] = {
 BUZZER_MODE_OPTION_TO_CODE: dict[str, int] = {
     label: code for code, label in BUZZER_MODE_CODE_TO_OPTION.items()
 }
-
-# Accept labels that may already be exposed by system-state sensor formatting.
-LEGACY_STATE_TO_CODE: dict[str, str] = {
-    "Self-consumption": "1",
-    "Self-Consumption": "1",
-    "self consumption": "1",
-    "self-consumption": "1",
-    "Advanced": "3",
-    "Intelligent": "6",
-}
-
-LEGACY_STATE_TO_CODE_NORMALIZED: dict[str, str] = {
-    "selfconsumption": "1",
-    "advanced": "3",
-    "intelligent": "6",
-}
-
-
-def _normalize_mode_code(value: Any) -> str | None:
-    """Normalize mode value to a compact integer code string (e.g. '1')."""
-    if value is None:
-        return None
-
-    text = str(value).strip()
-    if not text:
-        return None
-
-    if text.isdigit():
-        return str(int(text))
-
-    try:
-        number = float(text)
-    except (TypeError, ValueError):
-        return text
-
-    if number.is_integer():
-        return str(int(number))
-
-    return text
-
-
-def _normalize_label(value: Any) -> str:
-    """Normalize human-readable labels for tolerant matching."""
-    return "".join(ch for ch in str(value).strip().lower() if ch.isalnum())
 
 
 def _normalize_backup_soc_option(value: Any) -> str | None:
@@ -176,22 +128,8 @@ class APstorageSystemModeSelect(
         data = self.coordinator.data
         if data is None:
             return None
-
-        if data.system_mode is not None:
-            option = MODE_CODE_TO_OPTION.get(_normalize_mode_code(data.system_mode) or "")
-            if option is not None:
-                return option
-
-        if data.system_state is not None:
-            state = _normalize_mode_code(data.system_state) or ""
-            option = MODE_CODE_TO_OPTION.get(state)
-            if option is not None:
-                return option
-            code = LEGACY_STATE_TO_CODE.get(state)
-            if code is not None:
-                return MODE_CODE_TO_OPTION.get(code)
-
-        return None
+        mode_code = resolve_mode_code(data.system_mode, data.system_state)
+        return MODE_CODE_TO_OPTION.get(mode_code or "")
 
     async def async_select_option(self, option: str) -> None:
         """Set system mode on the device."""
@@ -256,27 +194,14 @@ class APstorageBackupSocSelect(
         data = self.coordinator.data
         if data is None:
             return None
-
-        if data.system_mode is not None:
-            return _normalize_mode_code(data.system_mode)
-
-        if data.system_state is not None:
-            state = _normalize_mode_code(data.system_state) or ""
-            if state in MODE_CODE_TO_OPTION:
-                return state
-            legacy = LEGACY_STATE_TO_CODE.get(state)
-            if legacy is not None:
-                return legacy
-            return LEGACY_STATE_TO_CODE_NORMALIZED.get(_normalize_label(state))
-
-        return None
+        return resolve_mode_code(data.system_mode, data.system_state)
 
     @property
     def available(self) -> bool:
         """Only available when connected and mode supports backup SOC."""
         if not self.coordinator.runtime_available:
             return False
-        return self._current_mode_code() in {"1", "3"}
+        return supports_backup_soc(self._current_mode_code())
 
     @property
     def current_option(self) -> str | None:
@@ -311,7 +236,7 @@ class APstorageBackupSocSelect(
         mode_code = self._current_mode_code()
         if mode_code is not None:
             attrs["mode_code"] = mode_code
-            attrs["mode_name"] = MODE_CODE_TO_OPTION.get(mode_code)
+            attrs["mode_name"] = mode_name(mode_code)
 
         write = self.coordinator.last_backup_soc_write
         if write is not None:

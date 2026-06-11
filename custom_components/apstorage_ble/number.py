@@ -15,23 +15,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, MANUFACTURER, get_model
 from .coordinator import APstorageCoordinator
-
-
-MODE_CODE_TO_OPTION: dict[str, str] = {
-    "0": "Peak Valley",
-    "1": "Self-Consumption",
-    "2": "Manual Control",
-    "3": "Advanced",
-    "4": "Backup power supply",
-    "5": "Peak-Shaving",
-    "6": "Intelligent",
-}
-
-LEGACY_STATE_TO_CODE: dict[str, str] = {
-    "Self-consumption": "1",
-    "Advanced": "3",
-    "Intelligent": "6",
-}
+from .protocol import mode_name, resolve_mode_code, supports_peak_power
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -48,29 +32,6 @@ PEAK_POWER_NUMBER = APstorageNumberDescription(
     native_unit_of_measurement=UnitOfPower.WATT,
     icon="mdi:flash-outline",
 )
-
-
-def _normalize_mode_code(value: Any) -> str | None:
-    """Normalize mode value to compact integer code string."""
-    if value is None:
-        return None
-
-    text = str(value).strip()
-    if not text:
-        return None
-
-    if text.isdigit():
-        return str(int(text))
-
-    try:
-        number = float(text)
-    except (TypeError, ValueError):
-        return text
-
-    if number.is_integer():
-        return str(int(number))
-
-    return text
 
 
 async def async_setup_entry(
@@ -115,24 +76,14 @@ class APstoragePeakPowerNumber(
         data = self.coordinator.data
         if data is None:
             return None
-
-        if data.system_mode is not None:
-            return _normalize_mode_code(data.system_mode)
-
-        if data.system_state is not None:
-            state = str(data.system_state)
-            if state in MODE_CODE_TO_OPTION:
-                return state
-            return LEGACY_STATE_TO_CODE.get(state)
-
-        return None
+        return resolve_mode_code(data.system_mode, data.system_state)
 
     @property
     def available(self) -> bool:
         """Only available when connected and mode supports peak power."""
         if not self.coordinator.runtime_available:
             return False
-        return self._current_mode_code() == "5"
+        return supports_peak_power(self._current_mode_code())
 
     @property
     def native_value(self) -> float | None:
@@ -161,7 +112,7 @@ class APstoragePeakPowerNumber(
         mode_code = self._current_mode_code()
         if mode_code is not None:
             attrs["mode_code"] = mode_code
-            attrs["mode_name"] = MODE_CODE_TO_OPTION.get(mode_code)
+            attrs["mode_name"] = mode_name(mode_code)
 
         write = self.coordinator.last_peak_power_write
         if write is not None:
