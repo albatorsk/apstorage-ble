@@ -75,9 +75,6 @@ The integration creates the following entities.
 - PCS Firmware 1
 - PCS Firmware 2
 - PCS Firmware 3
-- PCS Latest Firmware 1
-- PCS Latest Firmware 2
-- PCS Latest Firmware 3
 - PCS Hardware Version
 
 #### Controls

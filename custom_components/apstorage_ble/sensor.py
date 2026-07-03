@@ -216,24 +216,6 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         value_fn=lambda d: d.pcs_firmware_version_3,
     ),
     APstorageSensorDescription(
-        key="pcs_latest_firmware_version_1",
-        name="PCS Latest Firmware 1",
-        entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda d: d.pcs_latest_firmware_version_1,
-    ),
-    APstorageSensorDescription(
-        key="pcs_latest_firmware_version_2",
-        name="PCS Latest Firmware 2",
-        entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda d: d.pcs_latest_firmware_version_2,
-    ),
-    APstorageSensorDescription(
-        key="pcs_latest_firmware_version_3",
-        name="PCS Latest Firmware 3",
-        entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda d: d.pcs_latest_firmware_version_3,
-    ),
-    APstorageSensorDescription(
         key="ble_connection",
         name="BLE Connection",
         entity_category=EntityCategory.DIAGNOSTIC,
