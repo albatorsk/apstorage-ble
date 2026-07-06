@@ -970,8 +970,6 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         await self._async_prepare_for_write()
         try:
             async with self._poll_lock:
-                # Close the persistent poll session so the write's own BLE connection does not conflict.
-                await self._soc_client.async_close_session()
                 service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
                 if service_info is not None and service_info.connectable:
@@ -993,7 +991,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     raise RuntimeError("No connectable BLE device found for system mode write")
 
                 _LOGGER.debug("[%s] Setting system mode to %s", self._name, mode)
-                result = await self._soc_client.async_set_system_mode(
+                result = await self._soc_client.async_set_system_mode_with_session(
                     ble_device,
                     mode=mode,
                     device_name_hint=self._name,
@@ -1033,7 +1031,6 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         await self._async_prepare_for_write()
         try:
             async with self._poll_lock:
-                await self._soc_client.async_close_session()
                 service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
                 if service_info is not None and service_info.connectable:
@@ -1055,7 +1052,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     raise RuntimeError("No connectable BLE device found for backup SOC write")
 
                 _LOGGER.debug("[%s] Setting backup SOC to %s", self._name, backup_soc)
-                result = await self._soc_client.async_set_backup_soc(
+                result = await self._soc_client.async_set_backup_soc_with_session(
                     ble_device,
                     backup_soc=backup_soc,
                     device_name_hint=self._name,
@@ -1090,7 +1087,6 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
     async def async_read_system_mode_payload(self) -> dict[str, Any]:
         """Read current getsysmode payload over BLE for diagnostics/automation."""
         async with self._poll_lock:
-            await self._soc_client.async_close_session()
             service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
             if service_info is not None and service_info.connectable:
@@ -1112,7 +1108,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 raise RuntimeError("No connectable BLE device found for getsysmode read")
 
             _LOGGER.debug("[%s] Reading getsysmode payload", self._name)
-            result = await self._soc_client.async_get_system_mode_payload(
+            result = await self._soc_client.async_get_system_mode_payload_with_session(
                 ble_device,
                 device_name_hint=self._name,
             )
@@ -1237,7 +1233,6 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         await self._async_prepare_for_write()
         try:
             async with self._poll_lock:
-                await self._soc_client.async_close_session()
                 service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
                 if service_info is not None and service_info.connectable:
@@ -1265,7 +1260,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     valley_time,
                     0 if not schedule else len(schedule),
                 )
-                result = await self._soc_client.async_set_advanced_schedule(
+                result = await self._soc_client.async_set_advanced_schedule_with_session(
                     ble_device,
                     peak_time=peak_time,
                     valley_time=valley_time,
@@ -1306,7 +1301,6 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         await self._async_prepare_for_write()
         try:
             async with self._poll_lock:
-                await self._soc_client.async_close_session()
                 service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
                 if service_info is not None and service_info.connectable:
@@ -1333,7 +1327,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     peak_time,
                     valley_time,
                 )
-                result = await self._soc_client.async_set_peak_valley_schedule(
+                result = await self._soc_client.async_set_peak_valley_schedule_with_session(
                     ble_device,
                     peak_time=peak_time,
                     valley_time=valley_time,
@@ -1374,7 +1368,6 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         await self._async_prepare_for_write()
         try:
             async with self._poll_lock:
-                await self._soc_client.async_close_session()
                 service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
                 if service_info is not None and service_info.connectable:
@@ -1396,7 +1389,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     raise RuntimeError("No connectable BLE device found for buzzer mode write")
 
                 _LOGGER.debug("[%s] Setting buzzer mode to %s", self._name, mode)
-                result = await self._soc_client.async_set_buzzer_mode(
+                result = await self._soc_client.async_set_buzzer_mode_with_session(
                     ble_device,
                     mode=mode,
                     device_name_hint=self._name,
@@ -1433,7 +1426,6 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         await self._async_prepare_for_write()
         try:
             async with self._poll_lock:
-                await self._soc_client.async_close_session()
                 service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
                 if service_info is not None and service_info.connectable:
@@ -1455,7 +1447,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     raise RuntimeError("No connectable BLE device found for clear buzzer")
 
                 _LOGGER.debug("[%s] Clearing buzzer alarm", self._name)
-                result = await self._soc_client.async_clear_buzzer(
+                result = await self._soc_client.async_clear_buzzer_with_session(
                     ble_device,
                     device_name_hint=self._name,
                 )
@@ -1485,7 +1477,6 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         await self._async_prepare_for_write()
         try:
             async with self._poll_lock:
-                await self._soc_client.async_close_session()
                 service_info: BluetoothServiceInfoBleak | None = self._last_service_info
 
                 if service_info is not None and service_info.connectable:
@@ -1507,7 +1498,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                     raise RuntimeError("No connectable BLE device found for PCS reboot")
 
                 _LOGGER.debug("[%s] Rebooting PCS", self._name)
-                result = await self._soc_client.async_reboot_pcs(
+                result = await self._soc_client.async_reboot_pcs_with_session(
                     ble_device,
                     device_name_hint=self._name,
                 )
