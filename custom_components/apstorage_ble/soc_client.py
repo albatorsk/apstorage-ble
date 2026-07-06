@@ -4254,6 +4254,11 @@ class APstorageSocClient:
                 await self._current_client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
             _LOGGER.debug("[BLE] Sent immediate ACK for fragment seq=%d", seq)
         except Exception as err:  # noqa: BLE001
+            # Suppress expected transient errors (connection drops, proxy state changes).
+            # These are unavoidable on unstable BLE links and don't affect polling.
+            err_str = str(err).lower()
+            if "connection status" in err_str or "changed" in err_str:
+                return
             _LOGGER.debug("[BLE] Failed to send ACK: %s", err)
 
     def _on_notify_impl(self, _sender: Any, data: bytearray) -> None:
