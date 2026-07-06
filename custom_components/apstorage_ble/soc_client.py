@@ -143,6 +143,9 @@ VERSION_QUERY_ONESHOT_TIMEOUT_SECONDS = 90
 # property requests + optional verification). Keep this above per-request
 # response timeout to avoid aborting valid but slow write attempts.
 WRITE_OPERATION_TIMEOUT_SECONDS = 160
+# Retry logic for system mode writes.
+SYSTEM_MODE_WRITE_MAX_ATTEMPTS = 3
+SYSTEM_MODE_WRITE_RETRY_BACKOFF_SECONDS = (0.5, 1.0, 2.0)
 
 try:
     from Crypto.Cipher import AES
@@ -2800,7 +2803,10 @@ class APstorageSocClient:
         mode: int,
         device_name_hint: str | None = None,
     ) -> dict[str, Any]:
-        """Set system mode using EMA-compatible getsysmode -> setsysmode flow."""
+        """Set system mode using EMA-compatible getsysmode -> setsysmode flow.
+
+        Retries with exponential backoff and always verifies on ambiguous results.
+        """
         if not HAS_CRYPTO:
             _LOGGER.error("pycryptodome required; install with: pip install pycryptodome")
             return {"ok": False, "code": None, "message": "pycryptodome missing"}
@@ -2810,24 +2816,105 @@ class APstorageSocClient:
             return {"ok": False, "code": None, "message": f"invalid mode {mode}"}
 
         async def _verify_system_mode(storage_id: str, expected_mode: int) -> bool:
-            """Read back system mode after an ambiguous write result."""
-            verify_resp = await self._send_property_request(
-                client,
-                method="get",
-                identifier="getsysmode",
-                storage_id=storage_id,
-                params_extra={},
-                system_id="",
-            )
-            if not isinstance(verify_resp, dict):
+            """Read back system mode after write to confirm change."""
+            try:
+                verify_resp = await self._send_property_request(
+                    client,
+                    method="get",
+                    identifier="getsysmode",
+                    storage_id=storage_id,
+                    params_extra={},
+                    system_id="",
+                )
+                if not isinstance(verify_resp, dict):
+                    return False
+
+                verify_data = _extract_sysmode_payload(verify_resp.get("data"))
+                if verify_data is None:
+                    return False
+
+                actual_mode = _normalize_mode_code(verify_data.get("mode"))
+                return actual_mode == str(expected_mode)
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.debug("Verification read-back failed: %s", err)
                 return False
 
-            verify_data = _extract_sysmode_payload(verify_resp.get("data"))
-            if verify_data is None:
-                return False
+        async def _attempt_write(storage_id: str, payload: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+            """Attempt setsysmode write with verification on ambiguous results.
 
-            actual_mode = _normalize_mode_code(verify_data.get("mode"))
-            return actual_mode == str(expected_mode)
+            Returns (success, response_dict).
+            """
+            retry_delays = SYSTEM_MODE_WRITE_RETRY_BACKOFF_SECONDS
+            last_error: dict[str, Any] = {"ok": False, "code": None, "message": "no attempts made"}
+
+            for attempt in range(SYSTEM_MODE_WRITE_MAX_ATTEMPTS):
+                try:
+                    if attempt > 0:
+                        delay = retry_delays[attempt - 1] if attempt - 1 < len(retry_delays) else retry_delays[-1]
+                        _LOGGER.debug("Retrying setsysmode for %s (attempt %d/%d, delay %.1fs)",
+                                     storage_id, attempt + 1, SYSTEM_MODE_WRITE_MAX_ATTEMPTS, delay)
+                        await asyncio.sleep(delay)
+
+                    set_resp = await self._send_property_request(
+                        client,
+                        method="set",
+                        identifier="setsysmode",
+                        storage_id=storage_id,
+                        params_extra=payload,
+                        system_id="",
+                    )
+
+                    if isinstance(set_resp, dict):
+                        code = set_resp.get("code")
+                        message = str(set_resp.get("msg") or set_resp.get("message") or "")
+
+                        if _response_is_success(set_resp):
+                            _LOGGER.debug("System mode write for %s succeeded (attempt %d)", storage_id, attempt + 1)
+                            return (True, {"ok": True, "code": code, "message": message, "storage_id": storage_id})
+
+                        if await _verify_system_mode(storage_id, mode):
+                            _LOGGER.debug(
+                                "System mode write for %s returned code=%s but verification confirmed mode=%s (attempt %d)",
+                                storage_id, code, mode, attempt + 1,
+                            )
+                            return (True, {
+                                "ok": True,
+                                "code": code or "verified",
+                                "message": message or "write response non-success, but read-back confirmed mode change",
+                                "storage_id": storage_id
+                            })
+
+                        last_error = {"ok": False, "code": code, "message": message}
+
+                except asyncio.TimeoutError:
+                    if await _verify_system_mode(storage_id, mode):
+                        _LOGGER.debug(
+                            "System mode write for %s timed out, but read-back confirmed mode=%s (attempt %d)",
+                            storage_id, mode, attempt + 1,
+                        )
+                        return (True, {
+                            "ok": True,
+                            "code": "timeout_verified",
+                            "message": "write acknowledgement timed out, but read-back confirmed mode change",
+                            "storage_id": storage_id
+                        })
+                    last_error = {"ok": False, "code": "timeout", "message": "write timed out"}
+                    continue
+
+                except BleakError as err:
+                    last_error = {"ok": False, "code": "ble_error", "message": str(err)}
+                    if attempt < SYSTEM_MODE_WRITE_MAX_ATTEMPTS - 1:
+                        continue
+                    return (False, last_error)
+
+                except Exception as err:  # noqa: BLE001
+                    last_error = {"ok": False, "code": "exception", "message": str(err)}
+                    if attempt < SYSTEM_MODE_WRITE_MAX_ATTEMPTS - 1:
+                        _LOGGER.debug("Write attempt %d failed: %s", attempt + 1, err)
+                        continue
+                    return (False, last_error)
+
+            return (False, last_error)
 
         client: BleakClient | None = None
         try:
@@ -2898,59 +2985,18 @@ class APstorageSocClient:
                     payload = dict(mode_data)
                     payload["mode"] = str(mode)
 
-                    # Defaults from app ViewModel for missing keys.
                     payload.setdefault("valleycharge", "1")
                     payload.setdefault("backupSOC", "50")
                     payload.setdefault("peakPower", "5000")
                     payload.setdefault("sellingFirst", "0")
 
-                    try:
-                        set_resp = await self._send_property_request(
-                            client,
-                            method="set",
-                            identifier="setsysmode",
-                            storage_id=storage_id,
-                            params_extra=payload,
-                            system_id="",
-                        )
-                    except asyncio.TimeoutError:
-                        if await _verify_system_mode(storage_id, mode):
-                            self._preferred_storage_id = storage_id
-                            _LOGGER.debug(
-                                "System mode write for %s timed out waiting for ACK, but read-back confirmed mode=%s",
-                                storage_id,
-                                mode,
-                            )
-                            return {
-                                "ok": True,
-                                "code": "timeout_verified",
-                                "message": "write acknowledgement timed out, but read-back confirmed mode change",
-                            }
-                        raise
+                    success, result = await _attempt_write(storage_id, payload)
+                    if success:
+                        self._preferred_storage_id = result.pop("storage_id", storage_id)
+                        return result
 
-                    if isinstance(set_resp, dict):
-                        code = set_resp.get("code")
-                        message = str(set_resp.get("msg") or set_resp.get("message") or "")
-                        if _response_is_success(set_resp):
-                            self._preferred_storage_id = storage_id
-                            return {"ok": True, "code": code, "message": message}
-
-                        if await _verify_system_mode(storage_id, mode):
-                            self._preferred_storage_id = storage_id
-                            _LOGGER.debug(
-                                "System mode write for %s returned non-success code=%s, but read-back confirmed mode=%s",
-                                storage_id,
-                                code,
-                                mode,
-                            )
-                            return {
-                                "ok": True,
-                                "code": code or "verified",
-                                "message": message or "non-success write response, but read-back confirmed mode change",
-                            }
-
-                        last_code = code
-                        last_message = message
+                    last_code = result.get("code")
+                    last_message = result.get("message")
 
                 return {
                     "ok": False,
