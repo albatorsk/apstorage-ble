@@ -589,21 +589,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not hass.services.has_service(DOMAIN, SERVICE_GET_SYSTEM_MODE_PAYLOAD):
 
         async def _async_handle_get_system_mode_payload(call: ServiceCall) -> None:
-            target = _resolve_target_coordinator(
-                hass,
-                entry_id=call.data.get(ATTR_ENTRY_ID),
-                address=call.data.get(ATTR_ADDRESS),
-            )
-            result = await target.async_read_system_mode_payload()
-            payload = {
-                "entry_id": call.data.get(ATTR_ENTRY_ID),
-                "address": target._address,  # pylint: disable=protected-access
-                "storage_id": result.get("storage_id"),
-                "code": result.get("code"),
-                "message": result.get("message"),
-                "payload": result.get("payload"),
-            }
-            hass.bus.async_fire(SYSTEM_MODE_PAYLOAD_EVENT, payload)
+            try:
+                target = _resolve_target_coordinator(
+                    hass,
+                    entry_id=call.data.get(ATTR_ENTRY_ID),
+                    address=call.data.get(ATTR_ADDRESS),
+                )
+                result = await target.async_read_system_mode_payload()
+                payload = {
+                    "entry_id": call.data.get(ATTR_ENTRY_ID),
+                    "address": target._address,  # pylint: disable=protected-access
+                    "storage_id": result.get("storage_id"),
+                    "code": result.get("code"),
+                    "message": result.get("message"),
+                    "payload": result.get("payload"),
+                }
+                hass.bus.async_fire(SYSTEM_MODE_PAYLOAD_EVENT, payload)
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.debug(
+                    "Get system mode payload service failed: %s: %s",
+                    type(err).__name__,
+                    err,
+                    exc_info=True,
+                )
+                raise
 
         hass.services.async_register(
             DOMAIN,
