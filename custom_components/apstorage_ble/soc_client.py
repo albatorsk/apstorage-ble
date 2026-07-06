@@ -2691,6 +2691,145 @@ class APstorageSocClient:
                     pass
                 self._last_disconnect_at = asyncio.get_running_loop().time()
 
+    async def _async_patch_sysmode_payload_with_session(
+        self,
+        ble_device: BLEDevice,
+        *,
+        op_name: str,
+        device_name_hint: str | None,
+        payload_mutator: Callable[[dict[str, Any]], tuple[bool, str | None]],
+    ) -> dict[str, Any]:
+        """Apply field patch using persistent session if available, otherwise fresh connection."""
+        if not HAS_CRYPTO:
+            _LOGGER.error("pycryptodome required; install with: pip install pycryptodome")
+            return {"ok": False, "code": None, "message": "pycryptodome missing"}
+
+        client: BleakClient | None = None
+        session_is_persistent = False
+        try:
+            if self.session_open:
+                client = self._session_ble_client
+                session_is_persistent = True
+                _LOGGER.debug("Using persistent session for %s", op_name)
+            else:
+                await self._async_wait_for_disconnect_settle(context=f"before {op_name}")
+                async with asyncio.timeout(WRITE_OPERATION_TIMEOUT_SECONDS):
+                    client = await establish_connection(
+                        BleakClientWithServiceCache,
+                        ble_device,
+                        ble_device.address,
+                        max_attempts=1,
+                        use_services_cache=True,
+                    )
+                    await self._ensure_services_ready(client)
+                    await self._establish_blufi_session(client)
+
+            if not client or not client.is_connected:
+                return {"ok": False, "code": None, "message": "connection not available"}
+
+            device_name = ""
+            try:
+                name_raw = await client.read_gatt_char(DEVICE_NAME_CHAR)
+                device_name = bytes(name_raw).decode("utf-8", errors="ignore").strip("\x00\r\n ")
+            except Exception:  # noqa: BLE001
+                device_name = ""
+
+            if not device_name:
+                device_name = device_name_hint or ""
+            if not device_name:
+                device_name = ble_device.name or ""
+
+            storage_ids = _derive_storage_id_candidates(
+                self._preferred_storage_id,
+                device_name,
+                device_name_hint,
+                ble_device.name,
+            )
+
+            if not storage_ids:
+                _LOGGER.warning("Could not derive storage ID for %s", op_name)
+                return {
+                    "ok": False,
+                    "code": None,
+                    "message": "could not derive storage id",
+                }
+
+            last_code: Any = None
+            last_message: str | None = None
+
+            for storage_id in storage_ids:
+                get_resp = await self._send_property_request(
+                    client,
+                    method="get",
+                    identifier="getsysmode",
+                    storage_id=storage_id,
+                    params_extra={},
+                    system_id="",
+                )
+                if not isinstance(get_resp, dict):
+                    continue
+
+                last_code = get_resp.get("code")
+                last_message = str(get_resp.get("msg") or get_resp.get("message") or "")
+
+                mode_data = _extract_sysmode_payload(get_resp.get("data"))
+                if mode_data is None:
+                    continue
+
+                payload = dict(mode_data)
+                should_write, skip_reason = payload_mutator(payload)
+                if not should_write:
+                    last_code = "not_applicable"
+                    last_message = skip_reason or "operation not applicable for current mode"
+                    continue
+
+                payload.setdefault("valleycharge", "1")
+                payload.setdefault("backupSOC", "50")
+                payload.setdefault("peakPower", "5000")
+                payload.setdefault("sellingFirst", "0")
+
+                set_resp = await self._send_property_request(
+                    client,
+                    method="set",
+                    identifier="setsysmode",
+                    storage_id=storage_id,
+                    params_extra=payload,
+                    system_id="",
+                )
+
+                if isinstance(set_resp, dict):
+                    code = set_resp.get("code")
+                    message = str(set_resp.get("msg") or set_resp.get("message") or "")
+                    if _response_is_success(set_resp):
+                        self._preferred_storage_id = storage_id
+                        return {"ok": True, "code": code, "message": message}
+
+                    last_code = code
+                    last_message = message
+
+            return {
+                "ok": False,
+                "code": last_code,
+                "message": last_message or f"no successful {op_name} response",
+            }
+
+        except asyncio.TimeoutError:
+            _LOGGER.warning("%s timed out for %s", op_name, ble_device.address)
+            return {"ok": False, "code": "timeout", "message": "connection/write timeout"}
+        except BleakError as err:
+            _LOGGER.warning("BLE error during %s for %s: %s", op_name, ble_device.address, err)
+            return {"ok": False, "code": "ble_error", "message": str(err)}
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("Unexpected %s error for %s: %s", op_name, ble_device.address, err, exc_info=True)
+            return {"ok": False, "code": "exception", "message": str(err)}
+        finally:
+            if client and client.is_connected and not session_is_persistent:
+                try:
+                    await _safe_disconnect(client)
+                except Exception:  # noqa: BLE001
+                    pass
+                self._last_disconnect_at = asyncio.get_running_loop().time()
+
     async def _async_send_simple_property_command(
         self,
         ble_device: BLEDevice,
@@ -2790,6 +2929,119 @@ class APstorageSocClient:
             return {"ok": False, "code": "exception", "message": str(err)}
         finally:
             if client and client.is_connected:
+                try:
+                    await _safe_disconnect(client)
+                except Exception:  # noqa: BLE001
+                    pass
+                self._last_disconnect_at = asyncio.get_running_loop().time()
+
+    async def _async_send_simple_property_command_with_session(
+        self,
+        ble_device: BLEDevice,
+        *,
+        identifier: str,
+        op_name: str,
+        params_candidates: tuple[dict[str, Any], ...] = ({},),
+        device_name_hint: str | None = None,
+    ) -> dict[str, Any]:
+        """Send simple command using persistent session if available, otherwise fresh connection."""
+        if not HAS_CRYPTO:
+            _LOGGER.error("pycryptodome required; install with: pip install pycryptodome")
+            return {"ok": False, "code": None, "message": "pycryptodome missing"}
+
+        client: BleakClient | None = None
+        session_is_persistent = False
+        try:
+            if self.session_open:
+                client = self._session_ble_client
+                session_is_persistent = True
+                _LOGGER.debug("Using persistent session for %s", op_name)
+            else:
+                await self._async_wait_for_disconnect_settle(context=f"before {op_name}")
+                async with asyncio.timeout(WRITE_OPERATION_TIMEOUT_SECONDS):
+                    client = await establish_connection(
+                        BleakClientWithServiceCache,
+                        ble_device,
+                        ble_device.address,
+                        max_attempts=1,
+                        use_services_cache=True,
+                    )
+                    await self._ensure_services_ready(client)
+                    await self._establish_blufi_session(client)
+
+            if not client or not client.is_connected:
+                return {"ok": False, "code": None, "message": "connection not available"}
+
+            device_name = ""
+            try:
+                name_raw = await client.read_gatt_char(DEVICE_NAME_CHAR)
+                device_name = bytes(name_raw).decode("utf-8", errors="ignore").strip("\x00\r\n ")
+            except Exception:  # noqa: BLE001
+                device_name = ""
+
+            if not device_name:
+                device_name = device_name_hint or ""
+            if not device_name:
+                device_name = ble_device.name or ""
+
+            storage_ids = _derive_storage_id_candidates(
+                self._preferred_storage_id,
+                device_name,
+                device_name_hint,
+                ble_device.name,
+            )
+
+            if not storage_ids:
+                _LOGGER.warning("Could not derive storage ID for %s", op_name)
+                return {
+                    "ok": False,
+                    "code": None,
+                    "message": "could not derive storage id",
+                }
+
+            last_code: Any = None
+            last_message: str | None = None
+
+            for storage_id in storage_ids:
+                for params in params_candidates:
+                    set_resp = await self._send_property_request(
+                        client,
+                        method="set",
+                        identifier=identifier,
+                        storage_id=storage_id,
+                        params_extra=params,
+                        system_id="",
+                    )
+
+                    if not isinstance(set_resp, dict):
+                        continue
+
+                    code = set_resp.get("code")
+                    message = str(set_resp.get("msg") or set_resp.get("message") or "")
+                    if _response_is_success(set_resp):
+                        self._preferred_storage_id = storage_id
+                        return {"ok": True, "code": code, "message": message}
+
+                    last_code = code
+                    last_message = message
+
+            return {
+                "ok": False,
+                "code": last_code,
+                "message": last_message or f"no successful {identifier} response",
+            }
+
+        except asyncio.TimeoutError:
+            _LOGGER.warning("%s timed out for %s", op_name, ble_device.address)
+            return {"ok": False, "code": "timeout", "message": "connection/write timeout"}
+        except BleakError as err:
+            _LOGGER.warning("BLE error during %s for %s: %s", op_name, ble_device.address, err)
+            return {"ok": False, "code": "ble_error", "message": str(err)}
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("Unexpected %s error for %s: %s", op_name, ble_device.address, err, exc_info=True)
+            return {"ok": False, "code": "exception", "message": str(err)}
+        finally:
+            if client and client.is_connected and not session_is_persistent:
                 try:
                     await _safe_disconnect(client)
                 except Exception:  # noqa: BLE001
@@ -3021,6 +3273,239 @@ class APstorageSocClient:
                     pass
                 self._last_disconnect_at = asyncio.get_running_loop().time()
 
+    async def async_set_system_mode_with_session(
+        self,
+        ble_device: BLEDevice,
+        *,
+        mode: int,
+        device_name_hint: str | None = None,
+    ) -> dict[str, Any]:
+        """Set system mode using persistent session if available, otherwise fresh connection.
+
+        Reuses _session_ble_client if available, falls back to fresh connection.
+        """
+        if not HAS_CRYPTO:
+            _LOGGER.error("pycryptodome required; install with: pip install pycryptodome")
+            return {"ok": False, "code": None, "message": "pycryptodome missing"}
+
+        if mode < 0 or mode > 6:
+            _LOGGER.error("Invalid system mode: %s", mode)
+            return {"ok": False, "code": None, "message": f"invalid mode {mode}"}
+
+        async def _verify_system_mode(storage_id: str, expected_mode: int) -> bool:
+            """Read back system mode after write to confirm change."""
+            try:
+                verify_resp = await self._send_property_request(
+                    client,
+                    method="get",
+                    identifier="getsysmode",
+                    storage_id=storage_id,
+                    params_extra={},
+                    system_id="",
+                )
+                if not isinstance(verify_resp, dict):
+                    return False
+
+                verify_data = _extract_sysmode_payload(verify_resp.get("data"))
+                if verify_data is None:
+                    return False
+
+                actual_mode = _normalize_mode_code(verify_data.get("mode"))
+                return actual_mode == str(expected_mode)
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.debug("Verification read-back failed: %s", err)
+                return False
+
+        async def _attempt_write(storage_id: str, payload: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+            """Attempt setsysmode write with verification on ambiguous results.
+
+            Returns (success, response_dict).
+            """
+            retry_delays = SYSTEM_MODE_WRITE_RETRY_BACKOFF_SECONDS
+            last_error: dict[str, Any] = {"ok": False, "code": None, "message": "no attempts made"}
+
+            for attempt in range(SYSTEM_MODE_WRITE_MAX_ATTEMPTS):
+                try:
+                    if attempt > 0:
+                        delay = retry_delays[attempt - 1] if attempt - 1 < len(retry_delays) else retry_delays[-1]
+                        _LOGGER.debug("Retrying setsysmode for %s (attempt %d/%d, delay %.1fs)",
+                                     storage_id, attempt + 1, SYSTEM_MODE_WRITE_MAX_ATTEMPTS, delay)
+                        await asyncio.sleep(delay)
+
+                    set_resp = await self._send_property_request(
+                        client,
+                        method="set",
+                        identifier="setsysmode",
+                        storage_id=storage_id,
+                        params_extra=payload,
+                        system_id="",
+                    )
+
+                    if isinstance(set_resp, dict):
+                        code = set_resp.get("code")
+                        message = str(set_resp.get("msg") or set_resp.get("message") or "")
+
+                        if _response_is_success(set_resp):
+                            _LOGGER.debug("System mode write for %s succeeded (attempt %d)", storage_id, attempt + 1)
+                            return (True, {"ok": True, "code": code, "message": message, "storage_id": storage_id})
+
+                        if await _verify_system_mode(storage_id, mode):
+                            _LOGGER.debug(
+                                "System mode write for %s returned code=%s but verification confirmed mode=%s (attempt %d)",
+                                storage_id, code, mode, attempt + 1,
+                            )
+                            return (True, {
+                                "ok": True,
+                                "code": code or "verified",
+                                "message": message or "write response non-success, but read-back confirmed mode change",
+                                "storage_id": storage_id
+                            })
+
+                        last_error = {"ok": False, "code": code, "message": message}
+
+                except asyncio.TimeoutError:
+                    if await _verify_system_mode(storage_id, mode):
+                        _LOGGER.debug(
+                            "System mode write for %s timed out, but read-back confirmed mode=%s (attempt %d)",
+                            storage_id, mode, attempt + 1,
+                        )
+                        return (True, {
+                            "ok": True,
+                            "code": "timeout_verified",
+                            "message": "write acknowledgement timed out, but read-back confirmed mode change",
+                            "storage_id": storage_id
+                        })
+                    last_error = {"ok": False, "code": "timeout", "message": "write timed out"}
+                    continue
+
+                except BleakError as err:
+                    last_error = {"ok": False, "code": "ble_error", "message": str(err)}
+                    if attempt < SYSTEM_MODE_WRITE_MAX_ATTEMPTS - 1:
+                        continue
+                    return (False, last_error)
+
+                except Exception as err:  # noqa: BLE001
+                    last_error = {"ok": False, "code": "exception", "message": str(err)}
+                    if attempt < SYSTEM_MODE_WRITE_MAX_ATTEMPTS - 1:
+                        _LOGGER.debug("Write attempt %d failed: %s", attempt + 1, err)
+                        continue
+                    return (False, last_error)
+
+            return (False, last_error)
+
+        client: BleakClient | None = None
+        session_is_persistent = False
+        try:
+            if self.session_open:
+                client = self._session_ble_client
+                session_is_persistent = True
+                _LOGGER.debug("Using persistent session for system mode write")
+            else:
+                await self._async_wait_for_disconnect_settle(context="before system mode write")
+                async with asyncio.timeout(WRITE_OPERATION_TIMEOUT_SECONDS):
+                    client = await establish_connection(
+                        BleakClientWithServiceCache,
+                        ble_device,
+                        ble_device.address,
+                        max_attempts=3,
+                        use_services_cache=True,
+                    )
+                    await self._ensure_services_ready(client)
+                    await self._establish_blufi_session(client)
+
+            if not client or not client.is_connected:
+                return {"ok": False, "code": None, "message": "connection not available"}
+
+            device_name = ""
+            try:
+                name_raw = await client.read_gatt_char(DEVICE_NAME_CHAR)
+                device_name = bytes(name_raw).decode("utf-8", errors="ignore").strip("\x00\r\n ")
+            except Exception:  # noqa: BLE001
+                device_name = ""
+
+            if not device_name:
+                device_name = device_name_hint or ""
+            if not device_name:
+                device_name = ble_device.name or ""
+
+            storage_ids: list[str] = []
+            if self._preferred_storage_id:
+                storage_ids.append(self._preferred_storage_id)
+
+            for source in (device_name, device_name_hint, ble_device.name):
+                for candidate in _derive_storage_ids_from_name(source):
+                    if candidate not in storage_ids:
+                        storage_ids.append(candidate)
+
+            if not storage_ids:
+                _LOGGER.warning("Could not derive storage ID for system mode write")
+                return {
+                    "ok": False,
+                    "code": None,
+                    "message": "could not derive storage id",
+                }
+
+            last_code: Any = None
+            last_message: str | None = None
+
+            for storage_id in storage_ids:
+                get_resp = await self._send_property_request(
+                    client,
+                    method="get",
+                    identifier="getsysmode",
+                    storage_id=storage_id,
+                    params_extra={},
+                    system_id="",
+                )
+                if not isinstance(get_resp, dict):
+                    continue
+
+                last_code = get_resp.get("code")
+                last_message = str(get_resp.get("msg") or get_resp.get("message") or "")
+
+                mode_data = _extract_sysmode_payload(get_resp.get("data"))
+                if mode_data is None:
+                    continue
+
+                payload = dict(mode_data)
+                payload["mode"] = str(mode)
+
+                payload.setdefault("valleycharge", "1")
+                payload.setdefault("backupSOC", "50")
+                payload.setdefault("peakPower", "5000")
+                payload.setdefault("sellingFirst", "0")
+
+                success, result = await _attempt_write(storage_id, payload)
+                if success:
+                    self._preferred_storage_id = result.pop("storage_id", storage_id)
+                    return result
+
+                last_code = result.get("code")
+                last_message = result.get("message")
+
+            return {
+                "ok": False,
+                "code": last_code,
+                "message": last_message or "no successful setsysmode response",
+            }
+
+        except asyncio.TimeoutError:
+            _LOGGER.warning("System mode write timed out for %s", ble_device.address)
+            return {"ok": False, "code": "timeout", "message": "connection/write timeout"}
+        except BleakError as err:
+            _LOGGER.warning("BLE error during system mode write for %s: %s", ble_device.address, err)
+            return {"ok": False, "code": "ble_error", "message": str(err)}
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("Unexpected system mode write error for %s: %s", ble_device.address, err, exc_info=True)
+            return {"ok": False, "code": "exception", "message": str(err)}
+        finally:
+            if client and client.is_connected and not session_is_persistent:
+                try:
+                    await _safe_disconnect(client)
+                except Exception:  # noqa: BLE001
+                    pass
+                self._last_disconnect_at = asyncio.get_running_loop().time()
+
     async def async_set_backup_soc(
         self,
         ble_device: BLEDevice,
@@ -3163,6 +3648,155 @@ class APstorageSocClient:
                     pass
                 self._last_disconnect_at = asyncio.get_running_loop().time()
 
+    async def async_set_backup_soc_with_session(
+        self,
+        ble_device: BLEDevice,
+        *,
+        backup_soc: int,
+        device_name_hint: str | None = None,
+    ) -> dict[str, Any]:
+        """Set backup SOC using persistent session if available, otherwise fresh connection."""
+        if not HAS_CRYPTO:
+            _LOGGER.error("pycryptodome required; install with: pip install pycryptodome")
+            return {"ok": False, "code": None, "message": "pycryptodome missing"}
+
+        if backup_soc < 20 or backup_soc > 90:
+            _LOGGER.error("Invalid backup SOC: %s", backup_soc)
+            return {
+                "ok": False,
+                "code": None,
+                "message": f"invalid backup_soc {backup_soc} (allowed: 20-90)",
+            }
+
+        client: BleakClient | None = None
+        session_is_persistent = False
+        try:
+            if self.session_open:
+                client = self._session_ble_client
+                session_is_persistent = True
+                _LOGGER.debug("Using persistent session for backup SOC write")
+            else:
+                await self._async_wait_for_disconnect_settle(context="before backup SOC write")
+                async with asyncio.timeout(WRITE_OPERATION_TIMEOUT_SECONDS):
+                    client = await establish_connection(
+                        BleakClientWithServiceCache,
+                        ble_device,
+                        ble_device.address,
+                        max_attempts=3,
+                        use_services_cache=True,
+                    )
+                    await self._ensure_services_ready(client)
+                    await self._establish_blufi_session(client)
+
+            if not client or not client.is_connected:
+                return {"ok": False, "code": None, "message": "connection not available"}
+
+            device_name = ""
+            try:
+                name_raw = await client.read_gatt_char(DEVICE_NAME_CHAR)
+                device_name = bytes(name_raw).decode("utf-8", errors="ignore").strip("\x00\r\n ")
+            except Exception:  # noqa: BLE001
+                device_name = ""
+
+            if not device_name:
+                device_name = device_name_hint or ""
+            if not device_name:
+                device_name = ble_device.name or ""
+
+            storage_ids: list[str] = []
+            if self._preferred_storage_id:
+                storage_ids.append(self._preferred_storage_id)
+
+            for source in (device_name, device_name_hint, ble_device.name):
+                for candidate in _derive_storage_ids_from_name(source):
+                    if candidate not in storage_ids:
+                        storage_ids.append(candidate)
+
+            if not storage_ids:
+                _LOGGER.warning("Could not derive storage ID for backup SOC write")
+                return {
+                    "ok": False,
+                    "code": None,
+                    "message": "could not derive storage id",
+                }
+
+            last_code: Any = None
+            last_message: str | None = None
+
+            for storage_id in storage_ids:
+                get_resp = await self._send_property_request(
+                    client,
+                    method="get",
+                    identifier="getsysmode",
+                    storage_id=storage_id,
+                    params_extra={},
+                    system_id="",
+                )
+                if not isinstance(get_resp, dict):
+                    continue
+
+                last_code = get_resp.get("code")
+                last_message = str(get_resp.get("msg") or get_resp.get("message") or "")
+
+                mode_data = _extract_sysmode_payload(get_resp.get("data"))
+                if mode_data is None:
+                    continue
+
+                payload = dict(mode_data)
+                mode_value = _normalize_mode_code(payload.get("mode")) or ""
+                if mode_value not in {"1", "3"}:
+                    last_code = "not_applicable"
+                    last_message = "backup SOC can only be changed in mode 1 or 3"
+                    continue
+
+                payload["backupSOC"] = str(int(backup_soc))
+
+                payload.setdefault("valleycharge", "1")
+                payload.setdefault("peakPower", "5000")
+                payload.setdefault("sellingFirst", "0")
+
+                set_resp = await self._send_property_request(
+                    client,
+                    method="set",
+                    identifier="setsysmode",
+                    storage_id=storage_id,
+                    params_extra=payload,
+                    system_id="",
+                )
+
+                if isinstance(set_resp, dict):
+                    code = set_resp.get("code")
+                    message = str(set_resp.get("msg") or set_resp.get("message") or "")
+                    if _response_is_success(set_resp):
+                        self._preferred_storage_id = storage_id
+                        return {"ok": True, "code": code, "message": message}
+
+                    last_code = code
+                    last_message = message
+
+            return {
+                "ok": False,
+                "code": last_code,
+                "message": last_message or "no successful setsysmode response",
+            }
+
+        except asyncio.TimeoutError:
+            _LOGGER.warning("Backup SOC write timed out for %s", ble_device.address)
+            return {"ok": False, "code": "timeout", "message": "connection/write timeout"}
+        except BleakError as err:
+            _LOGGER.warning("BLE error during backup SOC write for %s: %s", ble_device.address, err)
+            return {"ok": False, "code": "ble_error", "message": str(err)}
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("Unexpected backup SOC write error for %s: %s", ble_device.address, err, exc_info=True)
+            return {"ok": False, "code": "exception", "message": str(err)}
+        finally:
+            if client and client.is_connected and not session_is_persistent:
+                try:
+                    await _safe_disconnect(client)
+                except Exception:  # noqa: BLE001
+                    pass
+                self._last_disconnect_at = asyncio.get_running_loop().time()
+
     async def async_set_selling_first(
         self,
         ble_device: BLEDevice,
@@ -3265,6 +3899,45 @@ class APstorageSocClient:
             return True, None
 
         return await self._async_patch_sysmode_payload(
+            ble_device,
+            op_name="set peak-valley schedule",
+            device_name_hint=device_name_hint,
+            payload_mutator=_mutator,
+        )
+
+    async def async_set_peak_valley_schedule_with_session(
+        self,
+        ble_device: BLEDevice,
+        *,
+        peak_time: list[str],
+        valley_time: list[str],
+        device_name_hint: str | None = None,
+    ) -> dict[str, Any]:
+        """Set mode-0 peak/valley schedule using persistent session if available, otherwise fresh connection."""
+        if len(peak_time) > 5 or len(valley_time) > 5:
+            return {
+                "ok": False,
+                "code": None,
+                "message": "peak_time and valley_time support at most 5 ranges each",
+            }
+
+        range_re = re.compile(r"^\d{12}$")
+        for value in peak_time + valley_time:
+            if not range_re.fullmatch(str(value)):
+                return {
+                    "ok": False,
+                    "code": None,
+                    "message": f"invalid range format: {value!r} (expected HHMMSSHHMMSS)",
+                }
+
+        def _mutator(payload: dict[str, Any]) -> tuple[bool, str | None]:
+            payload["mode"] = "0"
+            payload["peakTime"] = list(peak_time) if peak_time else None
+            payload["valleyTime"] = list(valley_time) if valley_time else None
+            payload["schedule"] = None
+            return True, None
+
+        return await self._async_patch_sysmode_payload_with_session(
             ble_device,
             op_name="set peak-valley schedule",
             device_name_hint=device_name_hint,
@@ -3377,6 +4050,125 @@ class APstorageSocClient:
             return {"ok": False, "code": "exception", "message": str(err)}
         finally:
             if client and client.is_connected:
+                try:
+                    await _safe_disconnect(client)
+                except Exception:  # noqa: BLE001
+                    pass
+                self._last_disconnect_at = asyncio.get_running_loop().time()
+
+    async def async_get_system_mode_payload_with_session(
+        self,
+        ble_device: BLEDevice,
+        *,
+        device_name_hint: str | None = None,
+    ) -> dict[str, Any]:
+        """Read getsysmode payload using persistent session if available, otherwise fresh connection.
+
+        Reuses _session_ble_client if available, falls back to fresh connection.
+        """
+        if not HAS_CRYPTO:
+            _LOGGER.error("pycryptodome required; install with: pip install pycryptodome")
+            return {"ok": False, "code": None, "message": "pycryptodome missing"}
+
+        client: BleakClient | None = None
+        session_is_persistent = False
+        try:
+            if self.session_open:
+                client = self._session_ble_client
+                session_is_persistent = True
+                _LOGGER.debug("Using persistent session for getsysmode read")
+            else:
+                await self._async_wait_for_disconnect_settle(context="before getsysmode read")
+                async with asyncio.timeout(WRITE_OPERATION_TIMEOUT_SECONDS):
+                    client = await establish_connection(
+                        BleakClientWithServiceCache,
+                        ble_device,
+                        ble_device.address,
+                        max_attempts=3,
+                        use_services_cache=True,
+                    )
+                    await self._ensure_services_ready(client)
+                    await self._establish_blufi_session(client)
+
+            if not client or not client.is_connected:
+                return {"ok": False, "code": None, "message": "connection not available"}
+
+            device_name = ""
+            try:
+                name_raw = await client.read_gatt_char(DEVICE_NAME_CHAR)
+                device_name = bytes(name_raw).decode("utf-8", errors="ignore").strip("\x00\r\n ")
+            except Exception:  # noqa: BLE001
+                device_name = ""
+
+            if not device_name:
+                device_name = device_name_hint or ""
+            if not device_name:
+                device_name = ble_device.name or ""
+
+            storage_ids = _derive_storage_id_candidates(
+                self._preferred_storage_id,
+                device_name,
+                device_name_hint,
+                ble_device.name,
+            )
+
+            if not storage_ids:
+                _LOGGER.warning("Could not derive storage ID for getsysmode read")
+                return {
+                    "ok": False,
+                    "code": None,
+                    "message": "could not derive storage id",
+                }
+
+            last_code: Any = None
+            last_message: str | None = None
+
+            for storage_id in storage_ids:
+                get_resp = await self._send_property_request(
+                    client,
+                    method="get",
+                    identifier="getsysmode",
+                    storage_id=storage_id,
+                    params_extra={},
+                    system_id="",
+                )
+                if not isinstance(get_resp, dict):
+                    continue
+
+                last_code = get_resp.get("code")
+                last_message = str(get_resp.get("msg") or get_resp.get("message") or "")
+
+                mode_data = _extract_sysmode_payload(get_resp.get("data"))
+                if mode_data is None:
+                    continue
+
+                self._preferred_storage_id = storage_id
+                return {
+                    "ok": True,
+                    "code": last_code,
+                    "message": last_message,
+                    "storage_id": storage_id,
+                    "payload": dict(mode_data),
+                    "raw_data": get_resp.get("data"),
+                }
+
+            return {
+                "ok": False,
+                "code": last_code,
+                "message": last_message or "no getsysmode payload found",
+            }
+
+        except asyncio.TimeoutError:
+            _LOGGER.warning("getsysmode read timed out for %s", ble_device.address)
+            return {"ok": False, "code": "timeout", "message": "connection/read timeout"}
+        except BleakError as err:
+            _LOGGER.warning("BLE error during getsysmode read for %s: %s", ble_device.address, err)
+            return {"ok": False, "code": "ble_error", "message": str(err)}
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("Unexpected getsysmode read error for %s: %s", ble_device.address, err, exc_info=True)
+            return {"ok": False, "code": "exception", "message": str(err)}
+        finally:
+            if client and client.is_connected and not session_is_persistent:
                 try:
                     await _safe_disconnect(client)
                 except Exception:  # noqa: BLE001
@@ -3559,6 +4351,71 @@ class APstorageSocClient:
                     pass
                 self._last_disconnect_at = asyncio.get_running_loop().time()
 
+    async def async_set_advanced_schedule_with_session(
+        self,
+        ble_device: BLEDevice,
+        *,
+        peak_time: list[str],
+        valley_time: list[str],
+        schedule: list[Any] | None = None,
+        device_name_hint: str | None = None,
+    ) -> dict[str, Any]:
+        """Set Advanced mode schedule using persistent session if available, otherwise fresh connection."""
+        if not HAS_CRYPTO:
+            _LOGGER.error("pycryptodome required; install with: pip install pycryptodome")
+            return {"ok": False, "code": None, "message": "pycryptodome missing"}
+
+        schedule_items = list(schedule or [])
+
+        if schedule_items and (peak_time or valley_time):
+            return {
+                "ok": False,
+                "code": None,
+                "message": "use either schedule or peak_time/valley_time, not both",
+            }
+
+        if not schedule_items and not peak_time and not valley_time:
+            return {
+                "ok": False,
+                "code": None,
+                "message": "missing schedule payload",
+            }
+
+        if len(peak_time) > 5 or len(valley_time) > 5:
+            return {
+                "ok": False,
+                "code": None,
+                "message": "peak_time and valley_time support at most 5 ranges each",
+            }
+
+        range_re = re.compile(r"^\d{12}$")
+        for value in peak_time + valley_time:
+            if not range_re.fullmatch(str(value)):
+                return {
+                    "ok": False,
+                    "code": None,
+                    "message": f"invalid range format: {value!r} (expected HHMMSSHHMMSS)",
+                }
+
+        def _mutator(payload: dict[str, Any]) -> tuple[bool, str | None]:
+            payload["mode"] = "3"
+            if schedule_items:
+                payload["peakTime"] = None
+                payload["valleyTime"] = None
+                payload["schedule"] = list(schedule_items)
+            else:
+                payload["peakTime"] = list(peak_time)
+                payload["valleyTime"] = list(valley_time)
+                payload["schedule"] = None
+            return True, None
+
+        return await self._async_patch_sysmode_payload_with_session(
+            ble_device,
+            op_name="set advanced schedule",
+            device_name_hint=device_name_hint,
+            payload_mutator=_mutator,
+        )
+
     async def async_set_buzzer_mode(
         self,
         ble_device: BLEDevice,
@@ -3674,6 +4531,129 @@ class APstorageSocClient:
                     pass
                 self._last_disconnect_at = asyncio.get_running_loop().time()
 
+    async def async_set_buzzer_mode_with_session(
+        self,
+        ble_device: BLEDevice,
+        *,
+        mode: int,
+        device_name_hint: str | None = None,
+    ) -> dict[str, Any]:
+        """Set buzzer mode using persistent session if available, otherwise fresh connection."""
+        if not HAS_CRYPTO:
+            _LOGGER.error("pycryptodome required; install with: pip install pycryptodome")
+            return {"ok": False, "code": None, "message": "pycryptodome missing"}
+
+        if mode not in {0, 1}:
+            _LOGGER.error("Invalid buzzer mode: %s", mode)
+            return {"ok": False, "code": None, "message": f"invalid buzzer mode {mode}"}
+
+        client: BleakClient | None = None
+        session_is_persistent = False
+        try:
+            if self.session_open:
+                client = self._session_ble_client
+                session_is_persistent = True
+                _LOGGER.debug("Using persistent session for buzzer mode write")
+            else:
+                await self._async_wait_for_disconnect_settle(context="before buzzer mode write")
+                async with asyncio.timeout(WRITE_OPERATION_TIMEOUT_SECONDS):
+                    client = await establish_connection(
+                        BleakClientWithServiceCache,
+                        ble_device,
+                        ble_device.address,
+                        max_attempts=3,
+                        use_services_cache=True,
+                    )
+                    await self._ensure_services_ready(client)
+                    await self._establish_blufi_session(client)
+
+            if not client or not client.is_connected:
+                return {"ok": False, "code": None, "message": "connection not available"}
+
+            device_name = ""
+            try:
+                name_raw = await client.read_gatt_char(DEVICE_NAME_CHAR)
+                device_name = bytes(name_raw).decode("utf-8", errors="ignore").strip("\x00\r\n ")
+            except Exception:  # noqa: BLE001
+                device_name = ""
+
+            if not device_name:
+                device_name = device_name_hint or ""
+            if not device_name:
+                device_name = ble_device.name or ""
+
+            storage_ids: list[str] = []
+            if self._preferred_storage_id:
+                storage_ids.append(self._preferred_storage_id)
+
+            for source in (device_name, device_name_hint, ble_device.name):
+                for candidate in _derive_storage_ids_from_name(source):
+                    if candidate not in storage_ids:
+                        storage_ids.append(candidate)
+
+            if not storage_ids:
+                _LOGGER.warning("Could not derive storage ID for buzzer mode write")
+                return {
+                    "ok": False,
+                    "code": None,
+                    "message": "could not derive storage id",
+                }
+
+            last_code: Any = None
+            last_message: str | None = None
+            params_candidates: tuple[dict[str, Any], ...] = (
+                {"mode": str(mode)},
+                {"buzzerMode": str(mode)},
+                {"buzzer": str(mode)},
+                {"BUZ": str(mode)},
+            )
+
+            for storage_id in storage_ids:
+                for params in params_candidates:
+                    set_resp = await self._send_property_request(
+                        client,
+                        method="set",
+                        identifier="set/buzzerMode",
+                        storage_id=storage_id,
+                        params_extra=params,
+                        system_id="",
+                    )
+
+                    if not isinstance(set_resp, dict):
+                        continue
+
+                    code = set_resp.get("code")
+                    message = str(set_resp.get("msg") or set_resp.get("message") or "")
+                    if _response_is_success(set_resp):
+                        self._preferred_storage_id = storage_id
+                        return {"ok": True, "code": code, "message": message}
+
+                    last_code = code
+                    last_message = message
+
+            return {
+                "ok": False,
+                "code": last_code,
+                "message": last_message or "no successful set/buzzerMode response",
+            }
+
+        except asyncio.TimeoutError:
+            _LOGGER.warning("Buzzer mode write timed out for %s", ble_device.address)
+            return {"ok": False, "code": "timeout", "message": "connection/write timeout"}
+        except BleakError as err:
+            _LOGGER.warning("BLE error during buzzer mode write for %s: %s", ble_device.address, err)
+            return {"ok": False, "code": "ble_error", "message": str(err)}
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("Unexpected buzzer mode write error for %s: %s", ble_device.address, err, exc_info=True)
+            return {"ok": False, "code": "exception", "message": str(err)}
+        finally:
+            if client and client.is_connected and not session_is_persistent:
+                try:
+                    await _safe_disconnect(client)
+                except Exception:  # noqa: BLE001
+                    pass
+                self._last_disconnect_at = asyncio.get_running_loop().time()
+
     async def async_clear_buzzer(
         self,
         ble_device: BLEDevice,
@@ -3689,6 +4669,21 @@ class APstorageSocClient:
             device_name_hint=device_name_hint,
         )
 
+    async def async_clear_buzzer_with_session(
+        self,
+        ble_device: BLEDevice,
+        *,
+        device_name_hint: str | None = None,
+    ) -> dict[str, Any]:
+        """Clear buzzer using persistent session if available, otherwise fresh connection."""
+        return await self._async_send_simple_property_command_with_session(
+            ble_device,
+            identifier="setClearBuzzer",
+            op_name="clear buzzer",
+            params_candidates=({}, {"clear": "1"}, {"action": "1"}),
+            device_name_hint=device_name_hint,
+        )
+
     async def async_reboot_pcs(
         self,
         ble_device: BLEDevice,
@@ -3697,6 +4692,21 @@ class APstorageSocClient:
     ) -> dict[str, Any]:
         """Reboot the PCS using app-compatible set/pcsReboot command."""
         return await self._async_send_simple_property_command(
+            ble_device,
+            identifier="set/pcsReboot",
+            op_name="pcs reboot",
+            params_candidates=({}, {"action": "1"}, {"reboot": "1"}),
+            device_name_hint=device_name_hint,
+        )
+
+    async def async_reboot_pcs_with_session(
+        self,
+        ble_device: BLEDevice,
+        *,
+        device_name_hint: str | None = None,
+    ) -> dict[str, Any]:
+        """Reboot PCS using persistent session if available, otherwise fresh connection."""
+        return await self._async_send_simple_property_command_with_session(
             ble_device,
             identifier="set/pcsReboot",
             op_name="pcs reboot",
