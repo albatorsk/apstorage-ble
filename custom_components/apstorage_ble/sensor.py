@@ -239,6 +239,7 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         name="Last Update",
         entity_category=EntityCategory.DIAGNOSTIC,
         device_class=SensorDeviceClass.TIMESTAMP,
+        entity_registry_enabled_default=False,
         value_fn=lambda d: None,
     ),
     APstorageSensorDescription(
