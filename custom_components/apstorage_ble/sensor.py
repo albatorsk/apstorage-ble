@@ -234,6 +234,22 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda d: None,
     ),
+    APstorageSensorDescription(
+        key="last_update",
+        name="Last Update",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        device_class=SensorDeviceClass.TIMESTAMP,
+        value_fn=lambda d: None,
+    ),
+    APstorageSensorDescription(
+        key="connection_quality",
+        name="Connection Quality",
+        native_unit_of_measurement=PERCENTAGE,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=1,
+        value_fn=lambda d: None,
+    ),
 )
 
 
@@ -336,7 +352,7 @@ class APstorageSensor(
         maintained by PassiveBluetoothDataUpdateCoordinator based on
         whether the device is still advertising.
         """
-        if self.entity_description.key in {"ble_connection", "entity_values_source", "system_mode_payload_read"}:
+        if self.entity_description.key in {"ble_connection", "entity_values_source", "system_mode_payload_read", "last_update", "connection_quality"}:
             return True
         return self.coordinator.runtime_available
 
@@ -354,6 +370,12 @@ class APstorageSensor(
             if last_read is None:
                 return "Unread"
             return "Read" if bool(last_read.get("ok", False)) else "Failed"
+
+        if self.entity_description.key == "last_update":
+            return self.coordinator._last_successful_poll_at
+
+        if self.entity_description.key == "connection_quality":
+            return self.coordinator.connection_quality
 
         if self.coordinator.data is None:
             return None
@@ -378,6 +400,18 @@ class APstorageSensor(
             if value == "Cached":
                 return "mdi:database-clock"
             return "mdi:database-question"
+        if key == "last_update":
+            return "mdi:clock-outline"
+        if key == "connection_quality":
+            if value is None:
+                return "mdi:signal-off"
+            if value >= 90:
+                return "mdi:signal-cellular-outline"
+            if value >= 70:
+                return "mdi:signal-cellular-2"
+            if value >= 50:
+                return "mdi:signal-cellular-1"
+            return "mdi:signal-cellular-0"
         return None
 
     @property
@@ -394,6 +428,13 @@ class APstorageSensor(
                 "last_read_storage_id": read_info.get("storage_id"),
                 "last_read_at": read_info.get("at"),
                 "payload": read_info.get("payload"),
+            }
+
+        if self.entity_description.key == "connection_quality":
+            return {
+                "total_polls": self.coordinator._total_poll_attempts,
+                "successful_polls": self.coordinator._successful_poll_count,
+                "consecutive_failures": self.coordinator._consecutive_poll_failures,
             }
 
         if self.entity_description.key in {

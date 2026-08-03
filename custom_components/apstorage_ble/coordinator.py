@@ -114,6 +114,9 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._consecutive_no_device_polls = 0
         self._last_no_device_probe_at: datetime | None = None
         self._last_no_device_strong_reset_at: datetime | None = None
+        # Poll statistics for connection quality tracking
+        self._total_poll_attempts = 0
+        self._successful_poll_count = 0
         # Persistent sessions improve latency when stable, but shared proxy
         # environments can invalidate long-lived connections unpredictably.
         # Keep persistent mode enabled by default and reconnect the session
@@ -168,6 +171,17 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         if self._last_poll_used_cached_data:
             return "Cached"
         return "Live"
+
+    @property
+    def connection_quality(self) -> float | None:
+        """Return connection quality as a percentage (0-100).
+
+        Calculated as: (successful_polls / total_polls) * 100
+        Returns None if no polls have been attempted yet.
+        """
+        if self._total_poll_attempts == 0:
+            return None
+        return (self._successful_poll_count / self._total_poll_attempts) * 100
 
     def _freeze_state_value(self, value: Any) -> Any:
         """Convert nested mutable values to immutable values for comparisons."""
@@ -678,6 +692,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
 
         async with self._poll_lock:
             self._active_poll_task = asyncio.current_task()
+            self._total_poll_attempts += 1
             if self._shutdown:
                 _LOGGER.debug("[%s] Poll aborted because coordinator is shutting down", self._name)
                 self._active_poll_task = None
@@ -836,6 +851,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                             self._consecutive_poll_failures,
                         )
                     self._consecutive_poll_failures = 0
+                    self._successful_poll_count += 1
                     self._last_successful_poll_at = datetime.now(timezone.utc)
                     _LOGGER.debug(
                         "[%s] Received metrics: soc=%s, state=%s, flow=%s",
