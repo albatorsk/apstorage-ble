@@ -26,7 +26,7 @@ from .protocol import (
 
 _LOGGER = logging.getLogger(__name__)
 
-BACKUP_SOC_OPTIONS: list[str] = [str(value) for value in range(20, 91, 10)]
+BACKUP_SOC_OPTIONS: list[str] = [str(value) for value in range(10, 91, 10)]
 BUZZER_MODE_CODE_TO_OPTION: dict[int, str] = {
     0: "Silent",
     1: "Normal",
@@ -43,9 +43,9 @@ def _normalize_backup_soc_option(value: Any) -> str | None:
     except (TypeError, ValueError):
         return None
 
-    # Device writes are constrained to 20..90 and select options are 10% steps.
-    clamped = max(20, min(90, raw))
-    snapped = int(round((clamped - 20) / 10.0) * 10 + 20)
+    # Device writes are constrained to 10..90 and select options are 10% steps.
+    clamped = max(10, min(90, raw))
+    snapped = int(round((clamped - 10) / 10.0) * 10 + 10)
     option = str(snapped)
     return option if option in BACKUP_SOC_OPTIONS else None
 
