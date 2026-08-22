@@ -3033,12 +3033,12 @@ class APstorageSocClient:
             _LOGGER.error("pycryptodome required; install with: pip install pycryptodome")
             return {"ok": False, "code": None, "message": "pycryptodome missing"}
 
-        if backup_soc < 20 or backup_soc > 90:
+        if backup_soc < 10 or backup_soc > 90:
             _LOGGER.error("Invalid backup SOC: %s", backup_soc)
             return {
                 "ok": False,
                 "code": None,
-                "message": f"invalid backup_soc {backup_soc} (allowed: 20-90)",
+                "message": f"invalid backup_soc {backup_soc} (allowed: 10-90)",
             }
 
         client: BleakClient | None = None

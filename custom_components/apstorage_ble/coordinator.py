@@ -1043,7 +1043,7 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
 
     async def async_set_backup_soc(self, backup_soc: int) -> None:
         """Set backup SOC threshold over BLE and refresh coordinator data."""
-        if backup_soc < 20 or backup_soc > 90:
+        if backup_soc < 10 or backup_soc > 90:
             raise ValueError(f"Invalid backup SOC: {backup_soc}")
 
         await self._async_prepare_for_write()
