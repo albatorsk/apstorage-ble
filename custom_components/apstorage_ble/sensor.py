@@ -223,6 +223,18 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         value_fn=lambda d: None,
     ),
     APstorageSensorDescription(
+        key="ble_write_mode",
+        name="BLE Write Mode",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda d: None,
+    ),
+    APstorageSensorDescription(
+        key="ble_codec_mtu",
+        name="BLE Codec MTU",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda d: None,
+    ),
+    APstorageSensorDescription(
         key="entity_values_source",
         name="Entity Values Source",
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -352,7 +364,7 @@ class APstorageSensor(
         maintained by PassiveBluetoothDataUpdateCoordinator based on
         whether the device is still advertising.
         """
-        if self.entity_description.key in {"ble_connection", "entity_values_source", "system_mode_payload_read", "last_update", "connection_quality"}:
+        if self.entity_description.key in {"ble_connection", "ble_write_mode", "ble_codec_mtu", "entity_values_source", "system_mode_payload_read", "last_update", "connection_quality"}:
             return True
         return self.coordinator.runtime_available
 
@@ -361,6 +373,12 @@ class APstorageSensor(
         """Return the current sensor value."""
         if self.entity_description.key == "ble_connection":
             return self.coordinator.ble_connection_mode
+
+        if self.entity_description.key == "ble_write_mode":
+            return self.coordinator.ble_write_mode
+
+        if self.entity_description.key == "ble_codec_mtu":
+            return self.coordinator.ble_codec_mtu
 
         if self.entity_description.key == "entity_values_source":
             return self.coordinator.entity_values_source
@@ -394,6 +412,14 @@ class APstorageSensor(
             return "mdi:battery"
         if key == "ble_connection":
             return "mdi:bluetooth-connect" if value == "Persistent" else "mdi:bluetooth"
+        if key == "ble_write_mode":
+            if value == "With Response":
+                return "mdi:transfer-up"
+            if value == "Without Response":
+                return "mdi:transfer-right"
+            return "mdi:sync"
+        if key == "ble_codec_mtu":
+            return "mdi:unfold-more-horizontal"
         if key == "entity_values_source":
             if value == "Live":
                 return "mdi:database-check"
@@ -435,6 +461,23 @@ class APstorageSensor(
                 "total_polls": self.coordinator._total_poll_attempts,
                 "successful_polls": self.coordinator._successful_poll_count,
                 "consecutive_failures": self.coordinator._consecutive_poll_failures,
+            }
+
+        if self.entity_description.key == "ble_write_mode":
+            raw = self.coordinator._soc_client.write_mode_raw
+            return {
+                "write_with_response": raw,
+            }
+
+        if self.entity_description.key == "ble_codec_mtu":
+            return {
+                "codec_mtu": self.coordinator.ble_codec_mtu,
+                "att_mtu": self.coordinator.ble_att_mtu,
+                "att_payload_mtu": (
+                    self.coordinator.ble_att_mtu - 3
+                    if self.coordinator.ble_att_mtu is not None
+                    else None
+                ),
             }
 
         if self.entity_description.key in {
