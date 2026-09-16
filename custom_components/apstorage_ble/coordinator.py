@@ -173,6 +173,21 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         return "Live"
 
     @property
+    def ble_write_mode(self) -> str:
+        """Return current BLE GATT write mode label."""
+        return self._soc_client.write_mode_label
+
+    @property
+    def ble_codec_mtu(self) -> int:
+        """Return active Blufi codec MTU used for packet fragmentation."""
+        return self._soc_client.codec_mtu
+
+    @property
+    def ble_att_mtu(self) -> int | None:
+        """Return negotiated ATT MTU when provided by the BLE backend."""
+        return self._soc_client.negotiated_att_mtu
+
+    @property
     def connection_quality(self) -> float | None:
         """Return connection quality as a percentage (0-100).
 

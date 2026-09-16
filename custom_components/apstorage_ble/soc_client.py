@@ -196,6 +196,16 @@ def _pad_key_16(key: str) -> bytes:
     return key.encode("utf-8")[:16]
 
 
+def _write_response_unsupported(err: Exception) -> bool:
+    """Return True when a write-with-response attempt is rejected by the stack/device."""
+    text = str(err).lower()
+    return (
+        "with response" in text and ("not support" in text or "unsupported" in text)
+    ) or (
+        "write" in text and "not permitted" in text and "response" in text
+    )
+
+
 def _normalize_storage_ids(storage_id: str) -> list[str]:
     """Generate common candidate forms for a storage ID."""
     candidates = [storage_id]
@@ -1499,6 +1509,16 @@ class BlufiCodec:
         self.write_seq = (self.write_seq + 1) & 0xFF
         return self.write_seq
 
+    def reset_rx_state(self) -> None:
+        """Reset only receive-side reassembly state.
+
+        Keep sequence counters untouched so write sequencing continues across
+        retries within a single BLE session.
+        """
+        self._rx_buf.clear()
+        self._rx_expect_total = None
+        self._rx_hdr = None
+
     @staticmethod
     def _flags(encrypt: bool, checksum: bool, frag: bool) -> int:
         """Build Blufi frame flags byte.
@@ -1903,6 +1923,11 @@ class APstorageSocClient:
         self._last_disconnect_at: float = 0.0
         # Current client reference for sending ACKs from notification callback
         self._current_client: BleakClient | None = None
+        # Auto-detected GATT write mode for current BLE session/profile.
+        # None means unresolved; True/False means write with/without response.
+        self._write_with_response: bool | None = None
+        # Last observed negotiated ATT MTU from the active BLE client.
+        self._att_mtu: int | None = None
 
     def _reset_blufi_session_state(self) -> None:
         """Drop protocol state that must not leak across BLE sessions."""
@@ -1910,6 +1935,114 @@ class APstorageSocClient:
         self._codec = BlufiCodec(mtu=BLUFI_MTU)
         self.parsed_frames = []
         self._frame_cursor = 0
+        self._write_with_response = None
+        self._att_mtu = None
+
+    @property
+    def write_mode_label(self) -> str:
+        """Return human-readable write mode for diagnostics."""
+        if self._write_with_response is None:
+            return "Auto"
+        return "With Response" if self._write_with_response else "Without Response"
+
+    @property
+    def write_mode_raw(self) -> bool | None:
+        """Return raw write mode: True/False or None when unresolved."""
+        return self._write_with_response
+
+    @property
+    def codec_mtu(self) -> int:
+        """Return active codec packet budget MTU."""
+        return self._codec.mtu
+
+    @property
+    def negotiated_att_mtu(self) -> int | None:
+        """Return last observed negotiated ATT MTU, if available."""
+        return self._att_mtu
+
+    def _reset_request_state(self) -> None:
+        """Clear buffered frames/reassembly while preserving write sequence state."""
+        self._codec.reset_rx_state()
+        self.parsed_frames = []
+        self._frame_cursor = 0
+
+    async def _try_request_mtu(self, client: BleakClient, target_mtu: int = 500) -> None:
+        """Best-effort MTU request; ignored when backend/device does not support it."""
+        req = getattr(client, "request_mtu", None)
+        if req is None or not callable(req):
+            return
+        try:
+            maybe = req(target_mtu)
+            if inspect.isawaitable(maybe):
+                await maybe
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("[BLE] MTU request to %d not applied: %s", target_mtu, err)
+
+    def _update_codec_mtu_from_client(self, client: BleakClient) -> None:
+        """Update packet budget from negotiated ATT MTU when available."""
+        mtu_size = getattr(client, "mtu_size", None)
+        if not isinstance(mtu_size, int) or mtu_size <= 0:
+            return
+        self._att_mtu = mtu_size
+
+        # ATT payload for characteristic writes is MTU-3 bytes.
+        codec_mtu = max(20, mtu_size - 3)
+        if codec_mtu == self._codec.mtu:
+            return
+
+        self._codec.mtu = codec_mtu
+        _LOGGER.debug("[BLE] Using codec MTU=%d from negotiated ATT MTU=%d", codec_mtu, mtu_size)
+
+    async def _resolve_write_with_response(self, client: BleakClient) -> bool:
+        """Determine whether write-with-response should be used for this session."""
+        if self._write_with_response is not None:
+            return self._write_with_response
+
+        supports_write = False
+        supports_write_no_resp = False
+        characteristic = None
+
+        services = getattr(client, "services", None)
+        if services is not None:
+            getter = getattr(services, "get_characteristic", None)
+            if callable(getter):
+                try:
+                    characteristic = getter(self._profile.write_char_uuid)
+                except Exception:  # noqa: BLE001
+                    characteristic = None
+
+        if characteristic is not None:
+            raw_props = getattr(characteristic, "properties", []) or []
+            props = {str(item).lower() for item in raw_props}
+            supports_write = "write" in props
+            supports_write_no_resp = "write-without-response" in props
+
+        if supports_write:
+            self._write_with_response = True
+        elif supports_write_no_resp:
+            self._write_with_response = False
+        else:
+            # Default to response writes; fall back dynamically on first failure.
+            self._write_with_response = True
+
+        return self._write_with_response
+
+    async def _write_gatt_packet(self, client: BleakClient, packet: bytes) -> None:
+        """Write one packet using resolved write mode, with runtime fallback."""
+        use_response = await self._resolve_write_with_response(client)
+        try:
+            await client.write_gatt_char(self._profile.write_char_uuid, packet, response=use_response)
+            return
+        except Exception as err:  # noqa: BLE001
+            if use_response and _write_response_unsupported(err):
+                _LOGGER.debug(
+                    "[BLE] write-with-response rejected; falling back to write-without-response: %s",
+                    err,
+                )
+                self._write_with_response = False
+                await client.write_gatt_char(self._profile.write_char_uuid, packet, response=False)
+                return
+            raise
 
     async def _async_wait_for_disconnect_settle(self, *, context: str) -> None:
         """Wait until post-disconnect settle delay has elapsed before reconnecting."""
@@ -3821,6 +3954,8 @@ class APstorageSocClient:
         self._reset_blufi_session_state()
         _LOGGER.debug("[BLE] _establish_blufi_session: Blufi state reset; parsed_frames cleared")
         await self._select_protocol_profile(client)
+        await self._try_request_mtu(client)
+        self._update_codec_mtu_from_client(client)
         _LOGGER.debug("[BLE] _establish_blufi_session: Protocol profile selected: %s", self._profile_name)
 
         # Generate DH keypair
@@ -3865,7 +4000,7 @@ class APstorageSocClient:
 
         _LOGGER.debug("[BLE] Sending DH negotiation packets")
         for pkt in packets_0 + packets_1:
-            await client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
+            await self._write_gatt_packet(client, pkt)
             await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
 
         # Wait for device public key response
@@ -3887,7 +4022,7 @@ class APstorageSocClient:
         cmd_sec = _make_cmd(0, 1)
         sec_packets = self._codec.build_packets(cmd_sec, bytes([0x03]), encrypt=False, checksum=True, aes_key=self.session_key)
         for pkt in sec_packets:
-            await client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
+            await self._write_gatt_packet(client, pkt)
             await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
         await asyncio.sleep(POST_SECURITY_SETTLE_DELAY_SECONDS)
         _LOGGER.debug("[BLE] _establish_blufi_session: DH handshake complete")
@@ -3933,12 +4068,10 @@ class APstorageSocClient:
             frame: BlufiFrame | None = None
             for attempt in range(1, 3):
                 # Reset codec reassembly state before receiving fragmented response
-                self._codec = BlufiCodec(mtu=BLUFI_MTU)
-                self.parsed_frames = []
-                self._frame_cursor = 0
+                self._reset_request_state()
 
                 for pkt in packets:
-                    await client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
+                    await self._write_gatt_packet(client, pkt)
                     await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
 
                 # Wait for custom data response on the existing notification session.
@@ -4104,13 +4237,12 @@ class APstorageSocClient:
         # This avoids newer subtype-18 ACK handshake logic that can stall
         # continuation frames on some proxy/device combinations.
         if identifier in {"getsysmode", "setsysmode"}:
-            self.parsed_frames = []
-            self._frame_cursor = 0
+            self._reset_request_state()
             # Keep ACK path enabled so fragmented replies can progress.
             self._current_client = client
 
             for pkt in packets:
-                await client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
+                await self._write_gatt_packet(client, pkt)
                 await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
 
             frame = await self._wait_frame(1, 19, response_timeout_seconds)
@@ -4136,9 +4268,7 @@ class APstorageSocClient:
         # Retry loop: attempt write up to 2 times
         for write_attempt in range(1, 3):
             # Reset codec reassembly state before each attempt
-            self._codec = BlufiCodec(mtu=BLUFI_MTU)
-            self.parsed_frames = []
-            self._frame_cursor = 0
+            self._reset_request_state()
             
             # Set current client for ACK sending in callback
             self._current_client = client
@@ -4146,7 +4276,7 @@ class APstorageSocClient:
             try:
                 # Send request packets
                 for pkt in packets:
-                    await client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
+                    await self._write_gatt_packet(client, pkt)
                     await asyncio.sleep(PACKET_WRITE_DELAY_SECONDS)
 
                 response_deadline = asyncio.get_running_loop().time() + response_timeout_seconds
@@ -4250,8 +4380,7 @@ class APstorageSocClient:
             for pkt in ack_packets:
                 # Fragment ACKs must be sent quickly; extra pacing can cause the device
                 # to stop sending continuation fragments.
-                # Use confirmed write so the ACK is reliably delivered on proxy links.
-                await self._current_client.write_gatt_char(self._profile.write_char_uuid, pkt, response=True)
+                await self._write_gatt_packet(self._current_client, pkt)
             _LOGGER.debug("[BLE] Sent immediate ACK for fragment seq=%d", seq)
         except Exception as err:  # noqa: BLE001
             # Suppress expected transient errors (connection drops, proxy state changes).
