@@ -1939,6 +1939,27 @@ def _response_or_reply_is_success(resp: dict[str, Any]) -> bool:
     return False
 
 
+def _is_device_id_mismatch_response(resp: dict[str, Any]) -> bool:
+    """Return True when response indicates DEVICE ID MISMATCH (code 202)."""
+    msg = str(resp.get("msg") or resp.get("message") or "")
+    if resp.get("code") == 202 and "device id mismatch" in msg.lower():
+        return True
+
+    reply = _parse_jsonish(resp.get("reply"))
+    if isinstance(reply, dict):
+        reply_msg = str(reply.get("msg") or reply.get("message") or "")
+        return reply.get("code") == 202 and "device id mismatch" in reply_msg.lower()
+    if isinstance(reply, list):
+        for item in reply:
+            if not isinstance(item, dict):
+                continue
+            reply_msg = str(item.get("msg") or item.get("message") or "")
+            if item.get("code") == 202 and "device id mismatch" in reply_msg.lower():
+                return True
+
+    return False
+
+
 def _to_enable_flag(value: Any) -> str:
     """Normalize enable values to app-compatible '1'/'0' strings."""
     text = str(value).strip().lower()
@@ -2910,6 +2931,13 @@ class APstorageSocClient:
                     if not isinstance(get_resp, dict):
                         continue
 
+                    if _is_device_id_mismatch_response(get_resp):
+                        _LOGGER.debug(
+                            "Ignoring DEVICE ID MISMATCH for storage_id=%s (trying next candidate)",
+                            storage_id,
+                        )
+                        continue
+
                     last_code = get_resp.get("code")
                     last_message = str(get_resp.get("msg") or get_resp.get("message") or "")
 
@@ -3256,6 +3284,13 @@ class APstorageSocClient:
                     if not isinstance(get_resp, dict):
                         continue
 
+                    if _is_device_id_mismatch_response(get_resp):
+                        _LOGGER.debug(
+                            "Ignoring DEVICE ID MISMATCH for storage_id=%s (trying next candidate)",
+                            storage_id,
+                        )
+                        continue
+
                     last_code = get_resp.get("code")
                     last_message = str(get_resp.get("msg") or get_resp.get("message") or "")
 
@@ -3379,6 +3414,13 @@ class APstorageSocClient:
                         system_id="",
                     )
                     if not isinstance(get_resp, dict):
+                        continue
+
+                    if _is_device_id_mismatch_response(get_resp):
+                        _LOGGER.debug(
+                            "Ignoring DEVICE ID MISMATCH for storage_id=%s (trying next candidate)",
+                            storage_id,
+                        )
                         continue
 
                     last_code = get_resp.get("code")
@@ -3622,6 +3664,13 @@ class APstorageSocClient:
                         system_id="",
                     )
                     if not isinstance(get_resp, dict):
+                        continue
+
+                    if _is_device_id_mismatch_response(get_resp):
+                        _LOGGER.debug(
+                            "Ignoring DEVICE ID MISMATCH for storage_id=%s (trying next candidate)",
+                            storage_id,
+                        )
                         continue
 
                     last_code = get_resp.get("code")
