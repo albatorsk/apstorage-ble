@@ -323,3 +323,180 @@ set_peak_power:
       required: false
       selector:
         text:
+
+get_modbus_settings:
+  name: Get Modbus Settings
+  description: >-
+    Read current third-party Modbus settings over BLE and fire the event
+    `apstorage_ble_modbus_settings` with the payload.
+  fields:
+    entry_id:
+      name: Config Entry ID
+      description: Optional target entry id. Required if multiple APstorage entries are loaded and address is not provided.
+      required: false
+      selector:
+        text:
+    address:
+      name: Bluetooth Address
+      description: Optional target device MAC address (AA:BB:CC:DD:EE:FF). Required if multiple entries are loaded and entry_id is not provided.
+      required: false
+      selector:
+        text:
+
+set_modbus_settings:
+  name: Set Modbus Settings
+  description: >-
+    Set app-compatible third-party Modbus settings over BLE via set/thirdParty
+    using RS485/LAN payload blocks.
+  fields:
+    modbus_enabled:
+      name: Modbus Enabled
+      description: Enable or disable Modbus communication.
+      required: true
+      example: true
+      selector:
+        boolean:
+    modbus_communication:
+      name: Communication
+      description: Communication mode (`RS485`, `RS232`, or `TCP`).
+      required: true
+      example: "RS485"
+      selector:
+        select:
+          options:
+            - label: RS485
+              value: "rs485"
+            - label: RS232
+              value: "rs232"
+            - label: TCP
+              value: "tcp"
+    modbus_baud:
+      name: RS485 Baud Rate
+      description: RS485 baud rate. Must be one of 2400, 4800, 9600, 19200, 38400, 57600, 115200.
+      required: true
+      example: 9600
+      selector:
+        select:
+          options:
+            - label: "2400"
+              value: "2400"
+            - label: "4800"
+              value: "4800"
+            - label: "9600"
+              value: "9600"
+            - label: "19200"
+              value: "19200"
+            - label: "38400"
+              value: "38400"
+            - label: "57600"
+              value: "57600"
+            - label: "115200"
+              value: "115200"
+    modbus_address:
+      name: RS485 Address
+      description: RS485 communication address (1-247).
+      required: true
+      example: 1
+      selector:
+        number:
+          min: 1
+          max: 247
+          step: 1
+          mode: box
+    entry_id:
+      name: Config Entry ID
+      description: Optional target entry id. Required if multiple APstorage entries are loaded and address is not provided.
+      required: false
+      selector:
+        text:
+    address:
+      name: Bluetooth Address
+      description: Optional target device MAC address (AA:BB:CC:DD:EE:FF). Required if multiple entries are loaded and entry_id is not provided.
+      required: false
+      selector:
+        text:
+
+get_lan_network:
+  name: Get LAN Network
+  description: >-
+    Read current LAN network settings over BLE and fire the event
+    `apstorage_ble_lan_network` with the payload.
+  fields:
+    entry_id:
+      name: Config Entry ID
+      description: Optional target entry id. Required if multiple APstorage entries are loaded and address is not provided.
+      required: false
+      selector:
+        text:
+    address:
+      name: Bluetooth Address
+      description: Optional target device MAC address (AA:BB:CC:DD:EE:FF). Required if multiple entries are loaded and entry_id is not provided.
+      required: false
+      selector:
+        text:
+
+set_lan_network:
+  name: Set LAN Network
+  description: >-
+    Configure LAN networking for Modbus TCP using app-compatible set/lan.
+    Supports `dhcp` (automatic IP) and `manual` (static IP) modes.
+  fields:
+    lan_mode:
+      name: LAN Mode
+      description: Use `dhcp` for automatic IP or `manual` for static IP.
+      required: true
+      example: "dhcp"
+      selector:
+        select:
+          options:
+            - label: DHCP (Automatic)
+              value: "dhcp"
+            - label: Manual (Static)
+              value: "manual"
+    ip_address:
+      name: IP Address
+      description: Static IPv4 address. Required when LAN mode is manual.
+      required: false
+      example: "192.168.1.50"
+      selector:
+        text:
+    subnet_mask:
+      name: Subnet Mask
+      description: Static IPv4 subnet mask. Required when LAN mode is manual.
+      required: false
+      example: "255.255.255.0"
+      selector:
+        text:
+    default_gateway:
+      name: Default Gateway
+      description: Static IPv4 default gateway. Required when LAN mode is manual.
+      required: false
+      example: "192.168.1.1"
+      selector:
+        text:
+    primary_dns:
+      name: Primary DNS
+      description: Static IPv4 DNS server. Required when LAN mode is manual.
+      required: false
+      example: "1.1.1.1"
+      selector:
+        text:
+    secondary_dns:
+      name: Secondary DNS
+      description: Optional static IPv4 secondary DNS server.
+      required: false
+      example: "8.8.8.8"
+      selector:
+        text:
+    entry_id:
+      name: Config Entry ID
+      description: Optional target entry id. Required if multiple APstorage entries are loaded and address is not provided.
+      required: false
+      selector:
+        text:
+    address:
+      name: Bluetooth Address
+      description: Optional target device MAC address (AA:BB:CC:DD:EE:FF). Required if multiple entries are loaded and entry_id is not provided.
+      required: false
+      selector:
+        text:

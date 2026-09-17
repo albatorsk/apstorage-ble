@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 import importlib
+import ipaddress
 import json
 import logging
 import re
@@ -50,6 +51,10 @@ SERVICE_REBOOT_PCS = "reboot_pcs"
 SERVICE_SET_SELLING_FIRST = "set_selling_first"
 SERVICE_SET_VALLEY_CHARGE = "set_valley_charge"
 SERVICE_SET_PEAK_POWER = "set_peak_power"
+SERVICE_GET_MODBUS_SETTINGS = "get_modbus_settings"
+SERVICE_SET_MODBUS_SETTINGS = "set_modbus_settings"
+SERVICE_GET_LAN_NETWORK = "get_lan_network"
+SERVICE_SET_LAN_NETWORK = "set_lan_network"
 ATTR_MODE = "mode"
 ATTR_BUZZER_MODE = "buzzer_mode"
 ATTR_ENABLED = "enabled"
@@ -59,8 +64,20 @@ ATTR_VALLEY_TIME = "valley_time"
 ATTR_SCHEDULE = "schedule"
 ATTR_ENTRY_ID = "entry_id"
 ATTR_ADDRESS = "address"
+ATTR_MODBUS_ENABLED = "modbus_enabled"
+ATTR_MODBUS_COMMUNICATION = "modbus_communication"
+ATTR_MODBUS_BAUD = "modbus_baud"
+ATTR_MODBUS_ADDRESS = "modbus_address"
+ATTR_LAN_MODE = "lan_mode"
+ATTR_LAN_IP_ADDRESS = "ip_address"
+ATTR_LAN_SUBNET_MASK = "subnet_mask"
+ATTR_LAN_DEFAULT_GATEWAY = "default_gateway"
+ATTR_LAN_PRIMARY_DNS = "primary_dns"
+ATTR_LAN_SECONDARY_DNS = "secondary_dns"
 SYSTEM_MODE_PAYLOAD_EVENT = f"{DOMAIN}_system_mode_payload"
 VERSION_PROBE_EVENT = f"{DOMAIN}_version_probe"
+MODBUS_SETTINGS_EVENT = f"{DOMAIN}_modbus_settings"
+LAN_NETWORK_EVENT = f"{DOMAIN}_lan_network"
 
 _MODE_LABEL_TO_CODE: dict[str, int] = {
     "peak valley": 0,
@@ -185,6 +202,44 @@ SERVICE_SET_VALLEY_CHARGE_SCHEMA = vol.Schema(
 SERVICE_SET_PEAK_POWER_SCHEMA = vol.Schema(
     {
         vol.Required(ATTR_PEAK_POWER): vol.Coerce(int),
+        vol.Optional(ATTR_ENTRY_ID): cv.string,
+        vol.Optional(ATTR_ADDRESS): cv.string,
+    }
+)
+
+SERVICE_GET_MODBUS_SETTINGS_SCHEMA = vol.Schema(
+    {
+        vol.Optional(ATTR_ENTRY_ID): cv.string,
+        vol.Optional(ATTR_ADDRESS): cv.string,
+    }
+)
+
+SERVICE_SET_MODBUS_SETTINGS_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_MODBUS_ENABLED): cv.boolean,
+        vol.Required(ATTR_MODBUS_COMMUNICATION): cv.string,
+        vol.Required(ATTR_MODBUS_BAUD): vol.Any(vol.Coerce(int), cv.string),
+        vol.Required(ATTR_MODBUS_ADDRESS): vol.Any(vol.Coerce(int), cv.string),
+        vol.Optional(ATTR_ENTRY_ID): cv.string,
+        vol.Optional(ATTR_ADDRESS): cv.string,
+    }
+)
+
+SERVICE_GET_LAN_NETWORK_SCHEMA = vol.Schema(
+    {
+        vol.Optional(ATTR_ENTRY_ID): cv.string,
+        vol.Optional(ATTR_ADDRESS): cv.string,
+    }
+)
+
+SERVICE_SET_LAN_NETWORK_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_LAN_MODE): cv.string,
+        vol.Optional(ATTR_LAN_IP_ADDRESS): cv.string,
+        vol.Optional(ATTR_LAN_SUBNET_MASK): cv.string,
+        vol.Optional(ATTR_LAN_DEFAULT_GATEWAY): cv.string,
+        vol.Optional(ATTR_LAN_PRIMARY_DNS): cv.string,
+        vol.Optional(ATTR_LAN_SECONDARY_DNS): cv.string,
         vol.Optional(ATTR_ENTRY_ID): cv.string,
         vol.Optional(ATTR_ADDRESS): cv.string,
     }
@@ -454,6 +509,81 @@ def _parse_peak_power(value: Any) -> int:
         raise HomeAssistantError("peak_power must be in range 100..50000")
 
     return peak_power
+
+
+def _parse_modbus_communication(value: Any) -> str:
+    """Parse Modbus communication mode to app-compatible values."""
+    mode = str(value).strip().lower()
+    if mode in {"rs485", "rs-485", "serial"}:
+        return "rs485"
+    if mode in {"rs232", "rs-232"}:
+        # App route may label serial as RS232 but still uses RS485 payload block.
+        return "rs232"
+    if mode in {"tcp", "lan", "ip"}:
+        return "tcp"
+
+    raise HomeAssistantError(
+        f"Invalid modbus_communication {value!r}. Use rs485, rs232, or tcp."
+    )
+
+
+def _parse_modbus_baud(value: Any) -> str:
+    """Parse Modbus RS485 baud value."""
+    try:
+        baud = int(value)
+    except (TypeError, ValueError) as err:
+        raise HomeAssistantError(f"Invalid modbus_baud {value!r}. Use an integer baud rate.") from err
+
+    allowed = {2400, 4800, 9600, 19200, 38400, 57600, 115200}
+    if baud not in allowed:
+        raise HomeAssistantError(
+            "modbus_baud must be one of 2400, 4800, 9600, 19200, 38400, 57600, 115200"
+        )
+
+    return str(baud)
+
+
+def _parse_modbus_address(value: Any) -> int:
+    """Parse Modbus RS485 communication address."""
+    try:
+        address = int(value)
+    except (TypeError, ValueError) as err:
+        raise HomeAssistantError(f"Invalid modbus_address {value!r}. Use an integer in range 1..247.") from err
+
+    if address < 1 or address > 247:
+        raise HomeAssistantError("modbus_address must be in range 1..247")
+
+    return address
+
+
+def _parse_lan_mode(value: Any) -> str:
+    """Parse LAN mode as dhcp or manual."""
+    mode = str(value).strip().lower()
+    if mode in {"dhcp", "auto", "automatic"}:
+        return "dhcp"
+    if mode in {"manual", "static", "fixed"}:
+        return "manual"
+    raise HomeAssistantError(f"Invalid lan_mode {value!r}. Use 'dhcp' or 'manual'.")
+
+
+def _parse_ipv4(value: Any, field_name: str, *, required: bool) -> str | None:
+    """Parse and validate an IPv4 literal string."""
+    if value is None:
+        if required:
+            raise HomeAssistantError(f"{field_name} is required when lan_mode is manual")
+        return None
+
+    text = str(value).strip()
+    if not text:
+        if required:
+            raise HomeAssistantError(f"{field_name} is required when lan_mode is manual")
+        return None
+
+    try:
+        ipaddress.IPv4Address(text)
+    except Exception as err:  # noqa: BLE001
+        raise HomeAssistantError(f"Invalid {field_name}: {text!r}") from err
+    return text
 
 
 def _resolve_target_coordinator(
@@ -795,6 +925,140 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             SERVICE_SET_PEAK_POWER,
             _async_handle_set_peak_power,
             schema=SERVICE_SET_PEAK_POWER_SCHEMA,
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_GET_MODBUS_SETTINGS):
+
+        async def _async_handle_get_modbus_settings(call: ServiceCall) -> None:
+            target = _resolve_target_coordinator(
+                hass,
+                entry_id=call.data.get(ATTR_ENTRY_ID),
+                address=call.data.get(ATTR_ADDRESS),
+            )
+            result = await target.async_read_modbus_settings()
+            payload = {
+                "entry_id": call.data.get(ATTR_ENTRY_ID),
+                "address": target._address,  # pylint: disable=protected-access
+                "ok": bool(result.get("ok", False)),
+                "code": result.get("code"),
+                "message": result.get("message"),
+                "storage_id": result.get("storage_id"),
+                "payload": result.get("payload"),
+            }
+            hass.bus.async_fire(MODBUS_SETTINGS_EVENT, payload)
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_GET_MODBUS_SETTINGS,
+            _async_handle_get_modbus_settings,
+            schema=SERVICE_GET_MODBUS_SETTINGS_SCHEMA,
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_SET_MODBUS_SETTINGS):
+
+        async def _async_handle_set_modbus_settings(call: ServiceCall) -> None:
+            enabled = bool(call.data[ATTR_MODBUS_ENABLED])
+            communication = _parse_modbus_communication(call.data[ATTR_MODBUS_COMMUNICATION])
+            baud = _parse_modbus_baud(call.data[ATTR_MODBUS_BAUD])
+            modbus_address = _parse_modbus_address(call.data[ATTR_MODBUS_ADDRESS])
+
+            target = _resolve_target_coordinator(
+                hass,
+                entry_id=call.data.get(ATTR_ENTRY_ID),
+                address=call.data.get(ATTR_ADDRESS),
+            )
+            await target.async_set_modbus_settings(
+                enabled=enabled,
+                communication=communication,
+                baud=baud,
+                address=modbus_address,
+            )
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_SET_MODBUS_SETTINGS,
+            _async_handle_set_modbus_settings,
+            schema=SERVICE_SET_MODBUS_SETTINGS_SCHEMA,
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_GET_LAN_NETWORK):
+
+        async def _async_handle_get_lan_network(call: ServiceCall) -> None:
+            target = _resolve_target_coordinator(
+                hass,
+                entry_id=call.data.get(ATTR_ENTRY_ID),
+                address=call.data.get(ATTR_ADDRESS),
+            )
+            result = await target.async_read_lan_network()
+            payload = {
+                "entry_id": call.data.get(ATTR_ENTRY_ID),
+                "address": target._address,  # pylint: disable=protected-access
+                "ok": bool(result.get("ok", False)),
+                "code": result.get("code"),
+                "message": result.get("message"),
+                "storage_id": result.get("storage_id"),
+                "payload": result.get("payload"),
+            }
+            hass.bus.async_fire(LAN_NETWORK_EVENT, payload)
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_GET_LAN_NETWORK,
+            _async_handle_get_lan_network,
+            schema=SERVICE_GET_LAN_NETWORK_SCHEMA,
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_SET_LAN_NETWORK):
+
+        async def _async_handle_set_lan_network(call: ServiceCall) -> None:
+            mode = _parse_lan_mode(call.data[ATTR_LAN_MODE])
+            use_dhcp = mode == "dhcp"
+
+            ip_address = _parse_ipv4(
+                call.data.get(ATTR_LAN_IP_ADDRESS),
+                ATTR_LAN_IP_ADDRESS,
+                required=not use_dhcp,
+            )
+            subnet_mask = _parse_ipv4(
+                call.data.get(ATTR_LAN_SUBNET_MASK),
+                ATTR_LAN_SUBNET_MASK,
+                required=not use_dhcp,
+            )
+            default_gateway = _parse_ipv4(
+                call.data.get(ATTR_LAN_DEFAULT_GATEWAY),
+                ATTR_LAN_DEFAULT_GATEWAY,
+                required=not use_dhcp,
+            )
+            primary_dns = _parse_ipv4(
+                call.data.get(ATTR_LAN_PRIMARY_DNS),
+                ATTR_LAN_PRIMARY_DNS,
+                required=not use_dhcp,
+            )
+            secondary_dns = _parse_ipv4(
+                call.data.get(ATTR_LAN_SECONDARY_DNS),
+                ATTR_LAN_SECONDARY_DNS,
+                required=False,
+            )
+
+            target = _resolve_target_coordinator(
+                hass,
+                entry_id=call.data.get(ATTR_ENTRY_ID),
+                address=call.data.get(ATTR_ADDRESS),
+            )
+            await target.async_set_lan_network(
+                use_dhcp=use_dhcp,
+                ip_address=ip_address,
+                subnet_mask=subnet_mask,
+                default_gateway=default_gateway,
+                primary_dns=primary_dns,
+                secondary_dns=secondary_dns,
+            )
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_SET_LAN_NETWORK,
+            _async_handle_set_lan_network,
+            schema=SERVICE_SET_LAN_NETWORK_SCHEMA,
         )
 
     await _async_preload_platform_modules(hass, PLATFORMS)

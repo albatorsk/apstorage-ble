@@ -36,6 +36,20 @@ READ_SYSTEM_MODE_PAYLOAD_BUTTON = ButtonEntityDescription(
     entity_category=EntityCategory.DIAGNOSTIC,
 )
 
+READ_MODBUS_SETTINGS_BUTTON = ButtonEntityDescription(
+    key="read_modbus_settings",
+    name="Read Modbus Settings",
+    icon="mdi:lan-connect",
+    entity_category=EntityCategory.DIAGNOSTIC,
+)
+
+READ_LAN_NETWORK_BUTTON = ButtonEntityDescription(
+    key="read_lan_network",
+    name="Read LAN Network",
+    icon="mdi:ip-network-outline",
+    entity_category=EntityCategory.DIAGNOSTIC,
+)
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -52,6 +66,16 @@ async def async_setup_entry(
                 coordinator,
                 entry,
                 READ_SYSTEM_MODE_PAYLOAD_BUTTON,
+            ),
+            APstorageReadModbusSettingsButton(
+                coordinator,
+                entry,
+                READ_MODBUS_SETTINGS_BUTTON,
+            ),
+            APstorageReadLanNetworkButton(
+                coordinator,
+                entry,
+                READ_LAN_NETWORK_BUTTON,
             ),
         ]
     )
@@ -196,6 +220,108 @@ class APstorageReadSystemModePayloadButton(
         """Expose latest getsysmode diagnostic read metadata."""
         attrs: dict[str, Any] = {}
         read = self.coordinator.last_system_mode_payload_read
+        if read is not None:
+            attrs["last_read_ok"] = read.get("ok")
+            attrs["last_read_code"] = read.get("code")
+            attrs["last_read_message"] = read.get("message")
+            attrs["last_read_storage_id"] = read.get("storage_id")
+            attrs["last_read_payload"] = read.get("payload")
+            attrs["last_read_at"] = read.get("at")
+        return attrs or None
+
+
+class APstorageReadModbusSettingsButton(
+    CoordinatorEntity[APstorageCoordinator],
+    ButtonEntity,
+):
+    """Diagnostic button that reads current Modbus settings payload."""
+
+    entity_description: ButtonEntityDescription
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: APstorageCoordinator,
+        entry: ConfigEntry,
+        description: ButtonEntityDescription,
+    ) -> None:
+        super().__init__(coordinator)
+        self.entity_description = description
+        address: str = entry.data[CONF_ADDRESS]
+        self._attr_unique_id = f"{address}-{description.key}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, address)},
+            connections={(dr.CONNECTION_BLUETOOTH, address)},
+            name=entry.title,
+            manufacturer=MANUFACTURER,
+            model=get_model(address),
+        )
+
+    @property
+    def available(self) -> bool:
+        """Return availability from Bluetooth coordinator reachability."""
+        return self.coordinator.runtime_available
+
+    async def async_press(self) -> None:
+        """Trigger a diagnostic Modbus settings read."""
+        await self.coordinator.async_read_modbus_settings()
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Expose latest Modbus settings read metadata."""
+        attrs: dict[str, Any] = {}
+        read = self.coordinator.last_modbus_settings_read
+        if read is not None:
+            attrs["last_read_ok"] = read.get("ok")
+            attrs["last_read_code"] = read.get("code")
+            attrs["last_read_message"] = read.get("message")
+            attrs["last_read_storage_id"] = read.get("storage_id")
+            attrs["last_read_payload"] = read.get("payload")
+            attrs["last_read_at"] = read.get("at")
+        return attrs or None
+
+
+class APstorageReadLanNetworkButton(
+    CoordinatorEntity[APstorageCoordinator],
+    ButtonEntity,
+):
+    """Diagnostic button that reads current LAN network payload."""
+
+    entity_description: ButtonEntityDescription
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: APstorageCoordinator,
+        entry: ConfigEntry,
+        description: ButtonEntityDescription,
+    ) -> None:
+        super().__init__(coordinator)
+        self.entity_description = description
+        address: str = entry.data[CONF_ADDRESS]
+        self._attr_unique_id = f"{address}-{description.key}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, address)},
+            connections={(dr.CONNECTION_BLUETOOTH, address)},
+            name=entry.title,
+            manufacturer=MANUFACTURER,
+            model=get_model(address),
+        )
+
+    @property
+    def available(self) -> bool:
+        """Return availability from Bluetooth coordinator reachability."""
+        return self.coordinator.runtime_available
+
+    async def async_press(self) -> None:
+        """Trigger a diagnostic LAN network read."""
+        await self.coordinator.async_read_lan_network()
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Expose latest LAN network read metadata."""
+        attrs: dict[str, Any] = {}
+        read = self.coordinator.last_lan_network_read
         if read is not None:
             attrs["last_read_ok"] = read.get("ok")
             attrs["last_read_code"] = read.get("code")

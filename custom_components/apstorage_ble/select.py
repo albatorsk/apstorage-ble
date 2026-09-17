@@ -73,6 +73,24 @@ BUZZER_MODE_SELECT = APstorageSelectDescription(
     options=list(BUZZER_MODE_OPTION_TO_CODE.keys()),
 )
 
+MODBUS_COMMUNICATION_SELECT = APstorageSelectDescription(
+    key="modbus_communication",
+    name="Modbus Communication",
+    options=["RS485", "TCP"],
+)
+
+MODBUS_BAUD_SELECT = APstorageSelectDescription(
+    key="modbus_baud",
+    name="Modbus Baud Rate",
+    options=["2400", "4800", "9600", "19200", "38400", "57600", "115200"],
+)
+
+LAN_IP_MODE_SELECT = APstorageSelectDescription(
+    key="lan_ip_mode",
+    name="LAN IP Mode",
+    options=["DHCP", "Manual"],
+)
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -86,8 +104,68 @@ async def async_setup_entry(
             APstorageSystemModeSelect(coordinator, entry, SYSTEM_MODE_SELECT),
             APstorageBackupSocSelect(coordinator, entry, BACKUP_SOC_SELECT),
             APstorageBuzzerModeSelect(coordinator, entry, BUZZER_MODE_SELECT),
+            APstorageModbusCommunicationSelect(coordinator, entry, MODBUS_COMMUNICATION_SELECT),
+            APstorageModbusBaudSelect(coordinator, entry, MODBUS_BAUD_SELECT),
+            APstorageLanIpModeSelect(coordinator, entry, LAN_IP_MODE_SELECT),
         ]
     )
+
+
+def _modbus_write_inputs(coordinator: APstorageCoordinator) -> tuple[bool, str, str, int]:
+    """Return the current Modbus state used to build full set/thirdParty writes."""
+    data = coordinator.data
+    enabled = bool(data.modbus_enabled) if data and data.modbus_enabled is not None else False
+    communication = (
+        str(data.modbus_communication).lower()
+        if data and data.modbus_communication
+        else "rs485"
+    )
+    if communication not in {"rs485", "tcp"}:
+        communication = "rs485"
+    baud = str(data.modbus_baud) if data and data.modbus_baud else "9600"
+    try:
+        address = int(data.modbus_address) if data and data.modbus_address is not None else 1
+    except (TypeError, ValueError):
+        address = 1
+
+    write = coordinator.last_modbus_settings_write
+    if write is not None:
+        enabled = bool(write.get("requested_enabled", enabled))
+        requested_comm = str(write.get("requested_communication", communication)).lower()
+        communication = requested_comm if requested_comm in {"rs485", "tcp"} else communication
+        baud = str(write.get("requested_baud", baud))
+        try:
+            address = int(write.get("requested_address", address))
+        except (TypeError, ValueError):
+            pass
+
+    return enabled, communication, baud, max(1, min(247, address))
+
+
+def _lan_write_inputs(
+    coordinator: APstorageCoordinator,
+) -> tuple[str, str | None, str | None, str | None, str | None, str | None]:
+    """Return current LAN state used for set/lan writes."""
+    data = coordinator.data
+    mode = str(data.lan_ip_mode).lower() if data and data.lan_ip_mode else "dhcp"
+    ip_address = data.lan_ip_address if data else None
+    subnet_mask = data.lan_subnet_mask if data else None
+    default_gateway = data.lan_default_gateway if data else None
+    primary_dns = data.lan_primary_dns if data else None
+    secondary_dns = data.lan_secondary_dns if data else None
+
+    write = coordinator.last_lan_network_write
+    if write is not None:
+        requested_mode = str(write.get("requested_mode") or mode).lower()
+        if requested_mode in {"dhcp", "manual"}:
+            mode = requested_mode
+        ip_address = write.get("requested_ip_address", ip_address)
+        subnet_mask = write.get("requested_subnet_mask", subnet_mask)
+        default_gateway = write.get("requested_default_gateway", default_gateway)
+        primary_dns = write.get("requested_primary_dns", primary_dns)
+        secondary_dns = write.get("requested_secondary_dns", secondary_dns)
+
+    return mode, ip_address, subnet_mask, default_gateway, primary_dns, secondary_dns
 
 
 class APstorageSystemModeSelect(
@@ -319,4 +397,208 @@ class APstorageBuzzerModeSelect(
             attrs["last_write_at"] = write.get("at")
 
         return attrs or None
+
+
+class APstorageModbusCommunicationSelect(
+    CoordinatorEntity[APstorageCoordinator],
+    SelectEntity,
+):
+    """Writable Modbus communication selector (RS485/TCP)."""
+
+    entity_description: APstorageSelectDescription
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: APstorageCoordinator,
+        entry: ConfigEntry,
+        description: APstorageSelectDescription,
+    ) -> None:
+        super().__init__(coordinator)
+        self.entity_description = description
+        address: str = entry.data[CONF_ADDRESS]
+        self._attr_unique_id = f"{address}-{description.key}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, address)},
+            connections={(dr.CONNECTION_BLUETOOTH, address)},
+            name=entry.title,
+            manufacturer=MANUFACTURER,
+            model=get_model(address),
+        )
+
+    @property
+    def available(self) -> bool:
+        """Return availability from Bluetooth coordinator reachability."""
+        return self.coordinator.runtime_available
+
+    @property
+    def current_option(self) -> str | None:
+        """Return currently selected Modbus communication mode."""
+        data = self.coordinator.data
+        if data is not None and data.modbus_communication:
+            if str(data.modbus_communication).lower() == "tcp":
+                return "TCP"
+            return "RS485"
+
+        write = self.coordinator.last_modbus_settings_write
+        if write is not None:
+            if str(write.get("requested_communication", "")).lower() == "tcp":
+                return "TCP"
+            return "RS485"
+
+        return None
+
+    async def async_select_option(self, option: str) -> None:
+        """Set Modbus communication mode on the device."""
+        if option not in {"RS485", "TCP"}:
+            raise ValueError(f"Unknown Modbus communication option: {option}")
+
+        enabled, _current_comm, baud, address = _modbus_write_inputs(self.coordinator)
+        await self.coordinator.async_set_modbus_settings(
+            enabled=enabled,
+            communication="tcp" if option == "TCP" else "rs485",
+            baud=baud,
+            address=address,
+        )
+
+
+class APstorageModbusBaudSelect(
+    CoordinatorEntity[APstorageCoordinator],
+    SelectEntity,
+):
+    """Writable Modbus RS485 baud selector."""
+
+    entity_description: APstorageSelectDescription
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: APstorageCoordinator,
+        entry: ConfigEntry,
+        description: APstorageSelectDescription,
+    ) -> None:
+        super().__init__(coordinator)
+        self.entity_description = description
+        address: str = entry.data[CONF_ADDRESS]
+        self._attr_unique_id = f"{address}-{description.key}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, address)},
+            connections={(dr.CONNECTION_BLUETOOTH, address)},
+            name=entry.title,
+            manufacturer=MANUFACTURER,
+            model=get_model(address),
+        )
+
+    @property
+    def available(self) -> bool:
+        """Return availability from Bluetooth coordinator reachability."""
+        return self.coordinator.runtime_available
+
+    @property
+    def current_option(self) -> str | None:
+        """Return currently selected Modbus RS485 baud."""
+        data = self.coordinator.data
+        if data is not None and data.modbus_baud:
+            value = str(data.modbus_baud)
+            if value in self.options:
+                return value
+
+        write = self.coordinator.last_modbus_settings_write
+        if write is not None:
+            value = str(write.get("requested_baud") or "")
+            if value in self.options:
+                return value
+
+        return None
+
+    async def async_select_option(self, option: str) -> None:
+        """Set Modbus RS485 baud on the device."""
+        if option not in self.options:
+            raise ValueError(f"Unknown Modbus baud option: {option}")
+
+        enabled, communication, _current_baud, address = _modbus_write_inputs(self.coordinator)
+        await self.coordinator.async_set_modbus_settings(
+            enabled=enabled,
+            communication=communication,
+            baud=option,
+            address=address,
+        )
+
+
+class APstorageLanIpModeSelect(
+    CoordinatorEntity[APstorageCoordinator],
+    SelectEntity,
+):
+    """Writable LAN IP mode selector (DHCP/Manual)."""
+
+    entity_description: APstorageSelectDescription
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: APstorageCoordinator,
+        entry: ConfigEntry,
+        description: APstorageSelectDescription,
+    ) -> None:
+        super().__init__(coordinator)
+        self.entity_description = description
+        address: str = entry.data[CONF_ADDRESS]
+        self._attr_unique_id = f"{address}-{description.key}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, address)},
+            connections={(dr.CONNECTION_BLUETOOTH, address)},
+            name=entry.title,
+            manufacturer=MANUFACTURER,
+            model=get_model(address),
+        )
+
+    @property
+    def available(self) -> bool:
+        """Return availability from Bluetooth coordinator reachability."""
+        return self.coordinator.runtime_available
+
+    @property
+    def current_option(self) -> str | None:
+        """Return currently selected LAN mode."""
+        data = self.coordinator.data
+        if data is not None and data.lan_ip_mode:
+            return "Manual" if str(data.lan_ip_mode).lower() == "manual" else "DHCP"
+
+        write = self.coordinator.last_lan_network_write
+        if write is not None:
+            mode = str(write.get("requested_mode") or "").lower()
+            if mode == "manual":
+                return "Manual"
+            if mode == "dhcp":
+                return "DHCP"
+
+        return None
+
+    async def async_select_option(self, option: str) -> None:
+        """Set LAN mode to DHCP or Manual."""
+        if option not in {"DHCP", "Manual"}:
+            raise ValueError(f"Unknown LAN IP mode option: {option}")
+
+        mode, ip_address, subnet_mask, default_gateway, primary_dns, secondary_dns = _lan_write_inputs(
+            self.coordinator
+        )
+
+        if option == "DHCP":
+            await self.coordinator.async_set_lan_network(use_dhcp=True)
+            return
+
+        if not all([ip_address, subnet_mask, default_gateway, primary_dns]):
+            raise ValueError(
+                "Cannot switch to Manual LAN mode without IP details. "
+                "Set LAN details first using service apstorage_ble.set_lan_network."
+            )
+
+        await self.coordinator.async_set_lan_network(
+            use_dhcp=False,
+            ip_address=ip_address,
+            subnet_mask=subnet_mask,
+            default_gateway=default_gateway,
+            primary_dns=primary_dns,
+            secondary_dns=secondary_dns,
+        )
 
