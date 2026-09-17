@@ -172,6 +172,91 @@ Service:
 
 ---
 
+## Configure Modbus over TCP and LAN IP
+
+The PCS supports Modbus over TCP through the third-party configuration payload.
+In this integration, Modbus protocol mode and LAN network settings are configured separately.
+
+### 1) Set Modbus communication to TCP
+
+Use these control entities on the device page:
+
+- **Modbus Enabled** (`switch`) -> set to `On`
+- **Modbus Communication** (`select`) -> set to `TCP`
+
+Optional for serial fallback/profile consistency:
+
+- **Modbus Baud Rate** (`select`) -> one of `2400, 4800, 9600, 19200, 38400, 57600, 115200`
+- **Modbus Address** (`number`) -> range `1..247`
+
+You can also set this explicitly via service:
+
+```yaml
+service: apstorage_ble.set_modbus_settings
+data:
+    modbus_enabled: true
+    modbus_communication: tcp
+    modbus_baud: 9600
+    modbus_address: 1
+```
+
+### 2) Configure LAN mode and IP addressing
+
+Select LAN mode with the entity:
+
+- **LAN IP Mode** (`select`) -> `DHCP` or `Manual`
+
+The PCS supports DHCP. Use `DHCP` if your router should assign networking automatically.
+
+For Manual (static) addressing, call:
+
+```yaml
+service: apstorage_ble.set_lan_network
+data:
+    lan_mode: manual
+    ip_address: 192.168.1.50
+    subnet_mask: 255.255.255.0
+    default_gateway: 192.168.1.1
+    primary_dns: 1.1.1.1
+    secondary_dns: 8.8.8.8
+```
+
+For DHCP mode, call:
+
+```yaml
+service: apstorage_ble.set_lan_network
+data:
+    lan_mode: dhcp
+```
+
+### 3) Verify applied settings
+
+Use read services to fetch the decoded payload from the PCS:
+
+```yaml
+service: apstorage_ble.get_modbus_settings
+data: {}
+```
+
+```yaml
+service: apstorage_ble.get_lan_network
+data: {}
+```
+
+The integration fires these events with result metadata and payload:
+
+- `apstorage_ble_modbus_settings`
+- `apstorage_ble_lan_network`
+
+You can also monitor diagnostic sensors such as:
+
+- **Modbus Communication Mode**
+- **Modbus Enabled State**
+- **LAN IP Mode**
+- **LAN IP Address**
+
+---
+
 ## Protocol Notes
 
 The integration currently polls the PCS using a Blufi-based encrypted local-data flow.
