@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from homeassistant.components.number import NumberEntity, NumberEntityDescription
+from homeassistant.components.number import NumberEntity, NumberEntityDescription, NumberMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS, UnitOfPower
 from homeassistant.core import HomeAssistant
@@ -39,6 +39,7 @@ MODBUS_ADDRESS_NUMBER = APstorageNumberDescription(
     native_min_value=1,
     native_max_value=247,
     native_step=1,
+    mode=NumberMode.BOX,
     icon="mdi:identifier",
 )
 
