@@ -56,6 +56,16 @@ class PCSData:
     system_state: str | None = None            # free-form state string
     battery_flow_state: str | None = None      # charging / discharging / holding
     buzzer: int | None = None                  # 0=Silent, 1=Normal
+    modbus_enabled: bool | None = None         # third-party communication enabled
+    modbus_communication: str | None = None    # rs485 / tcp
+    modbus_baud: str | None = None             # RS485 baud rate
+    modbus_address: int | None = None          # RS485 communication address
+    lan_ip_mode: str | None = None             # dhcp / manual
+    lan_ip_address: str | None = None          # IPv4 address (manual/current)
+    lan_subnet_mask: str | None = None         # IPv4 subnet mask
+    lan_default_gateway: str | None = None     # IPv4 gateway
+    lan_primary_dns: str | None = None         # IPv4 DNS server 1
+    lan_secondary_dns: str | None = None       # IPv4 DNS server 2
     co2_reduction: float | None = None            # kg
     total_produced: float | None = None           # kWh (T2)
     total_consumed: float | None = None           # kWh (T3)

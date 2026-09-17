@@ -42,6 +42,8 @@ STARTUP_VERSION_PROBE_RETRY_DELAY_SECONDS = 2
 DEFERRED_VERSION_PROBE_ENABLED = False
 STARTUP_SYSMODE_PROBE_ENABLED = True
 STARTUP_SYSMODE_PROBE_RETRIES = 2
+STARTUP_MODBUS_PROBE_ENABLED = True
+STARTUP_LAN_PROBE_ENABLED = True
 VERSION_RETRY_INTERVAL_SECONDS = 300
 POLL_FAILURE_RECONNECT_THRESHOLD = 3
 NO_DEVICE_STRONG_RESET_THRESHOLD = 6
@@ -95,6 +97,10 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._last_selling_first_write: dict[str, Any] | None = None
         self._last_valley_charge_write: dict[str, Any] | None = None
         self._last_peak_power_write: dict[str, Any] | None = None
+        self._last_modbus_settings_read: dict[str, Any] | None = None
+        self._last_modbus_settings_write: dict[str, Any] | None = None
+        self._last_lan_network_read: dict[str, Any] | None = None
+        self._last_lan_network_write: dict[str, Any] | None = None
         self._last_listener_fingerprint: tuple[Any, ...] | None = None
         # Track write timestamps to avoid poll overwriting recent writes (5 second grace period)
         self._field_write_timestamps: dict[str, datetime] = {}
@@ -107,6 +113,10 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
         self._startup_version_fetch_attempted = False
         self._startup_sysmode_task: asyncio.Task[Any] | None = None
         self._startup_sysmode_fetch_attempted = False
+        self._startup_modbus_task: asyncio.Task[Any] | None = None
+        self._startup_modbus_fetch_attempted = False
+        self._startup_lan_task: asyncio.Task[Any] | None = None
+        self._startup_lan_fetch_attempted = False
         self._deferred_version_probe_attempted = False
         self._last_version_retry_at: datetime | None = None
         self._last_successful_poll_at: datetime | None = None
@@ -239,6 +249,10 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             self._freeze_state_value(self._last_selling_first_write),
             self._freeze_state_value(self._last_valley_charge_write),
             self._freeze_state_value(self._last_peak_power_write),
+            self._freeze_state_value(self._last_modbus_settings_read),
+            self._freeze_state_value(self._last_modbus_settings_write),
+            self._freeze_state_value(self._last_lan_network_read),
+            self._freeze_state_value(self._last_lan_network_write),
         )
 
     def _notify_if_state_changed(self) -> None:
@@ -302,6 +316,14 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             self._startup_sysmode_task = self.hass.async_create_task(
                 self._async_fetch_startup_sysmode_info()
             )
+        if STARTUP_MODBUS_PROBE_ENABLED and self._startup_modbus_task is None:
+            self._startup_modbus_task = self.hass.async_create_task(
+                self._async_fetch_startup_modbus_info()
+            )
+        if STARTUP_LAN_PROBE_ENABLED and self._startup_lan_task is None:
+            self._startup_lan_task = self.hass.async_create_task(
+                self._async_fetch_startup_lan_info()
+            )
 
     async def async_shutdown(self) -> None:
         """Block new BLE activity once the config entry is unloading."""
@@ -316,6 +338,16 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
             sysmode_task.cancel()
             with suppress(asyncio.CancelledError):
                 await sysmode_task
+        modbus_task = self._startup_modbus_task
+        if modbus_task is not None and not modbus_task.done():
+            modbus_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await modbus_task
+        lan_task = self._startup_lan_task
+        if lan_task is not None and not lan_task.done():
+            lan_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await lan_task
         refresh_task = self._post_write_refresh_task
         if refresh_task is not None and not refresh_task.done():
             refresh_task.cancel()
@@ -638,6 +670,42 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
                 "[%s] Startup version fetch returned no data after %d attempts; version entities will remain Unknown",
                 self._name,
                 STARTUP_VERSION_PROBE_RETRIES,
+            )
+
+    async def _async_fetch_startup_modbus_info(self) -> None:
+        """Fetch Modbus third-party settings once on startup for entity defaults."""
+        if self._shutdown or self._startup_modbus_fetch_attempted:
+            return
+
+        self._startup_modbus_fetch_attempted = True
+
+        try:
+            await self.async_read_modbus_settings()
+            _LOGGER.debug("[%s] Startup Modbus settings fetched", self._name)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug(
+                "[%s] Startup Modbus settings fetch failed (non-fatal): %s: %s",
+                self._name,
+                type(err).__name__,
+                err,
+            )
+
+    async def _async_fetch_startup_lan_info(self) -> None:
+        """Fetch LAN network settings once on startup for entity defaults."""
+        if self._shutdown or self._startup_lan_fetch_attempted:
+            return
+
+        self._startup_lan_fetch_attempted = True
+
+        try:
+            await self.async_read_lan_network()
+            _LOGGER.debug("[%s] Startup LAN settings fetched", self._name)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug(
+                "[%s] Startup LAN settings fetch failed (non-fatal): %s: %s",
+                self._name,
+                type(err).__name__,
+                err,
             )
 
     # ------------------------------------------------------------------
@@ -1180,6 +1248,326 @@ class APstorageCoordinator(ActiveBluetoothDataUpdateCoordinator[PCSData | None])
     def last_system_mode_payload_read(self) -> dict[str, Any] | None:
         """Return the most recent getsysmode read attempt."""
         return self._last_system_mode_payload_read
+
+    async def async_read_modbus_settings(self) -> dict[str, Any]:
+        """Read current third-party Modbus settings over BLE."""
+        async with self._poll_lock:
+            await self._soc_client.async_close_session()
+            service_info: BluetoothServiceInfoBleak | None = self._last_service_info
+
+            if service_info is not None and service_info.connectable:
+                ble_device = service_info.device
+            elif service_info is not None:
+                ble_device = bluetooth.async_ble_device_from_address(
+                    self.hass,
+                    service_info.device.address,
+                    connectable=True,
+                )
+            else:
+                ble_device = bluetooth.async_ble_device_from_address(
+                    self.hass,
+                    self._address,
+                    connectable=True,
+                )
+
+            if ble_device is None:
+                raise RuntimeError("No connectable BLE device found for modbus settings read")
+
+            _LOGGER.debug("[%s] Reading Modbus third-party settings", self._name)
+            result = await self._soc_client.async_get_modbus_settings(
+                ble_device,
+                device_name_hint=self._name,
+            )
+            self._last_modbus_settings_read = {
+                "ok": bool(result.get("ok", False)),
+                "code": result.get("code"),
+                "message": result.get("message"),
+                "storage_id": result.get("storage_id"),
+                "payload": result.get("payload"),
+                "at": datetime.now(timezone.utc).isoformat(),
+            }
+            if not bool(result.get("ok", False)):
+                raise RuntimeError(
+                    "modbus settings read failed"
+                    f" (code={result.get('code')}, message={result.get('message')})"
+                )
+
+            payload = result.get("payload")
+            if isinstance(payload, dict):
+                if self.data is None:
+                    self.data = PCSData()
+
+                rs485 = payload.get("RS485") if isinstance(payload.get("RS485"), dict) else {}
+                lan = payload.get("LAN") if isinstance(payload.get("LAN"), dict) else {}
+
+                rs485_enabled = str(rs485.get("enable", "0")) == "1"
+                lan_enabled = str(lan.get("enable", "0")) == "1"
+
+                self.data.modbus_enabled = bool(rs485_enabled or lan_enabled)
+                self.data.modbus_communication = "tcp" if lan_enabled else "rs485"
+
+                baud_value = rs485.get("baud")
+                if baud_value is not None:
+                    self.data.modbus_baud = str(baud_value)
+
+                addr_value = rs485.get("addr")
+                if addr_value is not None:
+                    try:
+                        self.data.modbus_address = int(str(addr_value).strip())
+                    except (TypeError, ValueError):
+                        pass
+
+                self._notify_if_state_changed()
+
+            return result
+
+    @property
+    def last_modbus_settings_read(self) -> dict[str, Any] | None:
+        """Return the most recent Modbus settings read attempt."""
+        return self._last_modbus_settings_read
+
+    async def async_set_modbus_settings(
+        self,
+        *,
+        enabled: bool,
+        communication: str,
+        baud: str,
+        address: int,
+    ) -> None:
+        """Set app-compatible third-party Modbus settings over BLE."""
+        await self._async_prepare_for_write()
+        try:
+            async with self._poll_lock:
+                await self._soc_client.async_close_session()
+                service_info: BluetoothServiceInfoBleak | None = self._last_service_info
+
+                if service_info is not None and service_info.connectable:
+                    ble_device = service_info.device
+                elif service_info is not None:
+                    ble_device = bluetooth.async_ble_device_from_address(
+                        self.hass,
+                        service_info.device.address,
+                        connectable=True,
+                    )
+                else:
+                    ble_device = bluetooth.async_ble_device_from_address(
+                        self.hass,
+                        self._address,
+                        connectable=True,
+                    )
+
+                if ble_device is None:
+                    raise RuntimeError("No connectable BLE device found for modbus settings write")
+
+                _LOGGER.debug(
+                    "[%s] Setting Modbus third-party settings enabled=%s communication=%s baud=%s address=%s",
+                    self._name,
+                    enabled,
+                    communication,
+                    baud,
+                    address,
+                )
+                result = await self._soc_client.async_set_modbus_settings(
+                    ble_device,
+                    enabled=enabled,
+                    communication=communication,
+                    baud=baud,
+                    address=address,
+                    device_name_hint=self._name,
+                )
+                self._last_modbus_settings_write = {
+                    "ok": bool(result.get("ok", False)),
+                    "code": result.get("code"),
+                    "message": result.get("message"),
+                    "requested_enabled": bool(enabled),
+                    "requested_communication": str(communication).lower(),
+                    "requested_baud": str(baud),
+                    "requested_address": int(address),
+                    "at": datetime.now(timezone.utc).isoformat(),
+                }
+                if not bool(result.get("ok", False)):
+                    raise RuntimeError(
+                        "modbus settings write failed"
+                        f" (code={result.get('code')}, message={result.get('message')})"
+                    )
+
+                if self.data is None:
+                    self.data = PCSData()
+
+                self.data.modbus_enabled = bool(enabled)
+                mode = str(communication).strip().lower()
+                if mode == "rs232":
+                    mode = "rs485"
+                self.data.modbus_communication = "tcp" if mode == "tcp" else "rs485"
+                self.data.modbus_baud = str(baud)
+                self.data.modbus_address = int(address)
+                self._notify_if_state_changed()
+        finally:
+            self._write_pending = False
+
+        self._schedule_post_write_refresh()
+
+    @property
+    def last_modbus_settings_write(self) -> dict[str, Any] | None:
+        """Return the most recent Modbus settings write attempt."""
+        return self._last_modbus_settings_write
+
+    async def async_read_lan_network(self) -> dict[str, Any]:
+        """Read current LAN network settings over BLE."""
+        async with self._poll_lock:
+            await self._soc_client.async_close_session()
+            service_info: BluetoothServiceInfoBleak | None = self._last_service_info
+
+            if service_info is not None and service_info.connectable:
+                ble_device = service_info.device
+            elif service_info is not None:
+                ble_device = bluetooth.async_ble_device_from_address(
+                    self.hass,
+                    service_info.device.address,
+                    connectable=True,
+                )
+            else:
+                ble_device = bluetooth.async_ble_device_from_address(
+                    self.hass,
+                    self._address,
+                    connectable=True,
+                )
+
+            if ble_device is None:
+                raise RuntimeError("No connectable BLE device found for lan settings read")
+
+            _LOGGER.debug("[%s] Reading LAN network settings", self._name)
+            result = await self._soc_client.async_get_lan_network(
+                ble_device,
+                device_name_hint=self._name,
+            )
+            self._last_lan_network_read = {
+                "ok": bool(result.get("ok", False)),
+                "code": result.get("code"),
+                "message": result.get("message"),
+                "storage_id": result.get("storage_id"),
+                "payload": result.get("payload"),
+                "at": datetime.now(timezone.utc).isoformat(),
+            }
+            if not bool(result.get("ok", False)):
+                raise RuntimeError(
+                    "lan settings read failed"
+                    f" (code={result.get('code')}, message={result.get('message')})"
+                )
+
+            payload = result.get("payload")
+            if isinstance(payload, dict):
+                if self.data is None:
+                    self.data = PCSData()
+
+                manual = str(payload.get("TY", "0")) == "1"
+                self.data.lan_ip_mode = "manual" if manual else "dhcp"
+                self.data.lan_ip_address = str(payload.get("IA") or "") or None
+                self.data.lan_subnet_mask = str(payload.get("IM") or "") or None
+                self.data.lan_default_gateway = str(payload.get("IG") or "") or None
+                self.data.lan_primary_dns = str(payload.get("D1") or "") or None
+                self.data.lan_secondary_dns = str(payload.get("D2") or "") or None
+                self._notify_if_state_changed()
+
+            return result
+
+    @property
+    def last_lan_network_read(self) -> dict[str, Any] | None:
+        """Return the most recent LAN settings read attempt."""
+        return self._last_lan_network_read
+
+    async def async_set_lan_network(
+        self,
+        *,
+        use_dhcp: bool,
+        ip_address: str | None = None,
+        subnet_mask: str | None = None,
+        default_gateway: str | None = None,
+        primary_dns: str | None = None,
+        secondary_dns: str | None = None,
+    ) -> None:
+        """Set LAN network settings over BLE."""
+        await self._async_prepare_for_write()
+        try:
+            async with self._poll_lock:
+                await self._soc_client.async_close_session()
+                service_info: BluetoothServiceInfoBleak | None = self._last_service_info
+
+                if service_info is not None and service_info.connectable:
+                    ble_device = service_info.device
+                elif service_info is not None:
+                    ble_device = bluetooth.async_ble_device_from_address(
+                        self.hass,
+                        service_info.device.address,
+                        connectable=True,
+                    )
+                else:
+                    ble_device = bluetooth.async_ble_device_from_address(
+                        self.hass,
+                        self._address,
+                        connectable=True,
+                    )
+
+                if ble_device is None:
+                    raise RuntimeError("No connectable BLE device found for lan settings write")
+
+                _LOGGER.debug(
+                    "[%s] Setting LAN network use_dhcp=%s ip=%s mask=%s gw=%s dns1=%s dns2=%s",
+                    self._name,
+                    use_dhcp,
+                    ip_address,
+                    subnet_mask,
+                    default_gateway,
+                    primary_dns,
+                    secondary_dns,
+                )
+                result = await self._soc_client.async_set_lan_network(
+                    ble_device,
+                    use_dhcp=use_dhcp,
+                    ip_address=ip_address,
+                    subnet_mask=subnet_mask,
+                    default_gateway=default_gateway,
+                    primary_dns=primary_dns,
+                    secondary_dns=secondary_dns,
+                    device_name_hint=self._name,
+                )
+                self._last_lan_network_write = {
+                    "ok": bool(result.get("ok", False)),
+                    "code": result.get("code"),
+                    "message": result.get("message"),
+                    "requested_mode": "dhcp" if use_dhcp else "manual",
+                    "requested_ip_address": ip_address,
+                    "requested_subnet_mask": subnet_mask,
+                    "requested_default_gateway": default_gateway,
+                    "requested_primary_dns": primary_dns,
+                    "requested_secondary_dns": secondary_dns,
+                    "at": datetime.now(timezone.utc).isoformat(),
+                }
+                if not bool(result.get("ok", False)):
+                    raise RuntimeError(
+                        "lan settings write failed"
+                        f" (code={result.get('code')}, message={result.get('message')})"
+                    )
+
+                if self.data is None:
+                    self.data = PCSData()
+
+                self.data.lan_ip_mode = "dhcp" if use_dhcp else "manual"
+                self.data.lan_ip_address = None if use_dhcp else ip_address
+                self.data.lan_subnet_mask = None if use_dhcp else subnet_mask
+                self.data.lan_default_gateway = None if use_dhcp else default_gateway
+                self.data.lan_primary_dns = None if use_dhcp else primary_dns
+                self.data.lan_secondary_dns = None if use_dhcp else secondary_dns
+                self._notify_if_state_changed()
+        finally:
+            self._write_pending = False
+
+        self._schedule_post_write_refresh()
+
+    @property
+    def last_lan_network_write(self) -> dict[str, Any] | None:
+        """Return the most recent LAN settings write attempt."""
+        return self._last_lan_network_write
 
     async def async_probe_version_once(self) -> dict[str, Any]:
         """Run one manual one-shot version query and update coordinator data."""

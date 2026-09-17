@@ -1883,6 +1883,154 @@ def _extract_sysmode_payload(data: Any) -> dict[str, Any] | None:
     return None
 
 
+def _extract_third_party_payload(resp: dict[str, Any]) -> dict[str, Any] | None:
+    """Extract third-party payload with RS485/LAN sections from app-style responses."""
+    queue: list[Any] = [resp]
+    seen: set[int] = set()
+
+    while queue:
+        candidate = _parse_jsonish(queue.pop(0))
+        candidate_id = id(candidate)
+        if candidate_id in seen:
+            continue
+        seen.add(candidate_id)
+
+        if isinstance(candidate, dict):
+            rs485 = _parse_jsonish(candidate.get("RS485"))
+            lan = _parse_jsonish(candidate.get("LAN"))
+            if isinstance(rs485, dict) or isinstance(lan, dict):
+                out: dict[str, Any] = {}
+                if isinstance(rs485, dict):
+                    out["RS485"] = dict(rs485)
+                if isinstance(lan, dict):
+                    out["LAN"] = dict(lan)
+                return out
+
+            for key in (
+                "reply",
+                "replyData",
+                "messagedata",
+                "messageData",
+                "data",
+                "payload",
+                "result",
+            ):
+                if key in candidate:
+                    queue.append(candidate.get(key))
+        elif isinstance(candidate, list):
+            queue.extend(candidate)
+
+    return None
+
+
+def _response_or_reply_is_success(resp: dict[str, Any]) -> bool:
+    """Return True when either the top-level or nested reply indicates success."""
+    if _response_is_success(resp):
+        return True
+
+    reply = _parse_jsonish(resp.get("reply"))
+    if isinstance(reply, list):
+        for item in reply:
+            if isinstance(item, dict) and _response_is_success(item):
+                return True
+    elif isinstance(reply, dict):
+        return _response_is_success(reply)
+
+    return False
+
+
+def _to_enable_flag(value: Any) -> str:
+    """Normalize enable values to app-compatible '1'/'0' strings."""
+    text = str(value).strip().lower()
+    if text in {"1", "true", "on", "enabled", "yes"}:
+        return "1"
+    return "0"
+
+
+def _normalize_third_party_payload(raw_payload: dict[str, Any]) -> dict[str, Any]:
+    """Normalize third-party payload to the app's RS485/LAN schema."""
+    rs485_raw = _parse_jsonish(raw_payload.get("RS485"))
+    lan_raw = _parse_jsonish(raw_payload.get("LAN"))
+    rs485 = dict(rs485_raw) if isinstance(rs485_raw, dict) else {}
+    lan = dict(lan_raw) if isinstance(lan_raw, dict) else {}
+
+    baud = str(rs485.get("baud") or "9600")
+    addr = str(rs485.get("addr") or "1")
+
+    return {
+        "RS485": {
+            "enable": _to_enable_flag(rs485.get("enable")),
+            "baud": baud,
+            "addr": addr,
+        },
+        "LAN": {
+            "enable": _to_enable_flag(lan.get("enable")),
+            "method": str(lan.get("method") or "1"),
+            "addr": str(lan.get("addr") or "1"),
+        },
+    }
+
+
+def _extract_lan_payload(resp: dict[str, Any]) -> dict[str, Any] | None:
+    """Extract LAN payload with app keys (TY/IA/IM/IG/D1/D2) from responses."""
+    queue: list[Any] = [resp]
+    seen: set[int] = set()
+
+    while queue:
+        candidate = _parse_jsonish(queue.pop(0))
+        candidate_id = id(candidate)
+        if candidate_id in seen:
+            continue
+        seen.add(candidate_id)
+
+        if isinstance(candidate, dict):
+            if any(key in candidate for key in ("TY", "IA", "IM", "IG", "D1", "D2", "ip", "mask", "gateway", "dns0", "dns1")):
+                return dict(candidate)
+
+            for key in (
+                "reply",
+                "replyData",
+                "messagedata",
+                "messageData",
+                "data",
+                "payload",
+                "result",
+            ):
+                if key in candidate:
+                    queue.append(candidate.get(key))
+        elif isinstance(candidate, list):
+            queue.extend(candidate)
+
+    return None
+
+
+def _normalize_lan_payload(raw_payload: dict[str, Any]) -> dict[str, Any]:
+    """Normalize LAN payload to app-compatible TY/IA/IM/IG/D1/D2 schema."""
+    mode_raw = raw_payload.get("TY")
+    mode_text = str(mode_raw).strip() if mode_raw is not None else ""
+    is_manual = mode_text in {"1", "manual", "static"}
+
+    ip = str(raw_payload.get("IA") or raw_payload.get("ip") or "")
+    mask = str(raw_payload.get("IM") or raw_payload.get("mask") or "")
+    gateway = str(raw_payload.get("IG") or raw_payload.get("gateway") or "")
+    dns0 = str(raw_payload.get("D1") or raw_payload.get("dns0") or "")
+    dns1 = str(raw_payload.get("D2") or raw_payload.get("dns1") or "")
+
+    if not is_manual:
+        # Fallback: some responses omit TY but include static fields when manual.
+        if ip and mask and gateway and dns0:
+            is_manual = True
+
+    return {
+        "TY": "1" if is_manual else "0",
+        "IA": ip,
+        "IM": mask,
+        "IG": gateway,
+        "D1": dns0,
+        "D2": dns1,
+    }
+
+
 def _derive_storage_id_candidates(
     preferred_storage_id: str | None,
     device_name: str | None,
@@ -3507,6 +3655,499 @@ class APstorageSocClient:
             return {"ok": False, "code": "ble_error", "message": str(err)}
         except Exception as err:  # noqa: BLE001
             _LOGGER.error("Unexpected getsysmode read error for %s: %s", ble_device.address, err, exc_info=True)
+            return {"ok": False, "code": "exception", "message": str(err)}
+        finally:
+            if client and client.is_connected:
+                try:
+                    await _safe_disconnect(client)
+                except Exception:  # noqa: BLE001
+                    pass
+                self._last_disconnect_at = asyncio.get_running_loop().time()
+
+    async def async_get_modbus_settings(
+        self,
+        ble_device: BLEDevice,
+        *,
+        device_name_hint: str | None = None,
+    ) -> dict[str, Any]:
+        """Read app-compatible third-party Modbus settings over BLE."""
+        if not HAS_CRYPTO:
+            _LOGGER.error("pycryptodome required; install with: pip install pycryptodome")
+            return {"ok": False, "code": None, "message": "pycryptodome missing"}
+
+        client: BleakClient | None = None
+        try:
+            await self._async_wait_for_disconnect_settle(context="before modbus settings read")
+            async with asyncio.timeout(WRITE_OPERATION_TIMEOUT_SECONDS):
+                client = await establish_connection(
+                    BleakClientWithServiceCache,
+                    ble_device,
+                    ble_device.address,
+                    max_attempts=3,
+                    use_services_cache=True,
+                )
+                await self._ensure_services_ready(client)
+
+                device_name = ""
+                try:
+                    name_raw = await client.read_gatt_char(DEVICE_NAME_CHAR)
+                    device_name = bytes(name_raw).decode("utf-8", errors="ignore").strip("\x00\r\n ")
+                except Exception:  # noqa: BLE001
+                    device_name = ""
+
+                if not device_name:
+                    device_name = device_name_hint or ""
+                if not device_name:
+                    device_name = ble_device.name or ""
+
+                storage_ids = _derive_storage_id_candidates(
+                    self._preferred_storage_id,
+                    device_name,
+                    device_name_hint,
+                    ble_device.name,
+                )
+
+                if not storage_ids:
+                    _LOGGER.warning("Could not derive storage ID for modbus settings read")
+                    return {
+                        "ok": False,
+                        "code": None,
+                        "message": "could not derive storage id",
+                    }
+
+                await self._establish_blufi_session(client)
+
+                last_code: Any = None
+                last_message: str | None = None
+
+                for storage_id in storage_ids:
+                    get_resp = await self._send_property_request(
+                        client,
+                        method="get",
+                        identifier="get/thirdParty",
+                        storage_id=storage_id,
+                        params_extra={},
+                        system_id="",
+                    )
+                    if not isinstance(get_resp, dict):
+                        continue
+
+                    last_code = get_resp.get("code")
+                    last_message = str(get_resp.get("msg") or get_resp.get("message") or "")
+                    payload_raw = _extract_third_party_payload(get_resp)
+                    if payload_raw is None:
+                        continue
+
+                    self._preferred_storage_id = storage_id
+                    payload = _normalize_third_party_payload(payload_raw)
+                    return {
+                        "ok": True,
+                        "code": last_code,
+                        "message": last_message,
+                        "storage_id": storage_id,
+                        "payload": payload,
+                    }
+
+                return {
+                    "ok": False,
+                    "code": last_code,
+                    "message": last_message or "no get/thirdParty payload found",
+                }
+
+        except asyncio.TimeoutError:
+            _LOGGER.warning("Modbus settings read timed out for %s", ble_device.address)
+            return {"ok": False, "code": "timeout", "message": "connection/read timeout"}
+        except BleakError as err:
+            _LOGGER.warning("BLE error during modbus settings read for %s: %s", ble_device.address, err)
+            return {"ok": False, "code": "ble_error", "message": str(err)}
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("Unexpected modbus settings read error for %s: %s", ble_device.address, err, exc_info=True)
+            return {"ok": False, "code": "exception", "message": str(err)}
+        finally:
+            if client and client.is_connected:
+                try:
+                    await _safe_disconnect(client)
+                except Exception:  # noqa: BLE001
+                    pass
+                self._last_disconnect_at = asyncio.get_running_loop().time()
+
+    async def async_set_modbus_settings(
+        self,
+        ble_device: BLEDevice,
+        *,
+        enabled: bool,
+        communication: str,
+        baud: str,
+        address: int,
+        device_name_hint: str | None = None,
+    ) -> dict[str, Any]:
+        """Write app-compatible third-party Modbus settings over BLE."""
+        if not HAS_CRYPTO:
+            _LOGGER.error("pycryptodome required; install with: pip install pycryptodome")
+            return {"ok": False, "code": None, "message": "pycryptodome missing"}
+
+        communication_key = str(communication).strip().lower()
+        if communication_key not in {"rs485", "rs232", "tcp"}:
+            return {
+                "ok": False,
+                "code": None,
+                "message": f"invalid communication mode: {communication!r}",
+            }
+
+        if str(baud).strip() not in {"2400", "4800", "9600", "19200", "38400", "57600", "115200"}:
+            return {
+                "ok": False,
+                "code": None,
+                "message": f"invalid RS485 baud: {baud!r}",
+            }
+
+        if address < 1 or address > 247:
+            return {
+                "ok": False,
+                "code": None,
+                "message": f"invalid RS485 address: {address}",
+            }
+
+        use_lan = enabled and communication_key == "tcp"
+        use_rs485 = enabled and communication_key in {"rs485", "rs232"}
+
+        payload = {
+            "RS485": {
+                "enable": "1" if use_rs485 else "0",
+                "baud": str(baud),
+                "addr": str(address),
+            },
+            "LAN": {
+                "enable": "1" if use_lan else "0",
+                "method": "1",
+                "addr": "1",
+            },
+        }
+
+        client: BleakClient | None = None
+        try:
+            await self._async_wait_for_disconnect_settle(context="before modbus settings write")
+            async with asyncio.timeout(WRITE_OPERATION_TIMEOUT_SECONDS):
+                client = await establish_connection(
+                    BleakClientWithServiceCache,
+                    ble_device,
+                    ble_device.address,
+                    max_attempts=3,
+                    use_services_cache=True,
+                )
+                await self._ensure_services_ready(client)
+
+                device_name = ""
+                try:
+                    name_raw = await client.read_gatt_char(DEVICE_NAME_CHAR)
+                    device_name = bytes(name_raw).decode("utf-8", errors="ignore").strip("\x00\r\n ")
+                except Exception:  # noqa: BLE001
+                    device_name = ""
+
+                if not device_name:
+                    device_name = device_name_hint or ""
+                if not device_name:
+                    device_name = ble_device.name or ""
+
+                storage_ids = _derive_storage_id_candidates(
+                    self._preferred_storage_id,
+                    device_name,
+                    device_name_hint,
+                    ble_device.name,
+                )
+
+                if not storage_ids:
+                    _LOGGER.warning("Could not derive storage ID for modbus settings write")
+                    return {
+                        "ok": False,
+                        "code": None,
+                        "message": "could not derive storage id",
+                    }
+
+                await self._establish_blufi_session(client)
+
+                last_code: Any = None
+                last_message: str | None = None
+
+                for storage_id in storage_ids:
+                    set_resp = await self._send_property_request(
+                        client,
+                        method="set",
+                        identifier="set/thirdParty",
+                        storage_id=storage_id,
+                        params_extra=payload,
+                        system_id="",
+                    )
+                    if not isinstance(set_resp, dict):
+                        continue
+
+                    code = set_resp.get("code")
+                    message = str(set_resp.get("msg") or set_resp.get("message") or "")
+                    if _response_or_reply_is_success(set_resp):
+                        self._preferred_storage_id = storage_id
+                        return {
+                            "ok": True,
+                            "code": code,
+                            "message": message,
+                            "storage_id": storage_id,
+                            "payload": payload,
+                        }
+
+                    last_code = code
+                    last_message = message
+
+                return {
+                    "ok": False,
+                    "code": last_code,
+                    "message": last_message or "no successful set/thirdParty response",
+                }
+
+        except asyncio.TimeoutError:
+            _LOGGER.warning("Modbus settings write timed out for %s", ble_device.address)
+            return {"ok": False, "code": "timeout", "message": "connection/write timeout"}
+        except BleakError as err:
+            _LOGGER.warning("BLE error during modbus settings write for %s: %s", ble_device.address, err)
+            return {"ok": False, "code": "ble_error", "message": str(err)}
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("Unexpected modbus settings write error for %s: %s", ble_device.address, err, exc_info=True)
+            return {"ok": False, "code": "exception", "message": str(err)}
+        finally:
+            if client and client.is_connected:
+                try:
+                    await _safe_disconnect(client)
+                except Exception:  # noqa: BLE001
+                    pass
+                self._last_disconnect_at = asyncio.get_running_loop().time()
+
+    async def async_get_lan_network(
+        self,
+        ble_device: BLEDevice,
+        *,
+        device_name_hint: str | None = None,
+    ) -> dict[str, Any]:
+        """Read LAN network settings over BLE using app-compatible get/lan."""
+        if not HAS_CRYPTO:
+            _LOGGER.error("pycryptodome required; install with: pip install pycryptodome")
+            return {"ok": False, "code": None, "message": "pycryptodome missing"}
+
+        client: BleakClient | None = None
+        try:
+            await self._async_wait_for_disconnect_settle(context="before lan settings read")
+            async with asyncio.timeout(WRITE_OPERATION_TIMEOUT_SECONDS):
+                client = await establish_connection(
+                    BleakClientWithServiceCache,
+                    ble_device,
+                    ble_device.address,
+                    max_attempts=3,
+                    use_services_cache=True,
+                )
+                await self._ensure_services_ready(client)
+
+                device_name = ""
+                try:
+                    name_raw = await client.read_gatt_char(DEVICE_NAME_CHAR)
+                    device_name = bytes(name_raw).decode("utf-8", errors="ignore").strip("\x00\r\n ")
+                except Exception:  # noqa: BLE001
+                    device_name = ""
+
+                if not device_name:
+                    device_name = device_name_hint or ""
+                if not device_name:
+                    device_name = ble_device.name or ""
+
+                storage_ids = _derive_storage_id_candidates(
+                    self._preferred_storage_id,
+                    device_name,
+                    device_name_hint,
+                    ble_device.name,
+                )
+
+                if not storage_ids:
+                    _LOGGER.warning("Could not derive storage ID for lan settings read")
+                    return {
+                        "ok": False,
+                        "code": None,
+                        "message": "could not derive storage id",
+                    }
+
+                await self._establish_blufi_session(client)
+
+                last_code: Any = None
+                last_message: str | None = None
+
+                for storage_id in storage_ids:
+                    get_resp = await self._send_property_request(
+                        client,
+                        method="get",
+                        identifier="get/lan",
+                        storage_id=storage_id,
+                        params_extra={},
+                        system_id="",
+                    )
+                    if not isinstance(get_resp, dict):
+                        continue
+
+                    last_code = get_resp.get("code")
+                    last_message = str(get_resp.get("msg") or get_resp.get("message") or "")
+                    payload_raw = _extract_lan_payload(get_resp)
+                    if payload_raw is None:
+                        continue
+
+                    self._preferred_storage_id = storage_id
+                    payload = _normalize_lan_payload(payload_raw)
+                    return {
+                        "ok": True,
+                        "code": last_code,
+                        "message": last_message,
+                        "storage_id": storage_id,
+                        "payload": payload,
+                    }
+
+                return {
+                    "ok": False,
+                    "code": last_code,
+                    "message": last_message or "no get/lan payload found",
+                }
+
+        except asyncio.TimeoutError:
+            _LOGGER.warning("LAN settings read timed out for %s", ble_device.address)
+            return {"ok": False, "code": "timeout", "message": "connection/read timeout"}
+        except BleakError as err:
+            _LOGGER.warning("BLE error during lan settings read for %s: %s", ble_device.address, err)
+            return {"ok": False, "code": "ble_error", "message": str(err)}
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("Unexpected lan settings read error for %s: %s", ble_device.address, err, exc_info=True)
+            return {"ok": False, "code": "exception", "message": str(err)}
+        finally:
+            if client and client.is_connected:
+                try:
+                    await _safe_disconnect(client)
+                except Exception:  # noqa: BLE001
+                    pass
+                self._last_disconnect_at = asyncio.get_running_loop().time()
+
+    async def async_set_lan_network(
+        self,
+        ble_device: BLEDevice,
+        *,
+        use_dhcp: bool,
+        ip_address: str | None = None,
+        subnet_mask: str | None = None,
+        default_gateway: str | None = None,
+        primary_dns: str | None = None,
+        secondary_dns: str | None = None,
+        device_name_hint: str | None = None,
+    ) -> dict[str, Any]:
+        """Write LAN network settings over BLE using app-compatible set/lan."""
+        if not HAS_CRYPTO:
+            _LOGGER.error("pycryptodome required; install with: pip install pycryptodome")
+            return {"ok": False, "code": None, "message": "pycryptodome missing"}
+
+        if use_dhcp:
+            payload = {
+                "TY": "0",
+                "IA": "0",
+                "IM": "0",
+                "IG": "0",
+                "D1": "0",
+                "D2": "0",
+            }
+        else:
+            payload = {
+                "TY": "1",
+                "IA": str(ip_address or ""),
+                "IM": str(subnet_mask or ""),
+                "IG": str(default_gateway or ""),
+                "D1": str(primary_dns or ""),
+                "D2": str(secondary_dns or ""),
+            }
+
+        client: BleakClient | None = None
+        try:
+            await self._async_wait_for_disconnect_settle(context="before lan settings write")
+            async with asyncio.timeout(WRITE_OPERATION_TIMEOUT_SECONDS):
+                client = await establish_connection(
+                    BleakClientWithServiceCache,
+                    ble_device,
+                    ble_device.address,
+                    max_attempts=3,
+                    use_services_cache=True,
+                )
+                await self._ensure_services_ready(client)
+
+                device_name = ""
+                try:
+                    name_raw = await client.read_gatt_char(DEVICE_NAME_CHAR)
+                    device_name = bytes(name_raw).decode("utf-8", errors="ignore").strip("\x00\r\n ")
+                except Exception:  # noqa: BLE001
+                    device_name = ""
+
+                if not device_name:
+                    device_name = device_name_hint or ""
+                if not device_name:
+                    device_name = ble_device.name or ""
+
+                storage_ids = _derive_storage_id_candidates(
+                    self._preferred_storage_id,
+                    device_name,
+                    device_name_hint,
+                    ble_device.name,
+                )
+
+                if not storage_ids:
+                    _LOGGER.warning("Could not derive storage ID for lan settings write")
+                    return {
+                        "ok": False,
+                        "code": None,
+                        "message": "could not derive storage id",
+                    }
+
+                await self._establish_blufi_session(client)
+
+                last_code: Any = None
+                last_message: str | None = None
+
+                for storage_id in storage_ids:
+                    set_resp = await self._send_property_request(
+                        client,
+                        method="set",
+                        identifier="set/lan",
+                        storage_id=storage_id,
+                        params_extra=payload,
+                        system_id="",
+                    )
+                    if not isinstance(set_resp, dict):
+                        continue
+
+                    code = set_resp.get("code")
+                    message = str(set_resp.get("msg") or set_resp.get("message") or "")
+                    if _response_or_reply_is_success(set_resp):
+                        self._preferred_storage_id = storage_id
+                        return {
+                            "ok": True,
+                            "code": code,
+                            "message": message,
+                            "storage_id": storage_id,
+                            "payload": payload,
+                        }
+
+                    last_code = code
+                    last_message = message
+
+                return {
+                    "ok": False,
+                    "code": last_code,
+                    "message": last_message or "no successful set/lan response",
+                }
+
+        except asyncio.TimeoutError:
+            _LOGGER.warning("LAN settings write timed out for %s", ble_device.address)
+            return {"ok": False, "code": "timeout", "message": "connection/write timeout"}
+        except BleakError as err:
+            _LOGGER.warning("BLE error during lan settings write for %s: %s", ble_device.address, err)
+            return {"ok": False, "code": "ble_error", "message": str(err)}
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("Unexpected lan settings write error for %s: %s", ble_device.address, err, exc_info=True)
             return {"ok": False, "code": "exception", "message": str(err)}
         finally:
             if client and client.is_connected:

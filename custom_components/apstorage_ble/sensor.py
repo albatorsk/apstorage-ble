@@ -250,6 +250,88 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         value_fn=lambda d: None,
     ),
     APstorageSensorDescription(
+        key="modbus_settings_read",
+        name="Modbus Settings",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda d: None,
+    ),
+    APstorageSensorDescription(
+        key="modbus_enabled_state",
+        name="Modbus Enabled State",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda d: None,
+    ),
+    APstorageSensorDescription(
+        key="modbus_communication_mode",
+        name="Modbus Communication Mode",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda d: None,
+    ),
+    APstorageSensorDescription(
+        key="modbus_baud_rate",
+        name="Modbus Baud Rate",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda d: None,
+    ),
+    APstorageSensorDescription(
+        key="modbus_address",
+        name="Modbus Address",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda d: None,
+    ),
+    APstorageSensorDescription(
+        key="lan_network_read",
+        name="LAN Network",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda d: None,
+    ),
+    APstorageSensorDescription(
+        key="lan_ip_mode",
+        name="LAN IP Mode",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda d: None,
+    ),
+    APstorageSensorDescription(
+        key="lan_ip_address",
+        name="LAN IP Address",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda d: None,
+    ),
+    APstorageSensorDescription(
+        key="lan_subnet_mask",
+        name="LAN Subnet Mask",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda d: None,
+    ),
+    APstorageSensorDescription(
+        key="lan_default_gateway",
+        name="LAN Default Gateway",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda d: None,
+    ),
+    APstorageSensorDescription(
+        key="lan_primary_dns",
+        name="LAN Primary DNS",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda d: None,
+    ),
+    APstorageSensorDescription(
+        key="lan_secondary_dns",
+        name="LAN Secondary DNS",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda d: None,
+    ),
+    APstorageSensorDescription(
         key="last_update",
         name="Last Update",
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -368,7 +450,27 @@ class APstorageSensor(
         maintained by PassiveBluetoothDataUpdateCoordinator based on
         whether the device is still advertising.
         """
-        if self.entity_description.key in {"ble_connection", "ble_write_mode", "ble_codec_mtu", "entity_values_source", "system_mode_payload_read", "last_update", "connection_quality"}:
+        if self.entity_description.key in {
+            "ble_connection",
+            "ble_write_mode",
+            "ble_codec_mtu",
+            "entity_values_source",
+            "system_mode_payload_read",
+            "modbus_settings_read",
+            "modbus_enabled_state",
+            "modbus_communication_mode",
+            "modbus_baud_rate",
+            "modbus_address",
+            "lan_network_read",
+            "lan_ip_mode",
+            "lan_ip_address",
+            "lan_subnet_mask",
+            "lan_default_gateway",
+            "lan_primary_dns",
+            "lan_secondary_dns",
+            "last_update",
+            "connection_quality",
+        }:
             return True
         return self.coordinator.runtime_available
 
@@ -392,6 +494,98 @@ class APstorageSensor(
             if last_read is None:
                 return "Unread"
             return "Read" if bool(last_read.get("ok", False)) else "Failed"
+
+        if self.entity_description.key == "modbus_settings_read":
+            last_read = self.coordinator.last_modbus_settings_read
+            if last_read is None:
+                return "Unread"
+            return "Read" if bool(last_read.get("ok", False)) else "Failed"
+
+        if self.entity_description.key == "modbus_enabled_state":
+            if self.coordinator.data is not None and self.coordinator.data.modbus_enabled is not None:
+                return "Enabled" if self.coordinator.data.modbus_enabled else "Disabled"
+            write = self.coordinator.last_modbus_settings_write
+            if write is not None and write.get("requested_enabled") is not None:
+                return "Enabled" if bool(write.get("requested_enabled")) else "Disabled"
+            return "Unknown"
+
+        if self.entity_description.key == "modbus_communication_mode":
+            if self.coordinator.data is not None and self.coordinator.data.modbus_communication:
+                return str(self.coordinator.data.modbus_communication).upper()
+            write = self.coordinator.last_modbus_settings_write
+            if write is not None and write.get("requested_communication"):
+                return str(write.get("requested_communication")).upper()
+            return None
+
+        if self.entity_description.key == "modbus_baud_rate":
+            if self.coordinator.data is not None and self.coordinator.data.modbus_baud:
+                return str(self.coordinator.data.modbus_baud)
+            write = self.coordinator.last_modbus_settings_write
+            if write is not None and write.get("requested_baud"):
+                return str(write.get("requested_baud"))
+            return None
+
+        if self.entity_description.key == "modbus_address":
+            if self.coordinator.data is not None and self.coordinator.data.modbus_address is not None:
+                return int(self.coordinator.data.modbus_address)
+            write = self.coordinator.last_modbus_settings_write
+            if write is not None and write.get("requested_address") is not None:
+                return int(write.get("requested_address"))
+            return None
+
+        if self.entity_description.key == "lan_network_read":
+            last_read = self.coordinator.last_lan_network_read
+            if last_read is None:
+                return "Unread"
+            return "Read" if bool(last_read.get("ok", False)) else "Failed"
+
+        if self.entity_description.key == "lan_ip_mode":
+            if self.coordinator.data is not None and self.coordinator.data.lan_ip_mode:
+                return str(self.coordinator.data.lan_ip_mode).upper()
+            write = self.coordinator.last_lan_network_write
+            if write is not None and write.get("requested_mode"):
+                return str(write.get("requested_mode")).upper()
+            return "UNKNOWN"
+
+        if self.entity_description.key == "lan_ip_address":
+            if self.coordinator.data is not None and self.coordinator.data.lan_ip_address:
+                return self.coordinator.data.lan_ip_address
+            write = self.coordinator.last_lan_network_write
+            if write is not None and write.get("requested_ip_address"):
+                return str(write.get("requested_ip_address"))
+            return None
+
+        if self.entity_description.key == "lan_subnet_mask":
+            if self.coordinator.data is not None and self.coordinator.data.lan_subnet_mask:
+                return self.coordinator.data.lan_subnet_mask
+            write = self.coordinator.last_lan_network_write
+            if write is not None and write.get("requested_subnet_mask"):
+                return str(write.get("requested_subnet_mask"))
+            return None
+
+        if self.entity_description.key == "lan_default_gateway":
+            if self.coordinator.data is not None and self.coordinator.data.lan_default_gateway:
+                return self.coordinator.data.lan_default_gateway
+            write = self.coordinator.last_lan_network_write
+            if write is not None and write.get("requested_default_gateway"):
+                return str(write.get("requested_default_gateway"))
+            return None
+
+        if self.entity_description.key == "lan_primary_dns":
+            if self.coordinator.data is not None and self.coordinator.data.lan_primary_dns:
+                return self.coordinator.data.lan_primary_dns
+            write = self.coordinator.last_lan_network_write
+            if write is not None and write.get("requested_primary_dns"):
+                return str(write.get("requested_primary_dns"))
+            return None
+
+        if self.entity_description.key == "lan_secondary_dns":
+            if self.coordinator.data is not None and self.coordinator.data.lan_secondary_dns:
+                return self.coordinator.data.lan_secondary_dns
+            write = self.coordinator.last_lan_network_write
+            if write is not None and write.get("requested_secondary_dns"):
+                return str(write.get("requested_secondary_dns"))
+            return None
 
         if self.entity_description.key == "last_update":
             return self.coordinator._last_successful_poll_at
@@ -430,6 +624,38 @@ class APstorageSensor(
             if value == "Cached":
                 return "mdi:database-clock"
             return "mdi:database-question"
+        if key == "modbus_settings_read":
+            if value == "Read":
+                return "mdi:lan-check"
+            if value == "Failed":
+                return "mdi:lan-disconnect"
+            return "mdi:lan-pending"
+        if key == "modbus_enabled_state":
+            return "mdi:toggle-switch" if value == "Enabled" else "mdi:toggle-switch-off-outline"
+        if key == "modbus_communication_mode":
+            return "mdi:lan-connect" if value == "TCP" else "mdi:serial-port"
+        if key == "modbus_baud_rate":
+            return "mdi:speedometer"
+        if key == "modbus_address":
+            return "mdi:identifier"
+        if key == "lan_network_read":
+            if value == "Read":
+                return "mdi:ip-network"
+            if value == "Failed":
+                return "mdi:ip-network-outline"
+            return "mdi:lan-pending"
+        if key == "lan_ip_mode":
+            return "mdi:autorenew" if value == "DHCP" else "mdi:ip"
+        if key == "lan_ip_address":
+            return "mdi:ip"
+        if key == "lan_subnet_mask":
+            return "mdi:vector-square"
+        if key == "lan_default_gateway":
+            return "mdi:router-network"
+        if key == "lan_primary_dns":
+            return "mdi:dns"
+        if key == "lan_secondary_dns":
+            return "mdi:dns-outline"
         if key == "last_update":
             return "mdi:clock-outline"
         if key == "connection_quality":
@@ -458,6 +684,76 @@ class APstorageSensor(
                 "last_read_storage_id": read_info.get("storage_id"),
                 "last_read_at": read_info.get("at"),
                 "payload": read_info.get("payload"),
+            }
+
+        if self.entity_description.key == "modbus_settings_read":
+            read_info = self.coordinator.last_modbus_settings_read
+            if read_info is None:
+                return None
+            return {
+                "last_read_ok": read_info.get("ok"),
+                "last_read_code": read_info.get("code"),
+                "last_read_message": read_info.get("message"),
+                "last_read_storage_id": read_info.get("storage_id"),
+                "last_read_at": read_info.get("at"),
+                "payload": read_info.get("payload"),
+            }
+
+        if self.entity_description.key in {
+            "modbus_enabled_state",
+            "modbus_communication_mode",
+            "modbus_baud_rate",
+            "modbus_address",
+        }:
+            write = self.coordinator.last_modbus_settings_write
+            if write is None:
+                return None
+            return {
+                "last_write_ok": write.get("ok"),
+                "last_write_code": write.get("code"),
+                "last_write_message": write.get("message"),
+                "last_write_requested_enabled": write.get("requested_enabled"),
+                "last_write_requested_communication": write.get("requested_communication"),
+                "last_write_requested_baud": write.get("requested_baud"),
+                "last_write_requested_address": write.get("requested_address"),
+                "last_write_at": write.get("at"),
+            }
+
+        if self.entity_description.key == "lan_network_read":
+            read_info = self.coordinator.last_lan_network_read
+            if read_info is None:
+                return None
+            return {
+                "last_read_ok": read_info.get("ok"),
+                "last_read_code": read_info.get("code"),
+                "last_read_message": read_info.get("message"),
+                "last_read_storage_id": read_info.get("storage_id"),
+                "last_read_at": read_info.get("at"),
+                "payload": read_info.get("payload"),
+            }
+
+        if self.entity_description.key in {
+            "lan_ip_mode",
+            "lan_ip_address",
+            "lan_subnet_mask",
+            "lan_default_gateway",
+            "lan_primary_dns",
+            "lan_secondary_dns",
+        }:
+            write = self.coordinator.last_lan_network_write
+            if write is None:
+                return None
+            return {
+                "last_write_ok": write.get("ok"),
+                "last_write_code": write.get("code"),
+                "last_write_message": write.get("message"),
+                "last_write_requested_mode": write.get("requested_mode"),
+                "last_write_requested_ip_address": write.get("requested_ip_address"),
+                "last_write_requested_subnet_mask": write.get("requested_subnet_mask"),
+                "last_write_requested_default_gateway": write.get("requested_default_gateway"),
+                "last_write_requested_primary_dns": write.get("requested_primary_dns"),
+                "last_write_requested_secondary_dns": write.get("requested_secondary_dns"),
+                "last_write_at": write.get("at"),
             }
 
         if self.entity_description.key == "connection_quality":

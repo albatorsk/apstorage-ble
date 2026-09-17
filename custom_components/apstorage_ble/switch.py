@@ -35,6 +35,12 @@ VALLEY_CHARGE_SWITCH = APstorageSwitchDescription(
     icon="mdi:battery-charging-medium",
 )
 
+MODBUS_ENABLED_SWITCH = APstorageSwitchDescription(
+    key="modbus_enabled",
+    name="Modbus Enabled",
+    icon="mdi:connection",
+)
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -47,8 +53,40 @@ async def async_setup_entry(
         [
             APstorageSellingFirstSwitch(coordinator, entry, SELLING_FIRST_SWITCH),
             APstorageValleyChargeSwitch(coordinator, entry, VALLEY_CHARGE_SWITCH),
+            APstorageModbusEnabledSwitch(coordinator, entry, MODBUS_ENABLED_SWITCH),
         ]
     )
+
+
+def _modbus_write_inputs(coordinator: APstorageCoordinator) -> tuple[bool, str, str, int]:
+    """Return the current Modbus state used to build full set/thirdParty writes."""
+    data = coordinator.data
+    enabled = bool(data.modbus_enabled) if data and data.modbus_enabled is not None else False
+    communication = (
+        str(data.modbus_communication).lower()
+        if data and data.modbus_communication
+        else "rs485"
+    )
+    if communication not in {"rs485", "tcp"}:
+        communication = "rs485"
+    baud = str(data.modbus_baud) if data and data.modbus_baud else "9600"
+    try:
+        address = int(data.modbus_address) if data and data.modbus_address is not None else 1
+    except (TypeError, ValueError):
+        address = 1
+
+    write = coordinator.last_modbus_settings_write
+    if write is not None:
+        enabled = bool(write.get("requested_enabled", enabled))
+        requested_comm = str(write.get("requested_communication", communication)).lower()
+        communication = requested_comm if requested_comm in {"rs485", "tcp"} else communication
+        baud = str(write.get("requested_baud", baud))
+        try:
+            address = int(write.get("requested_address", address))
+        except (TypeError, ValueError):
+            pass
+
+    return enabled, communication, baud, max(1, min(247, address))
 
 
 class APstorageBaseSwitch(
@@ -193,3 +231,60 @@ class APstorageValleyChargeSwitch(APstorageBaseSwitch):
             attrs["last_write_at"] = write.get("at")
 
         return attrs or None
+
+
+class APstorageModbusEnabledSwitch(APstorageBaseSwitch):
+    """Writable Modbus enable switch (set/thirdParty RS485/LAN enable flags)."""
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return current Modbus enabled state."""
+        data = self.coordinator.data
+        if data is not None and data.modbus_enabled is not None:
+            return bool(data.modbus_enabled)
+
+        write = self.coordinator.last_modbus_settings_write
+        if write is not None:
+            requested = write.get("requested_enabled")
+            if requested is not None:
+                return bool(requested)
+
+        return None
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Enable Modbus communication."""
+        _enabled, communication, baud, address = _modbus_write_inputs(self.coordinator)
+        await self.coordinator.async_set_modbus_settings(
+            enabled=True,
+            communication=communication,
+            baud=baud,
+            address=address,
+        )
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Disable Modbus communication."""
+        _enabled, communication, baud, address = _modbus_write_inputs(self.coordinator)
+        await self.coordinator.async_set_modbus_settings(
+            enabled=False,
+            communication=communication,
+            baud=baud,
+            address=address,
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Expose write diagnostics for automation/debugging."""
+        write = self.coordinator.last_modbus_settings_write
+        if write is None:
+            return None
+
+        return {
+            "last_write_ok": write.get("ok"),
+            "last_write_code": write.get("code"),
+            "last_write_message": write.get("message"),
+            "last_write_requested_enabled": write.get("requested_enabled"),
+            "last_write_requested_communication": write.get("requested_communication"),
+            "last_write_requested_baud": write.get("requested_baud"),
+            "last_write_requested_address": write.get("requested_address"),
+            "last_write_at": write.get("at"),
+        }
