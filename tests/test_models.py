@@ -2,12 +2,15 @@
 
 import importlib.util
 from pathlib import Path
+import sys
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "custom_components" / "apstorage_ble" / "models.py"
 SPEC = importlib.util.spec_from_file_location("apstorage_models", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 MODELS = importlib.util.module_from_spec(SPEC)
+# dataclasses look the module up in sys.modules while the class is created.
+sys.modules[SPEC.name] = MODELS
 SPEC.loader.exec_module(MODELS)
 
 PCSData = MODELS.PCSData

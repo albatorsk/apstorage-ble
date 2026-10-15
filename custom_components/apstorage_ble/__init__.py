@@ -1,7 +1,6 @@
 """The APstorage BLE integration."""
 from __future__ import annotations
 
-from datetime import timedelta
 import importlib
 import json
 import logging
@@ -15,10 +14,9 @@ from homeassistant.components.bluetooth import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS, Platform
-from homeassistant.core import HomeAssistant, ServiceCall, callback
+from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
@@ -36,9 +34,15 @@ from .coordinator import APstorageCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-# Entity keys from the removed Modbus and LAN network features; leftover
-# registry entries are deleted on setup so they don't linger as unavailable.
+# Entity keys that no longer exist (removed Modbus and LAN network features,
+# the fixed 50 Hz grid frequency and diagnostics of the old BLE client);
+# leftover registry entries are deleted on setup so they don't linger as unavailable.
 _REMOVED_ENTITY_KEYS = {
+    "grid_frequency",
+    "ble_connection",
+    "ble_write_mode",
+    "ble_codec_mtu",
+    "entity_values_source",
     "modbus_address",
     "modbus_enabled",
     "modbus_communication",
@@ -547,13 +551,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
 
     coordinator = APstorageCoordinator(
-        hass=hass,
-        logger=_LOGGER,
+        hass,
+        _LOGGER,
         address=address,
         name=name,
+        ble_name=entry.data.get(CONF_BLE_NAME) or ble_device.name,
         poll_interval_seconds=poll_interval,
     )
-    await coordinator.async_initialize()
+    # Raises ConfigEntryNotReady if the first poll fails; HA retries setup.
+    await coordinator.async_config_entry_first_refresh()
 
     # Ensure a device is registered even before entities are added so the
     # Battery State of Charge sensor is always attached to a concrete device.
@@ -845,25 +851,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await _async_preload_platform_modules(hass, PLATFORMS)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # Start listening for Bluetooth advertisements *after* the platform has had
-    # a chance to subscribe, so no updates are missed.
-    entry.async_on_unload(coordinator.async_start())
-
-    # Fallback periodic poll so sensors continue updating even when
-    # advertisement events are sparse (common with some proxies/adapters).
-    @callback
-    def _periodic_poll(_now) -> None:
-        hass.async_create_task(coordinator.async_periodic_poll())
-
-    entry.async_on_unload(
-        async_track_time_interval(
-            hass,
-            _periodic_poll,
-            timedelta(seconds=poll_interval),
-        )
-    )
+    entry.async_on_unload(entry.add_update_listener(_async_reload_on_options_change))
 
     return True
+
+
+async def _async_reload_on_options_change(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload so a new polling interval takes effect."""
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

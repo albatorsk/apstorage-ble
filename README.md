@@ -26,9 +26,8 @@ Most core integration features are working in day-to-day use on ELT-12.
 |---|---|
 | HA integration structure | ✅ Complete |
 | Config flow (auto-discover + manual MAC) | ✅ Complete |
-| BLE connection / GATT session | ✅ Complete |
-| Blufi handshake + encrypted local-data query | ✅ **Working** |
-| Active + fallback periodic polling | ✅ **Working** |
+| BLE client (BluFi custom data + app-layer AES, no BluFi security) | ✅ Rewritten in 2.0 |
+| Polling (one short connection per poll) | ✅ Rewritten in 2.0 |
 | Sensor entity platform | ✅ **Working** |
 | System mode select (write) | ✅ **Working** |
 | Buzzer mode select (write) | ✅ **Working** |
@@ -44,38 +43,50 @@ Most core integration features are working in day-to-day use on ELT-12.
 
 The integration creates the following entities.
 
-
 #### Battery
 - Battery State of Charge (`%`)
+- Battery Power (`W`, positive = discharging, negative = charging)
 - Battery Discharging Power (`W`)
 - Battery Charging Power (`W`)
 - Daily Charged Energy (`kWh`)
 - Daily Discharged Energy (`kWh`)
+- Battery Flow State (`enum`: Charging, Discharging, Holding)
+- Battery Capacity (`kWh`, diagnostic)
+- Minimum SOC (`%`, diagnostic)
+- Backup SOC Level (`%`, diagnostic)
 
 #### PV / Solar
-- Daily PV Energy Produced (`kWh`)
 - PV Power (`W`)
+- Daily PV Energy Produced (`kWh`)
 
 #### Grid
-- Grid Power (`W`)
-- Grid Frequency (`Hz`)
+- Grid Power (`W`, positive = import, negative = export)
+- Grid Import Power (`W`)
+- Grid Export Power (`W`)
+- Daily Grid Import (`kWh`)
+- Daily Grid Export (`kWh`)
+- Grid Status (`enum`: On-grid, Off-grid)
+- Generator Power (`W`, disabled by default)
 
 #### Load / Output
 - Load Power (`W`)
+- Daily Total Consumed (`kWh`)
 
 #### System
-- System State (`enum`)
-- Battery Flow State (`enum`: Charging, Discharging, Holding)
+- System Mode (`enum`)
+- Buzzer Alarm (`enum`: Active, None)
 - CO2 Reduction (`kg`)
 - Total Produced (`kWh`)
 - Total Consumed (`kWh`)
-- Daily Total Consumed (`kWh`)
 
 #### Diagnostics
-- PCS Firmware 1
-- PCS Firmware 2
-- PCS Firmware 3
-- PCS Hardware Version
+- PCS Firmware 1 / 2 / 3 (module versions)
+- Communication Module Firmware
+- Cloud Connection
+- Price Area
+- Wi-Fi Network, Wi-Fi Signal, Wi-Fi IP Address (disabled by default)
+- System Mode Payload (last `getsysmode` read)
+- Last Update, Connection Quality, BLE MTU (disabled by default)
 
 #### Controls
 - System Mode (`select` entity)
@@ -168,16 +179,22 @@ Service:
 3. In HA go to **Settings → Devices & Services**.
 4. The PCS should be auto-discovered.  Click **Configure** and confirm.
 5. If not auto-discovered, click **Add Integration**, search for **APstorage BLE**, and enter the MAC address manually.
-6. Initial population can take up to **5 minutes** before all entities show live values/version fields.
+6. Setup finishes once the first poll has read the PCS, so all entities have values right away.
 
 ---
 
 ## Protocol Notes
 
-The integration currently polls the PCS using a Blufi-based encrypted local-data flow.
-Current implementation status is best reflected in the sensor matrix above.
+The BLE client follows the protocol in `APSTORAGE_BLE_SPEC.md`, verified on an ELT-12 (firmware dcmVer 0.1.66.0):
+Espressif BluFi custom-data frames on service `0xFFEC` (write `0xFF07`, notify `0xFF06`), without BluFi
+security negotiation, carrying JSON encrypted with the app's static AES-128-CBC key.
 
-If you are working with a different PCS firmware variant, capture logs and compare payload keys before assuming parity.
+Each poll opens one connection, sends `getDeviceLastDataLocal` and `getsysmode` (plus `deviceInfo` on the
+first poll and every 6 hours), and disconnects, so the phone app can connect between polls. A failed poll
+keeps the last values; entities become unavailable after 3 failed polls in a row. Settings changes read
+`getsysmode`, change only the requested fields, write `setsysmode` and read the result back.
+
+To see the raw traffic, enable debug logging for `custom_components.apstorage_ble`.
 
 ---
 
@@ -188,7 +205,7 @@ If you are working with a different PCS firmware variant, capture logs and compa
 | Device name | `PCS_B050XXXXXXXX` |
 | Bluetooth MAC | `AA:BB:CC:DD:EE:FF` |
 | Protocol | BLE GATT (custom service) |
-| Connection | Active (polled every 30 s) |
+| Connection | One short connection per poll (every 30 s by default) |
 
 ---
 
@@ -198,12 +215,13 @@ If you are working with a different PCS firmware variant, capture logs and compa
 custom_components/apstorage_ble/
 ├── __init__.py        # Entry setup / teardown
 ├── manifest.json      # Integration metadata & BLE matchers
-├── const.py           # GATT UUIDs, constants          ← update UUIDs here
+├── const.py           # Constants, model lookup
 ├── config_flow.py     # Auto-discovery + manual MAC entry
-├── coordinator.py     # ActiveBluetoothDataUpdateCoordinator
-├── soc_client.py      # BLE protocol client (query + control)
-├── models.py          # PCSData dataclass
-├── sensor.py          # Sensor entities
+├── coordinator.py     # Polling and write commands (DataUpdateCoordinator)
+├── pcs_client.py      # BLE client: BluFi framing, AES, request/reply
+├── models.py          # PCSData and reply parsing
+├── protocol.py        # Operating-mode helpers
+├── sensor.py / select.py / switch.py / number.py / button.py
 ├── strings.json       # UI strings
 ├── services.yaml      # Service definitions
 └── translations/

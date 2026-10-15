@@ -1,7 +1,7 @@
 {
   "domain": "apstorage_ble",
   "name": "APstorage BLE",
-  "version": "2.0.0-beta2",
+  "version": "2.0.0-beta3",
   "bluetooth": [
     {
       "local_name": "PCS_B050*",
@@ -16,14 +16,15 @@
       "connectable": true
     }
   ],
-  "codeowners": ["@albatorsk"],
+  "codeowners": [
+    "@albatorsk"
+  ],
   "config_flow": true,
-  "dependencies": ["bluetooth"],
+  "dependencies": [
+    "bluetooth"
+  ],
   "documentation": "https://github.com/albatorsk/apstorage-ble",
   "issue_tracker": "https://github.com/albatorsk/apstorage-ble/issues",
   "iot_class": "local_polling",
-  "requirements": [
-    "bleak-retry-connector",
-    "pycryptodome==3.20.0"
-  ]
+  "requirements": []
 }

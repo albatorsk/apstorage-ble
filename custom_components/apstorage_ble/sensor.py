@@ -1,9 +1,9 @@
 """Sensor platform for the APstorage BLE integration."""
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+import logging
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -16,18 +16,17 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     CONF_ADDRESS,
     PERCENTAGE,
+    SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
     UnitOfEnergy,
-    UnitOfFrequency,
-    UnitOfPower,
     UnitOfMass,
+    UnitOfPower,
 )
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.util import dt as dt_util
 
 from .const import CONF_BLE_NAME, DOMAIN, MANUFACTURER, get_model
 from .coordinator import APstorageCoordinator
@@ -37,19 +36,44 @@ from .protocol import MODE_CODE_TO_OPTION
 _LOGGER = logging.getLogger(__name__)
 
 
-def _format_system_state(value: Any) -> Any:
-    """Return human-readable label for known system state codes."""
+def _format_system_mode(value: Any) -> Any:
+    """Return the label for a mode code, or the raw value."""
     if value is None:
         return None
-    # Keep backward-compatible behavior: only map canonical numeric codes.
     return MODE_CODE_TO_OPTION.get(str(value), value)
 
 
 @dataclass(frozen=True, kw_only=True)
 class APstorageSensorDescription(SensorEntityDescription):
-    """Describes a single APstorage sensor."""
+    """Describes a sensor fed from PCSData."""
 
     value_fn: Callable[[PCSData], Any]
+
+
+def _power(key: str, name: str, value_fn: Callable[[PCSData], Any], **kwargs: Any) -> APstorageSensorDescription:
+    return APstorageSensorDescription(
+        key=key,
+        name=name,
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=value_fn,
+        **kwargs,
+    )
+
+
+def _daily_energy(key: str, name: str, value_fn: Callable[[PCSData], Any], **kwargs: Any) -> APstorageSensorDescription:
+    # Daily counters reset at midnight; TOTAL_INCREASING treats the drop as a new cycle.
+    return APstorageSensorDescription(
+        key=key,
+        name=name,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        suggested_display_precision=2,
+        value_fn=value_fn,
+        **kwargs,
+    )
 
 
 SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
@@ -62,113 +86,72 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda d: d.battery_soc,
     ),
-    APstorageSensorDescription(
-        key="battery_discharging_power",
-        name="Battery Discharging Power",
-        native_unit_of_measurement=UnitOfPower.WATT,
-        device_class=SensorDeviceClass.POWER,
-        state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda d: max(d.signed_battery_power, 0) if d.signed_battery_power is not None else None,
+    _power(
+        "battery_discharging_power",
+        "Battery Discharging Power",
+        lambda d: max(d.signed_battery_power, 0) if d.signed_battery_power is not None else None,
     ),
-    APstorageSensorDescription(
-        key="battery_charging_power",
-        name="Battery Charging Power",
-        native_unit_of_measurement=UnitOfPower.WATT,
-        device_class=SensorDeviceClass.POWER,
-        state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda d: d.battery_charging_power,
-    ),
-    APstorageSensorDescription(
-        key="battery_charged_energy",
-        name="Daily Charged Energy",
-        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        device_class=SensorDeviceClass.ENERGY,
-        # Daily counter that resets at midnight.
-        state_class=SensorStateClass.TOTAL,
-        suggested_display_precision=2,
-        value_fn=lambda d: d.battery_charged_energy,
-    ),
-    APstorageSensorDescription(
-        key="battery_discharged_energy",
-        name="Daily Discharged Energy",
-        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        device_class=SensorDeviceClass.ENERGY,
-        # Daily counter that resets at midnight.
-        state_class=SensorStateClass.TOTAL,
-        suggested_display_precision=2,
-        value_fn=lambda d: d.battery_discharged_energy,
-    ),
-    APstorageSensorDescription(
-        key="pv_energy_produced",
-        name="Daily PV Energy Produced",
-        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        device_class=SensorDeviceClass.ENERGY,
-        # Daily counter that resets at midnight.
-        state_class=SensorStateClass.TOTAL,
-        suggested_display_precision=2,
-        value_fn=lambda d: d.pv_energy_produced,
-    ),
-    # --- Grid ---
-    # Grid Current entity removed (not available or derivable)
-    APstorageSensorDescription(
-        key="grid_power",
-        name="Grid Power",
-        native_unit_of_measurement=UnitOfPower.WATT,
-        device_class=SensorDeviceClass.POWER,
-        state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda d: d.grid_power,
-    ),
-    APstorageSensorDescription(
-        key="grid_frequency",
-        name="Grid Frequency",
-        native_unit_of_measurement=UnitOfFrequency.HERTZ,
-        device_class=SensorDeviceClass.FREQUENCY,
-        state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=2,
-        value_fn=lambda d: d.grid_frequency if d.grid_frequency is not None else 50,
-    ),
-    # --- PV / Solar ---
-    APstorageSensorDescription(
-        key="pv_power",
-        name="PV Power",
-        native_unit_of_measurement=UnitOfPower.WATT,
-        device_class=SensorDeviceClass.POWER,
-        state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda d: d.pv_power,
-    ),
-    # --- Load / Output ---
-    APstorageSensorDescription(
-        key="load_power",
-        name="Load Power",
-        native_unit_of_measurement=UnitOfPower.WATT,
-        device_class=SensorDeviceClass.POWER,
-        state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda d: d.load_power,
-    ),
-    # --- System ---
-    APstorageSensorDescription(
-        key="system_state",
-        name="System Mode",
-        device_class=None,
-        state_class=None,
-        value_fn=lambda d: _format_system_state(d.system_state),
-    ),
+    _power("battery_charging_power", "Battery Charging Power", lambda d: d.battery_charging_power),
+    _power("battery_power_net", "Battery Power", lambda d: d.signed_battery_power),
+    _daily_energy("battery_charged_energy", "Daily Charged Energy", lambda d: d.battery_charged_energy),
+    _daily_energy("battery_discharged_energy", "Daily Discharged Energy", lambda d: d.battery_discharged_energy),
     APstorageSensorDescription(
         key="battery_flow_state",
         name="Battery Flow State",
-        device_class=None,
-        state_class=None,
+        device_class=SensorDeviceClass.ENUM,
+        options=["Charging", "Discharging", "Holding"],
         value_fn=lambda d: d.battery_flow_state,
     ),
     APstorageSensorDescription(
-        key="co2_reduction",
-        name="CO2 Reduction",
-        native_unit_of_measurement=UnitOfMass.KILOGRAMS,
-        device_class=SensorDeviceClass.WEIGHT,
-        state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=2,
-        value_fn=lambda d: d.co2_reduction,
+        key="battery_capacity",
+        name="Battery Capacity",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY_STORAGE,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda d: d.battery_capacity,
     ),
+    APstorageSensorDescription(
+        key="min_soc",
+        name="Minimum SOC",
+        native_unit_of_measurement=PERCENTAGE,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        icon="mdi:battery-low",
+        value_fn=lambda d: d.min_soc,
+    ),
+    APstorageSensorDescription(
+        key="backup_soc_level",
+        name="Backup SOC Level",
+        native_unit_of_measurement=PERCENTAGE,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        icon="mdi:battery-lock",
+        value_fn=lambda d: d.backup_soc,
+    ),
+    # --- PV ---
+    _power("pv_power", "PV Power", lambda d: d.pv_power),
+    _daily_energy("pv_energy_produced", "Daily PV Energy Produced", lambda d: d.pv_energy_produced),
+    # --- Load ---
+    _power("load_power", "Load Power", lambda d: d.load_power),
+    _daily_energy("total_consumed_daily", "Daily Total Consumed", lambda d: d.total_consumed_daily),
+    # --- Grid ---
+    _power("grid_power", "Grid Power", lambda d: d.grid_power),
+    _power("grid_import_power", "Grid Import Power", lambda d: d.grid_import_power),
+    _power("grid_export_power", "Grid Export Power", lambda d: d.grid_export_power),
+    _daily_energy("grid_imported_energy", "Daily Grid Import", lambda d: d.grid_imported_energy),
+    _daily_energy("grid_exported_energy", "Daily Grid Export", lambda d: d.grid_exported_energy),
+    APstorageSensorDescription(
+        key="grid_status",
+        name="Grid Status",
+        device_class=SensorDeviceClass.ENUM,
+        options=["On-grid", "Off-grid"],
+        value_fn=lambda d: d.grid_status,
+    ),
+    _power(
+        "generator_power",
+        "Generator Power",
+        lambda d: d.generator_power,
+        entity_registry_enabled_default=False,
+    ),
+    # --- Lifetime ---
     APstorageSensorDescription(
         key="total_produced",
         name="Total Produced",
@@ -188,15 +171,35 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         value_fn=lambda d: d.total_consumed,
     ),
     APstorageSensorDescription(
-        key="total_consumed_daily",
-        name="Daily Total Consumed",
-        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        device_class=SensorDeviceClass.ENERGY,
-        # Daily counter that resets at midnight.
-        state_class=SensorStateClass.TOTAL,
+        key="co2_reduction",
+        name="CO2 Reduction",
+        native_unit_of_measurement=UnitOfMass.KILOGRAMS,
+        device_class=SensorDeviceClass.WEIGHT,
+        state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=2,
-        value_fn=lambda d: d.total_consumed_daily,
+        value_fn=lambda d: d.co2_reduction,
     ),
+    # --- Mode / status ---
+    APstorageSensorDescription(
+        key="system_state",
+        name="System Mode",
+        value_fn=lambda d: _format_system_mode(d.system_mode),
+    ),
+    APstorageSensorDescription(
+        key="price_area",
+        name="Price Area",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        icon="mdi:map-marker",
+        value_fn=lambda d: d.price_area,
+    ),
+    APstorageSensorDescription(
+        key="buzzer_alarm",
+        name="Buzzer Alarm",
+        device_class=SensorDeviceClass.ENUM,
+        options=["Active", "None"],
+        value_fn=lambda d: None if d.buzzer_alarm is None else ("Active" if d.buzzer_alarm else "None"),
+    ),
+    # --- Device ---
     APstorageSensorDescription(
         key="pcs_firmware_version_1",
         name="PCS Firmware 1",
@@ -216,55 +219,115 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
         value_fn=lambda d: d.pcs_firmware_version_3,
     ),
     APstorageSensorDescription(
-        key="ble_connection",
-        name="BLE Connection",
+        key="comm_firmware_version",
+        name="Communication Module Firmware",
         entity_category=EntityCategory.DIAGNOSTIC,
-        entity_registry_enabled_default=False,
-        value_fn=lambda d: None,
+        value_fn=lambda d: d.comm_firmware_version,
     ),
     APstorageSensorDescription(
-        key="ble_write_mode",
-        name="BLE Write Mode",
+        key="wifi_ssid",
+        name="Wi-Fi Network",
         entity_category=EntityCategory.DIAGNOSTIC,
+        icon="mdi:wifi",
         entity_registry_enabled_default=False,
-        value_fn=lambda d: None,
+        value_fn=lambda d: d.wifi_ssid,
     ),
     APstorageSensorDescription(
-        key="ble_codec_mtu",
-        name="BLE Codec MTU",
+        key="wifi_rssi",
+        name="Wi-Fi Signal",
+        native_unit_of_measurement=SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
+        device_class=SensorDeviceClass.SIGNAL_STRENGTH,
+        state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
-        value_fn=lambda d: None,
+        value_fn=lambda d: d.wifi_rssi,
     ),
     APstorageSensorDescription(
-        key="entity_values_source",
-        name="Entity Values Source",
+        key="wifi_ip",
+        name="Wi-Fi IP Address",
         entity_category=EntityCategory.DIAGNOSTIC,
+        icon="mdi:ip-network",
         entity_registry_enabled_default=False,
-        value_fn=lambda d: None,
+        value_fn=lambda d: d.wifi_ip,
     ),
     APstorageSensorDescription(
+        key="cloud_connection",
+        name="Cloud Connection",
+        device_class=SensorDeviceClass.ENUM,
+        options=["Connected", "Disconnected"],
+        entity_category=EntityCategory.DIAGNOSTIC,
+        icon="mdi:cloud-outline",
+        value_fn=lambda d: None if d.cloud_connected is None else ("Connected" if d.cloud_connected else "Disconnected"),
+    ),
+)
+
+
+@dataclass(frozen=True, kw_only=True)
+class APstorageDiagnosticDescription(SensorEntityDescription):
+    """Describes a sensor fed from the coordinator itself (always available)."""
+
+    value_fn: Callable[[APstorageCoordinator], Any]
+    attrs_fn: Callable[[APstorageCoordinator], dict[str, Any] | None] = lambda c: None
+
+
+def _payload_read_state(coordinator: APstorageCoordinator) -> str:
+    read = coordinator.last_system_mode_payload_read
+    if read is None:
+        return "Unread"
+    return "Read" if read.get("ok") else "Failed"
+
+
+DIAGNOSTIC_DESCRIPTIONS: tuple[APstorageDiagnosticDescription, ...] = (
+    APstorageDiagnosticDescription(
         key="system_mode_payload_read",
         name="System Mode Payload",
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda d: None,
+        icon="mdi:file-search-outline",
+        value_fn=_payload_read_state,
+        attrs_fn=lambda c: (
+            None
+            if c.last_system_mode_payload_read is None
+            else {
+                "last_read_ok": c.last_system_mode_payload_read.get("ok"),
+                "last_read_code": c.last_system_mode_payload_read.get("code"),
+                "last_read_message": c.last_system_mode_payload_read.get("message"),
+                "last_read_storage_id": c.last_system_mode_payload_read.get("storage_id"),
+                "last_read_at": c.last_system_mode_payload_read.get("at"),
+                "payload": c.last_system_mode_payload_read.get("payload"),
+            }
+        ),
     ),
-    APstorageSensorDescription(
+    APstorageDiagnosticDescription(
         key="last_update",
         name="Last Update",
-        entity_category=EntityCategory.DIAGNOSTIC,
         device_class=SensorDeviceClass.TIMESTAMP,
+        entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
-        value_fn=lambda d: None,
+        value_fn=lambda c: c.last_successful_poll_at,
     ),
-    APstorageSensorDescription(
+    APstorageDiagnosticDescription(
         key="connection_quality",
         name="Connection Quality",
         native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
-        state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda d: None,
+        icon="mdi:bluetooth-connect",
+        value_fn=lambda c: c.connection_quality,
+        attrs_fn=lambda c: {
+            "total_polls": c.total_poll_attempts,
+            "successful_polls": c.successful_poll_count,
+            "consecutive_failures": c.consecutive_poll_failures,
+            "last_error": c.last_poll_error,
+        },
+    ),
+    APstorageDiagnosticDescription(
+        key="ble_att_mtu",
+        name="BLE MTU",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        icon="mdi:unfold-more-horizontal",
+        value_fn=lambda c: c.ble_att_mtu,
     ),
 )
 
@@ -300,7 +363,7 @@ async def _async_migrate_sensor_unique_ids(hass: HomeAssistant, entry: ConfigEnt
         entity_id = entity_registry.async_get_entity_id("sensor", DOMAIN, unique_id)
         if entity_id:
             entity_registry.async_remove(entity_id)
-            _LOGGER.debug("Removed deprecated alarm sensor entity with unique ID %s", unique_id)
+            _LOGGER.debug("Removed deprecated sensor entity with unique ID %s", unique_id)
 
 
 async def async_setup_entry(
@@ -312,38 +375,38 @@ async def async_setup_entry(
     await _async_migrate_sensor_unique_ids(hass, entry)
     coordinator: APstorageCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    async_add_entities(
-        APstorageSensor(coordinator, entry, description)
-        for description in SENSOR_DESCRIPTIONS
+    entities: list[SensorEntity] = [
+        APstorageSensor(coordinator, entry, description) for description in SENSOR_DESCRIPTIONS
+    ]
+    entities.extend(
+        APstorageDiagnosticSensor(coordinator, entry, description)
+        for description in DIAGNOSTIC_DESCRIPTIONS
     )
+    async_add_entities(entities)
 
 
-class APstorageSensor(
-    CoordinatorEntity[APstorageCoordinator],
-    SensorEntity,
-):
-    """Represents a single sensor on the APstorage ELT-12 PCS."""
+class _APstorageSensorBase(CoordinatorEntity[APstorageCoordinator], SensorEntity):
+    """Common device info and unique ID."""
 
-    entity_description: APstorageSensorDescription
     _attr_has_entity_name = True
 
     def __init__(
         self,
         coordinator: APstorageCoordinator,
         entry: ConfigEntry,
-        description: APstorageSensorDescription,
+        description: SensorEntityDescription,
     ) -> None:
         super().__init__(coordinator)
         self.entity_description = description
         self._address: str = entry.data[CONF_ADDRESS]
         self._device_name = entry.title
         self._model = get_model(entry.data.get(CONF_BLE_NAME))
-        # Unique ID: domain + MAC + sensor key so entities survive renames.
+        # Unique ID: MAC + sensor key so entities survive renames.
         self._attr_unique_id = f"{self._address}-{description.key}"
 
     @property
     def device_info(self) -> DeviceInfo:
-        """Return device metadata, including version information when available."""
+        """Return device metadata, including firmware versions when known."""
         data = self.coordinator.data
         return DeviceInfo(
             identifiers={(DOMAIN, self._address)},
@@ -351,158 +414,57 @@ class APstorageSensor(
             name=self._device_name,
             manufacturer=MANUFACTURER,
             model=self._model,
-            sw_version=(
-                data.pcs_firmware_version
-                if data and data.pcs_firmware_version is not None
-                else data.pcs_software_version if data else None
-            ),
-            hw_version=data.pcs_hardware_version if data else None,
+            serial_number=data.device_id if data else None,
+            sw_version=data.pcs_firmware_version.replace("_", " / ")
+            if data and data.pcs_firmware_version
+            else None,
         )
+
+
+class APstorageSensor(_APstorageSensorBase):
+    """A value reported by the PCS."""
+
+    entity_description: APstorageSensorDescription
 
     @property
     def available(self) -> bool:
-        """Return True when the BLE device is reachable.
-
-        ActiveBluetoothDataUpdateCoordinator does not expose
-        last_update_success (that is a DataUpdateCoordinator concept).
-        Use the coordinator's own .available property instead, which is
-        maintained by PassiveBluetoothDataUpdateCoordinator based on
-        whether the device is still advertising.
-        """
-        if self.entity_description.key in {
-            "ble_connection",
-            "ble_write_mode",
-            "ble_codec_mtu",
-            "entity_values_source",
-            "system_mode_payload_read",
-            "last_update",
-            "connection_quality",
-        }:
-            return True
         return self.coordinator.runtime_available
 
     @property
     def native_value(self) -> Any:
-        """Return the current sensor value."""
-        if self.entity_description.key == "ble_connection":
-            return self.coordinator.ble_connection_mode
-
-        if self.entity_description.key == "ble_write_mode":
-            return self.coordinator.ble_write_mode
-
-        if self.entity_description.key == "ble_codec_mtu":
-            return self.coordinator.ble_codec_mtu
-
-        if self.entity_description.key == "entity_values_source":
-            return self.coordinator.entity_values_source
-
-        if self.entity_description.key == "system_mode_payload_read":
-            last_read = self.coordinator.last_system_mode_payload_read
-            if last_read is None:
-                return "Unread"
-            return "Read" if bool(last_read.get("ok", False)) else "Failed"
-
-        if self.entity_description.key == "last_update":
-            return self.coordinator._last_successful_poll_at
-
-        if self.entity_description.key == "connection_quality":
-            return self.coordinator.connection_quality
-
         if self.coordinator.data is None:
             return None
         return self.entity_description.value_fn(self.coordinator.data)
 
     @property
     def icon(self) -> str | None:
-        """Return a dynamic icon for selected sensors."""
-        value = self.native_value
-        key = self.entity_description.key
-        if key == "battery_flow_state":
+        if self.entity_description.key == "battery_flow_state":
+            value = self.native_value
             if value == "Charging":
                 return "mdi:battery-arrow-up"
             if value == "Discharging":
                 return "mdi:battery-arrow-down"
             return "mdi:battery"
-        if key == "ble_connection":
-            return "mdi:bluetooth-connect" if value == "Persistent" else "mdi:bluetooth"
-        if key == "ble_write_mode":
-            if value == "With Response":
-                return "mdi:transfer-up"
-            if value == "Without Response":
-                return "mdi:transfer-right"
-            return "mdi:sync"
-        if key == "ble_codec_mtu":
-            return "mdi:unfold-more-horizontal"
-        if key == "entity_values_source":
-            if value == "Live":
-                return "mdi:database-check"
-            if value == "Cached":
-                return "mdi:database-clock"
-            return "mdi:database-question"
-        if key == "last_update":
-            return "mdi:clock-outline"
-        if key == "connection_quality":
-            if value is None:
-                return "mdi:signal-off"
-            if value >= 90:
-                return "mdi:signal-cellular-outline"
-            if value >= 70:
-                return "mdi:signal-cellular-2"
-            if value >= 50:
-                return "mdi:signal-cellular-1"
-            return "mdi:signal-cellular-0"
-        return None
+        if self.entity_description.key == "grid_status":
+            return "mdi:transmission-tower" if self.native_value == "On-grid" else "mdi:transmission-tower-off"
+        if self.entity_description.key == "buzzer_alarm":
+            return "mdi:bell-alert" if self.native_value == "Active" else "mdi:bell-outline"
+        return self.entity_description.icon
+
+
+class APstorageDiagnosticSensor(_APstorageSensorBase):
+    """Integration diagnostics; available even when the PCS is not."""
+
+    entity_description: APstorageDiagnosticDescription
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    @property
+    def native_value(self) -> Any:
+        return self.entity_description.value_fn(self.coordinator)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
-        """Return optional extra attributes for selected sensors."""
-        if self.entity_description.key == "system_mode_payload_read":
-            read_info = self.coordinator.last_system_mode_payload_read
-            if read_info is None:
-                return None
-            return {
-                "last_read_ok": read_info.get("ok"),
-                "last_read_code": read_info.get("code"),
-                "last_read_message": read_info.get("message"),
-                "last_read_storage_id": read_info.get("storage_id"),
-                "last_read_at": read_info.get("at"),
-                "payload": read_info.get("payload"),
-            }
-
-        if self.entity_description.key == "connection_quality":
-            return {
-                "total_polls": self.coordinator._total_poll_attempts,
-                "successful_polls": self.coordinator._successful_poll_count,
-                "consecutive_failures": self.coordinator._consecutive_poll_failures,
-            }
-
-        if self.entity_description.key == "ble_write_mode":
-            raw = self.coordinator._soc_client.write_mode_raw
-            return {
-                "write_with_response": raw,
-            }
-
-        if self.entity_description.key == "ble_codec_mtu":
-            return {
-                "codec_mtu": self.coordinator.ble_codec_mtu,
-                "att_mtu": self.coordinator.ble_att_mtu,
-                "att_payload_mtu": (
-                    self.coordinator.ble_att_mtu - 3
-                    if self.coordinator.ble_att_mtu is not None
-                    else None
-                ),
-            }
-
-        if self.entity_description.key in {
-            "battery_charged_energy",
-            "battery_discharged_energy",
-        }:
-            now = dt_util.now()
-            last_reset = now.replace(hour=0, minute=0, second=0, microsecond=0)
-            return {"last_reset": last_reset.isoformat()}
-        return None
-
-    @callback
-    def _handle_coordinator_update(self) -> None:
-        """Handle updated data from the coordinator."""
-        self.async_write_ha_state()
+        return self.entity_description.attrs_fn(self.coordinator)
