@@ -1,28 +1,24 @@
 set_system_mode:
   name: Set System Mode
-  description: Set APstorage system mode over BLE.
+  description: >-
+    Set the APstorage system mode over BLE. Peak Valley, Manual Control and
+    Peak Shaving are not offered; set them from the EMA app if needed.
   fields:
     mode:
       name: Mode
-      description: "Target mode code (0-6) or label (e.g. Advanced, Backup power supply)."
+      description: "Mode code (1, 3, 4, 6) or name (e.g. Time-Based Control, AI Mode)."
       required: true
       example: 3
       selector:
         select:
           options:
-            - label: "0 - Peak Valley"
-              value: "0"
             - label: "1 - Self-Consumption"
               value: "1"
-            - label: "2 - Manual Control"
-              value: "2"
-            - label: "3 - Advanced"
+            - label: "3 - Time-Based Control"
               value: "3"
-            - label: "4 - Backup power supply"
+            - label: "4 - Backup Power"
               value: "4"
-            - label: "5 - Peak-Shaving"
-              value: "5"
-            - label: "6 - Intelligent"
+            - label: "6 - AI Mode"
               value: "6"
     entry_id:
       name: Config Entry ID
@@ -76,9 +72,9 @@ probe_version_once:
         text:
 
 set_advanced_schedule:
-  name: Set Advanced Schedule
+  name: Set Time-Based Control Schedule
   description: >-
-    Set Advanced mode (mode 3) over BLE, with weekly plans (schedule) or
+    Set Time-Based Control mode (mode 3) over BLE, with weekly plans (schedule) or
     daily peak/valley windows.
   fields:
     schedule:
@@ -318,7 +314,7 @@ set_valley_charge:
 
 set_peak_power:
   name: Set Peak Power
-  description: Set peak-shaving power over BLE via setsysmode (mode 5 only).
+  description: Set the Peak Shaving power limit over BLE via setsysmode (only while the PCS is in Peak Shaving mode, mode 5).
   fields:
     peak_power:
       name: Peak Power

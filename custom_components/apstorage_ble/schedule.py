@@ -18,7 +18,7 @@ DISCHARGE = "Discharge"
 
 ALL_DAYS = frozenset(range(7))  # Python weekdays, 0 = Monday
 
-# Modes in which the PCS follows the schedule: 0 peak-valley, 3 advanced
+# Modes in which the PCS follows the schedule: 0 Peak Valley, 3 Time-Based Control
 # (mixed), 6 AI (the schedule holds the AI's plan).
 SCHEDULED_MODES = frozenset({"0", "3", "6"})
 

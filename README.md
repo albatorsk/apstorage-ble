@@ -92,19 +92,18 @@ The integration creates the following entities.
 #### Schedule (calendar)
 - Schedule (`calendar` entity): the charge (valley) and discharge (peak) windows the PCS follows, as calendar events.
     - Shows daily `peakTime`/`valleyTime` windows and weekly plans (`schedule`), including the plan the PCS holds in AI mode.
-    - Empty in modes that don't use a schedule (self-consumption, manual, backup, peak shaving).
+    - Empty in modes that don't use a schedule (Self-Consumption, Manual Control, Backup Power, Peak Shaving).
     - Covers the coming week (and the past day); the state is `on` during a window.
     - Attribute `windows` lists them, e.g. `Charge 02:45-12:15`.
 
 #### Controls
 - System Mode (`select` entity)
-    - Peak Valley
     - Self-Consumption
-    - Manual Control
-    - Advanced
-    - Backup power supply
-    - Peak-Shaving
-    - Intelligent
+    - Time-Based Control
+    - Backup Power
+    - AI Mode
+    - Peak Valley, Manual Control and Peak Shaving are not offered; if the PCS is put in one of them
+      from the EMA app, the System Mode sensor shows its name and the select shows unknown.
 - Backup SOC (`select` entity)
 - Buzzer Mode (`select` entity)
     - Silent
@@ -117,7 +116,7 @@ The integration creates the following entities.
 
 Service:
 - `apstorage_ble.set_system_mode`
-    - `mode`: required (`0..6` or mode label)
+    - `mode`: required: `1` Self-Consumption, `3` Time-Based Control, `4` Backup Power, `6` AI Mode (code or name)
     - `entry_id`: optional (target config entry)
     - `address`: optional (target device MAC)
 - `apstorage_ble.get_system_mode_payload`
@@ -189,7 +188,7 @@ time, let Home Assistant handle the date and send the window to the PCS just bef
    named e.g. *Battery plan*.
 2. Add an event titled **Discharge** (or **Charge**) at the date and time you want.
 3. Create this automation (**Settings → Automations → Create → Edit in YAML**). Five minutes before
-   each event it sends the window to the PCS (Advanced mode); when the event ends it switches the PCS
+   each event it sends the window to the PCS (Time-Based Control mode); when the event ends it switches the PCS
    back to your normal mode.
 
 ```yaml
@@ -231,13 +230,13 @@ actions:
         sequence:
           - action: apstorage_ble.set_system_mode
             data:
-              mode: "6"   # your normal mode; 6 = Intelligent (AI)
+              mode: "6"   # your normal mode; 6 = AI Mode
 ```
 
 Notes:
-- Set `mode` in the last action to the mode you normally run (`0`–`6`, see System Mode above). In AI mode
+- Set `mode` in the last action to the mode you normally run (`1`, `3`, `4` or `6`, see System Mode above). In AI mode
   the AI writes its own plan again once it is back.
-- While the plan is active the PCS runs Advanced mode: self-consumption outside the window.
+- While the plan is active the PCS runs Time-Based Control: self-consumption outside the window.
 - Each event replaces the PCS schedule with its own window, so don't let Charge and Discharge events
   overlap; the later one wins.
 - The integration's **Schedule** calendar shows the window once it has been sent.

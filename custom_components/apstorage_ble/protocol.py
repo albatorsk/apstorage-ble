@@ -10,29 +10,40 @@ from __future__ import annotations
 from typing import Any
 
 
-MODE_CODE_TO_OPTION: dict[str, str] = {
+# Display names for every mode code the PCS reports.
+MODE_NAMES: dict[str, str] = {
     "0": "Peak Valley",
     "1": "Self-Consumption",
     "2": "Manual Control",
-    "3": "Advanced",
-    "4": "Backup power supply",
-    "5": "Peak-Shaving",
-    "6": "Intelligent",
+    "3": "Time-Based Control",
+    "4": "Backup Power",
+    "5": "Peak Shaving",
+    "6": "AI Mode",
 }
+
+# Modes offered by the System Mode select and the set_system_mode action.
+# Peak Valley, Manual Control and Peak Shaving can still be set from the EMA app.
+SELECTABLE_MODE_CODES: tuple[str, ...] = ("1", "3", "4", "6")
+
+MODE_CODE_TO_OPTION: dict[str, str] = {code: MODE_NAMES[code] for code in SELECTABLE_MODE_CODES}
 
 OPTION_TO_MODE_CODE: dict[str, str] = {label: code for code, label in MODE_CODE_TO_OPTION.items()}
 
-# Normalize known legacy spellings/casing to canonical mode codes.
+# Other accepted spellings, including the names used before 2.2.0.
 LEGACY_STATE_TO_CODE: dict[str, str] = {
     "peak valley": "0",
     "self-consumption": "1",
     "self consumption": "1",
     "manual control": "2",
     "advanced": "3",
+    "time-based control": "3",
     "backup power supply": "4",
+    "backup power": "4",
     "peak-shaving": "5",
     "peak shaving": "5",
     "intelligent": "6",
+    "ai mode": "6",
+    "ai": "6",
 }
 
 
@@ -45,8 +56,8 @@ LEGACY_STATE_TO_CODE_NORMALIZED: dict[str, str] = {
     _normalize_label(key): code for key, code in LEGACY_STATE_TO_CODE.items()
 }
 
-# Accept canonical option labels as additional legacy aliases.
-for _code, _label in MODE_CODE_TO_OPTION.items():
+# Accept the display names as aliases too.
+for _code, _label in MODE_NAMES.items():
     LEGACY_STATE_TO_CODE_NORMALIZED[_normalize_label(_label)] = _code
 
 
@@ -61,7 +72,7 @@ def normalize_mode_code(value: Any) -> str | None:
 
     if text.isdigit():
         code = str(int(text))
-        return code if code in MODE_CODE_TO_OPTION else None
+        return code if code in MODE_NAMES else None
 
     try:
         number = float(text)
@@ -70,9 +81,9 @@ def normalize_mode_code(value: Any) -> str | None:
 
     if number is not None and number.is_integer():
         code = str(int(number))
-        return code if code in MODE_CODE_TO_OPTION else None
+        return code if code in MODE_NAMES else None
 
-    if text in MODE_CODE_TO_OPTION:
+    if text in MODE_NAMES:
         return text
 
     lowered = text.lower()
@@ -98,7 +109,7 @@ def mode_name(value: Any) -> str | None:
     code = normalize_mode_code(value)
     if code is None:
         return None
-    return MODE_CODE_TO_OPTION.get(code)
+    return MODE_NAMES.get(code)
 
 
 def supports_peak_power(system_mode: Any) -> bool:

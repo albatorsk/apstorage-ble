@@ -38,9 +38,27 @@ def test_normalize_mode_code_accepts_legacy_labels() -> None:
 
 
 def test_mode_name_maps_known_values() -> None:
-    assert mode_name("5") == MODE_CODE_TO_OPTION["5"]
-    assert mode_name("peak shaving") == MODE_CODE_TO_OPTION["5"]
+    assert mode_name("5") == "Peak Shaving"
+    assert mode_name("peak-shaving") == "Peak Shaving"
+    assert mode_name("6") == "AI Mode"
+    assert mode_name("3") == "Time-Based Control"
+    assert mode_name("4") == "Backup Power"
     assert mode_name("unknown") is None
+
+
+def test_selectable_modes() -> None:
+    assert MODE_CODE_TO_OPTION == {
+        "1": "Self-Consumption",
+        "3": "Time-Based Control",
+        "4": "Backup Power",
+        "6": "AI Mode",
+    }
+
+
+def test_old_and_new_names_both_accepted() -> None:
+    for name, code in (("Intelligent", "6"), ("AI Mode", "6"), ("Advanced", "3"),
+                       ("Time-Based Control", "3"), ("Backup power supply", "4"), ("Backup Power", "4")):
+        assert normalize_mode_code(name) == code
 
 
 def test_resolve_mode_prefers_system_mode_then_system_state() -> None:

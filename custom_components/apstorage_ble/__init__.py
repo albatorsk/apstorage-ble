@@ -31,6 +31,7 @@ from .const import (
     POLL_INTERVAL_SECONDS,
 )
 from .coordinator import APstorageCoordinator
+from .protocol import MODE_NAMES, SELECTABLE_MODE_CODES, normalize_mode_code
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -92,17 +93,6 @@ ATTR_ENTRY_ID = "entry_id"
 ATTR_ADDRESS = "address"
 SYSTEM_MODE_PAYLOAD_EVENT = f"{DOMAIN}_system_mode_payload"
 VERSION_PROBE_EVENT = f"{DOMAIN}_version_probe"
-
-_MODE_LABEL_TO_CODE: dict[str, int] = {
-    "peak valley": 0,
-    "self-consumption": 1,
-    "manual control": 2,
-    "advanced": 3,
-    "backup power supply": 4,
-    "peak-shaving": 5,
-    "intelligent": 6,
-}
-
 
 async def _async_preload_platform_modules(
     hass: HomeAssistant,
@@ -348,7 +338,7 @@ def _normalize_weekdays(value: Any, field_name: str) -> list[int]:
 
 
 def _normalize_schedule_payload(value: Any) -> list[dict[str, Any]]:
-    """Normalize Advanced weekly plans to the PCS format {W, peakTime, valleyTime}.
+    """Normalize Time-Based Control weekly plans to the PCS format {W, peakTime, valleyTime}.
 
     Each plan is {weekdays, charge, discharge} or the PCS-native
     {W, valleyTime, peakTime}. Charge windows are valley windows, discharge
@@ -407,24 +397,12 @@ def _normalize_schedule_payload(value: Any) -> list[dict[str, Any]]:
 
 
 def _parse_mode(value: Any) -> int:
-    """Parse a mode value from int/code or human label."""
-    if isinstance(value, int):
-        mode = value
-    else:
-        text = str(value).strip()
-        if text.isdigit():
-            mode = int(text)
-        else:
-            label_key = text.lower()
-            if label_key not in _MODE_LABEL_TO_CODE:
-                raise HomeAssistantError(
-                    f"Invalid mode {value!r}. Use 0-6 or a known label."
-                )
-            mode = _MODE_LABEL_TO_CODE[label_key]
-
-    if mode < 0 or mode > 6:
-        raise HomeAssistantError("mode must be in range 0..6")
-    return mode
+    """Parse a selectable mode from its code or name (old names are accepted too)."""
+    code = normalize_mode_code(value)
+    if code not in SELECTABLE_MODE_CODES:
+        options = ", ".join(f"{c} ({MODE_NAMES[c]})" for c in SELECTABLE_MODE_CODES)
+        raise HomeAssistantError(f"Invalid mode {value!r}. Use one of: {options}.")
+    return int(code)
 
 
 def _parse_buzzer_mode(value: Any) -> int:

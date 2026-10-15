@@ -32,16 +32,16 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import CONF_BLE_NAME, DOMAIN, MANUFACTURER, get_model
 from .coordinator import APstorageCoordinator
 from .models import PCSData
-from .protocol import MODE_CODE_TO_OPTION
+from .protocol import MODE_NAMES
 
 _LOGGER = logging.getLogger(__name__)
 
 
 def _format_system_mode(value: Any) -> Any:
-    """Return the label for a mode code, or the raw value."""
+    """Return the name for a mode code (including modes the select doesn't offer), or the raw value."""
     if value is None:
         return None
-    return MODE_CODE_TO_OPTION.get(str(value), value)
+    return MODE_NAMES.get(str(value), value)
 
 
 @dataclass(frozen=True, kw_only=True)

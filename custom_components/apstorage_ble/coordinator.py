@@ -279,7 +279,7 @@ class APstorageCoordinator(DataUpdateCoordinator[PCSData]):
                 raise PCSDeviceError(
                     "setsysmode",
                     "not_applicable",
-                    "peak power can only be changed in mode 5 (Peak-Shaving)",
+                    "peak power can only be changed in mode 5 (Peak Shaving)",
                 )
             payload["peakPower"] = str(int(peak_power))
 
