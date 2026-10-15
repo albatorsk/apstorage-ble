@@ -89,6 +89,13 @@ The integration creates the following entities.
 - System Mode Payload (last `getsysmode` read)
 - Last Update, Connection Quality, BLE MTU (disabled by default)
 
+#### Schedule (calendar)
+- Schedule (`calendar` entity): the charge (valley) and discharge (peak) windows the PCS follows, as calendar events.
+    - Shows daily `peakTime`/`valleyTime` windows and weekly plans (`schedule`), including the plan the PCS holds in AI mode.
+    - Empty in modes that don't use a schedule (self-consumption, manual, backup, peak shaving).
+    - Covers the coming week (and the past day); the state is `on` during a window.
+    - Attribute `windows` lists them, e.g. `Charge 02:45-12:15`.
+
 #### Controls
 - System Mode (`select` entity)
     - Peak Valley
@@ -222,6 +229,8 @@ custom_components/apstorage_ble/
 ├── pcs_client.py      # BLE client: BluFi framing, AES, request/reply
 ├── models.py          # PCSData and reply parsing
 ├── protocol.py        # Operating-mode helpers
+├── schedule.py        # Charge/discharge windows from getsysmode
+├── calendar.py        # Schedule calendar entity
 ├── sensor.py / select.py / switch.py / number.py / button.py
 ├── strings.json       # UI strings
 ├── services.yaml      # Service definitions

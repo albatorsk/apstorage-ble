@@ -62,6 +62,7 @@ _REMOVED_ENTITY_KEYS = {
 }
 
 PLATFORMS: list[Platform] = [
+    Platform.CALENDAR,
     Platform.SENSOR,
     Platform.SELECT,
     Platform.BUTTON,
