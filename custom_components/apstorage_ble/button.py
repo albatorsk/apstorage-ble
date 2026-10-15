@@ -34,6 +34,7 @@ READ_SYSTEM_MODE_PAYLOAD_BUTTON = ButtonEntityDescription(
     name="Read System Mode Payload",
     icon="mdi:file-search-outline",
     entity_category=EntityCategory.DIAGNOSTIC,
+    entity_registry_enabled_default=False,
 )
 
 async def async_setup_entry(

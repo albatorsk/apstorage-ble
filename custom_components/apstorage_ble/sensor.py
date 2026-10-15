@@ -292,6 +292,7 @@ DIAGNOSTIC_DESCRIPTIONS: tuple[APstorageDiagnosticDescription, ...] = (
         key="system_mode_payload_read",
         name="System Mode Payload",
         entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
         icon="mdi:file-search-outline",
         value_fn=_payload_read_state,
         attrs_fn=lambda c: (

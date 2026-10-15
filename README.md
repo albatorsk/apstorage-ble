@@ -86,7 +86,7 @@ The integration creates the following entities.
 - Cloud Connection
 - Price Area
 - Wi-Fi Network, Wi-Fi Signal, Wi-Fi IP Address (disabled by default)
-- System Mode Payload (last `getsysmode` read)
+- System Mode Payload (last `getsysmode` read) and the Read System Mode Payload button (disabled by default)
 - Last Update, Connection Quality, BLE MTU (disabled by default)
 
 #### Schedule (calendar)
