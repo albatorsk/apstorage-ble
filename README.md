@@ -133,9 +133,26 @@ Service:
     - `entry_id`: optional (target config entry)
     - `address`: optional (target device MAC)
 - `apstorage_ble.set_advanced_schedule`
-    - `schedule`: optional list of windows with `startTime`, `endTime`, and `mode` (`charge` or `discharge`)
-    - `peak_time`: optional legacy peak/discharge ranges (`HH:MM-HH:MM` or `HHMMSSHHMMSS`, max 5)
-    - `valley_time`: optional legacy valley/charge ranges (`HH:MM-HH:MM` or `HHMMSSHHMMSS`, max 5)
+    - `schedule`: optional list of weekly plans, each with
+        - `weekdays`: `mon`..`sun` or `1`..`7` (1 = Monday); each weekday in at most one plan
+        - `charge`: charge (valley) windows, `HH:MM-HH:MM` or `HHMMSSHHMMSS`, max 5
+        - `discharge`: discharge (peak) windows, same format, max 5
+        - windows within a plan must not overlap; the EMA app uses 15-minute steps
+        - the PCS-native form `{W, valleyTime, peakTime}` is accepted too
+    - `peak_time`: optional daily peak/discharge ranges (`HH:MM-HH:MM` or `HHMMSSHHMMSS`, max 5)
+    - `valley_time`: optional daily valley/charge ranges (`HH:MM-HH:MM` or `HHMMSSHHMMSS`, max 5)
+    - use either `schedule` or `peak_time`/`valley_time`
+    - example:
+      ```yaml
+      action: apstorage_ble.set_advanced_schedule
+      data:
+        schedule:
+          - weekdays: [mon, tue, wed, thu, fri]
+            charge: ["01:00-05:00"]
+            discharge: ["17:00-21:00"]
+          - weekdays: [sat, sun]
+            charge: ["10:00-14:00"]
+      ```
     - `entry_id`: optional (target config entry)
     - `address`: optional (target device MAC)
 - `apstorage_ble.set_buzzer_mode`
@@ -160,6 +177,70 @@ Service:
     - `peak_power`: required (`100..50000`, mode 5 only)
     - `entry_id`: optional (target config entry)
     - `address`: optional (target device MAC)
+
+---
+
+## Plan a one-off charge or discharge
+
+The PCS schedule repeats by weekday; it has no dates. To charge or discharge at a specific date and
+time, let Home Assistant handle the date and send the window to the PCS just before it starts.
+
+1. Add a calendar you can edit: **Settings → Devices & Services → Add Integration → Local Calendar**,
+   named e.g. *Battery plan*.
+2. Add an event titled **Discharge** (or **Charge**) at the date and time you want.
+3. Create this automation (**Settings → Automations → Create → Edit in YAML**). Five minutes before
+   each event it sends the window to the PCS (Advanced mode); when the event ends it switches the PCS
+   back to your normal mode.
+
+```yaml
+alias: Battery plan
+triggers:
+  - trigger: calendar
+    event: start
+    entity_id: calendar.battery_plan
+    offset: "-0:05:00"
+    id: start
+  - trigger: calendar
+    event: end
+    entity_id: calendar.battery_plan
+    id: end
+conditions:
+  - condition: template
+    value_template: "{{ trigger.calendar_event.summary in ['Charge', 'Discharge'] }}"
+actions:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: start
+        sequence:
+          - variables:
+              weekday: "{{ as_datetime(trigger.calendar_event.start).isoweekday() }}"
+              window: >-
+                {{ as_datetime(trigger.calendar_event.start).strftime('%H:%M') }}-{{
+                as_datetime(trigger.calendar_event.end).strftime('%H:%M') }}
+              kind: "{{ trigger.calendar_event.summary | lower }}"
+          - action: apstorage_ble.set_advanced_schedule
+            data:
+              schedule:
+                - weekdays: ["{{ weekday }}"]
+                  charge: "{{ [window] if kind == 'charge' else [] }}"
+                  discharge: "{{ [window] if kind == 'discharge' else [] }}"
+      - conditions:
+          - condition: trigger
+            id: end
+        sequence:
+          - action: apstorage_ble.set_system_mode
+            data:
+              mode: "6"   # your normal mode; 6 = Intelligent (AI)
+```
+
+Notes:
+- Set `mode` in the last action to the mode you normally run (`0`–`6`, see System Mode above). In AI mode
+  the AI writes its own plan again once it is back.
+- While the plan is active the PCS runs Advanced mode: self-consumption outside the window.
+- Each event replaces the PCS schedule with its own window, so don't let Charge and Discharge events
+  overlap; the later one wins.
+- The integration's **Schedule** calendar shows the window once it has been sent.
 
 ---
 

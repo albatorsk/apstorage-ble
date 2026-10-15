@@ -93,3 +93,29 @@ def test_several_plans_and_windows() -> None:
     events = _week(SCHEDULE.active_windows(sysmode))
     assert len(events) == 5 * 3 + 2 * 1
     assert {e.start.weekday() for e in events if e.start.hour == 2} == {5, 6}
+
+
+def test_weekly_plans_as_written_by_set_advanced_schedule() -> None:
+    # setsysmode payload produced by set_advanced_schedule with
+    # [{weekdays: [mon..fri], charge: ["01:00-05:00"], discharge: ["17:00-21:00"]},
+    #  {weekdays: [sat, sun], charge: ["22:00-06:00"]}].
+    sysmode = {
+        "mode": "3", "peakTime": [], "valleyTime": [],
+        "schedule": [
+            {"W": [1, 2, 3, 4, 5], "peakTime": ["170000210000"], "valleyTime": ["010000050000"]},
+            {"W": [6, 7], "peakTime": [], "valleyTime": ["220000060000"]},
+        ],
+    }
+    windows = SCHEDULE.active_windows(sysmode)
+    assert sorted(SCHEDULE.format_window(w) for w in windows) == [
+        "Charge 01:00-05:00", "Charge 22:00-06:00", "Discharge 17:00-21:00",
+    ]
+    events = _week(windows)
+    # Weekdays, plus last Sunday's overnight charge running into Monday.
+    assert len(events) == 5 + 5 + 2 + 1
+    assert events[0].start == datetime(2026, 10, 11, 22, tzinfo=UTC)
+    weekend = [e for e in events[1:] if e.start.weekday() >= 5]
+    assert [(e.kind, e.start, e.end) for e in weekend] == [
+        (CHARGE, datetime(2026, 10, 17, 22, tzinfo=UTC), datetime(2026, 10, 18, 6, tzinfo=UTC)),
+        (CHARGE, datetime(2026, 10, 18, 22, tzinfo=UTC), datetime(2026, 10, 19, 6, tzinfo=UTC)),
+    ]

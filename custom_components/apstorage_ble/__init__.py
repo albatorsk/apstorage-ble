@@ -144,21 +144,7 @@ SERVICE_PROBE_VERSION_ONCE_SCHEMA = vol.Schema(
 
 SERVICE_SET_ADVANCED_SCHEDULE_SCHEMA = vol.Schema(
     {
-        vol.Optional(ATTR_SCHEDULE): vol.Any(
-            cv.string,
-            [
-                {
-                    vol.Required("startTime"): cv.string,
-                    vol.Required("endTime"): cv.string,
-                    vol.Required("mode"): cv.string,
-                }
-            ],
-            {
-                vol.Required("startTime"): cv.string,
-                vol.Required("endTime"): cv.string,
-                vol.Required("mode"): cv.string,
-            },
-        ),
+        vol.Optional(ATTR_SCHEDULE): vol.Any(cv.string, [dict], dict),
         vol.Optional(ATTR_PEAK_TIME): vol.Any(cv.string, [cv.string]),
         vol.Optional(ATTR_VALLEY_TIME): vol.Any(cv.string, [cv.string]),
         vol.Optional(ATTR_ENTRY_ID): cv.string,
@@ -224,7 +210,6 @@ SERVICE_SET_PEAK_POWER_SCHEMA = vol.Schema(
 
 _RANGE_COMPACT_RE = re.compile(r"^(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$")
 _RANGE_HHMM_RE = re.compile(r"^(\d{2}):(\d{2})-(\d{2}):(\d{2})$")
-_SCHEDULE_TIME_RE = re.compile(r"^(\d{2}):(\d{2})(?::(\d{2}))?$")
 
 
 def _parse_hh_mm(hour: str, minute: str) -> tuple[int, int]:
@@ -326,8 +311,50 @@ def _validate_no_overlap(peak_ranges: list[str], valley_ranges: list[str]) -> No
         prev_end = max(prev_end, seg_end)
 
 
-def _normalize_schedule_payload(value: Any) -> list[Any]:
-    """Normalize Advanced schedule windows from the action payload."""
+_WEEKDAY_NAMES: dict[str, int] = {
+    name: index
+    for index, names in enumerate(
+        (
+            ("mon", "monday"),
+            ("tue", "tues", "tuesday"),
+            ("wed", "wednesday"),
+            ("thu", "thur", "thurs", "thursday"),
+            ("fri", "friday"),
+            ("sat", "saturday"),
+            ("sun", "sunday"),
+        ),
+        start=1,
+    )
+    for name in names
+}
+
+def _normalize_weekdays(value: Any, field_name: str) -> list[int]:
+    """Normalize weekdays to the PCS numbering, 1 = Monday ... 7 = Sunday."""
+    if isinstance(value, (str, int)):
+        value = [value]
+    if not isinstance(value, list) or not value:
+        raise HomeAssistantError(f"{field_name} must list at least one weekday")
+
+    days: set[int] = set()
+    for item in value:
+        text = str(item).strip().lower()
+        day = int(text) if text.isdigit() else _WEEKDAY_NAMES.get(text)
+        if day is None or not 1 <= day <= 7:
+            raise HomeAssistantError(
+                f"{field_name}: invalid weekday {item!r}; use mon..sun or 1..7 (1 = Monday)"
+            )
+        days.add(day)
+    return sorted(days)
+
+
+def _normalize_schedule_payload(value: Any) -> list[dict[str, Any]]:
+    """Normalize Advanced weekly plans to the PCS format {W, peakTime, valleyTime}.
+
+    Each plan is {weekdays, charge, discharge} or the PCS-native
+    {W, valleyTime, peakTime}. Charge windows are valley windows, discharge
+    windows peak windows. Like the EMA app: at most 5 windows of each kind per
+    plan, no overlapping windows within a plan, each weekday in one plan only.
+    """
     if value is None:
         return []
 
@@ -336,100 +363,47 @@ def _normalize_schedule_payload(value: Any) -> list[Any]:
         if not text:
             return []
         try:
-            parsed = json.loads(text)
-        except Exception as err:  # noqa: BLE001
+            value = json.loads(text)
+        except ValueError as err:
             raise HomeAssistantError(f"schedule must be valid JSON when provided as string: {err}") from err
-        if not isinstance(parsed, list):
-            raise HomeAssistantError("schedule JSON must decode to a list")
-        value = parsed
 
     if isinstance(value, dict):
         value = [value]
 
     if not isinstance(value, list):
-        raise HomeAssistantError("schedule must be a list, a dict, or a JSON string")
+        raise HomeAssistantError("schedule must be a list of plans, a plan, or a JSON string")
 
-    normalized: list[dict[str, Any]] = []
+    plans: list[dict[str, Any]] = []
+    seen_days: dict[int, int] = {}
     for index, item in enumerate(value, start=1):
+        name = f"schedule plan {index}"
         if not isinstance(item, dict):
-            raise HomeAssistantError(f"schedule item {index} must be an object")
+            raise HomeAssistantError(f"{name} must be an object")
 
-        start_value = item.get("startTime", item.get("start_time"))
-        end_value = item.get("endTime", item.get("end_time"))
-        mode_value = str(item.get("mode", "")).strip().lower()
-
-        if mode_value not in {"charge", "discharge"}:
-            raise HomeAssistantError(
-                f"schedule item {index} mode must be 'charge' or 'discharge'"
-            )
-
-        start_time = _normalize_time_range_value(start_value, f"schedule item {index} startTime")
-        end_time = _normalize_time_range_value(end_value, f"schedule item {index} endTime")
-
-        normalized.append(
-            {
-                "startTime": start_time,
-                "endTime": end_time,
-                "mode": mode_value,
-            }
+        days = _normalize_weekdays(item.get("weekdays", item.get("W")), f"{name} weekdays")
+        charge = _normalize_time_ranges(
+            item.get("charge", item.get("valleyTime")), f"{name} charge"
         )
-
-    _validate_schedule_windows(normalized)
-    return normalized
-
-
-def _normalize_time_range_value(value: Any, field_name: str) -> str:
-    """Normalize a UI time value to HH:MM."""
-    if value is None:
-        raise HomeAssistantError(f"{field_name} is required")
-
-    text = str(value).strip()
-    match = _SCHEDULE_TIME_RE.fullmatch(text)
-    if not match:
-        raise HomeAssistantError(f"{field_name} must be in HH:MM or HH:MM:SS format")
-
-    hour = int(match.group(1))
-    minute = int(match.group(2))
-    second = int(match.group(3) or 0)
-
-    if hour > 23 or minute > 59 or second > 59:
-        raise HomeAssistantError(f"{field_name} has invalid time values")
-
-    return f"{hour:02d}:{minute:02d}"
-
-
-def _schedule_window_to_segments(start_time: str, end_time: str) -> list[tuple[int, int]]:
-    """Convert HH:MM schedule window values into minute segments."""
-    start_hour, start_minute = (int(part) for part in start_time.split(":", 1))
-    end_hour, end_minute = (int(part) for part in end_time.split(":", 1))
-
-    start = start_hour * 60 + start_minute
-    end = end_hour * 60 + end_minute
-
-    if start == end:
-        raise HomeAssistantError(
-            f"Invalid schedule window {start_time}-{end_time}; start and end cannot be equal"
+        discharge = _normalize_time_ranges(
+            item.get("discharge", item.get("peakTime")), f"{name} discharge"
         )
+        if not charge and not discharge:
+            raise HomeAssistantError(f"{name} needs at least one charge or discharge window")
+        try:
+            _validate_no_overlap(discharge, charge)
+        except HomeAssistantError as err:
+            raise HomeAssistantError(f"{name}: windows overlap") from err
 
-    if end > start:
-        return [(start, end)]
+        for day in days:
+            if day in seen_days:
+                raise HomeAssistantError(
+                    f"{name}: weekday {day} is already in schedule plan {seen_days[day]}"
+                )
+            seen_days[day] = index
 
-    return [(start, 24 * 60), (0, end)]
+        plans.append({"W": days, "peakTime": discharge, "valleyTime": charge})
 
-
-def _validate_schedule_windows(schedule: list[dict[str, Any]]) -> None:
-    """Validate that all schedule windows are pairwise non-overlapping."""
-    segments: list[tuple[int, int]] = []
-    for item in schedule:
-        segments.extend(_schedule_window_to_segments(item["startTime"], item["endTime"]))
-
-    segments.sort(key=lambda seg: (seg[0], seg[1]))
-    prev_end = -1
-    for seg_start, seg_end in segments:
-        if seg_start < prev_end:
-            raise HomeAssistantError("Schedule windows overlap; schedule is invalid")
-        prev_end = max(prev_end, seg_end)
-
+    return plans
 
 
 def _parse_mode(value: Any) -> int:

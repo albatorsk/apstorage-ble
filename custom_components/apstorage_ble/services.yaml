@@ -77,41 +77,62 @@ probe_version_once:
 
 set_advanced_schedule:
   name: Set Advanced Schedule
-  description: Set Advanced mode (mode 3) schedule windows over BLE.
+  description: >-
+    Set Advanced mode (mode 3) over BLE, with weekly plans (schedule) or
+    daily peak/valley windows.
   fields:
     schedule:
-      name: Schedule Windows
+      name: Weekly Plans
       description: >-
-        Add one or more time windows. Each window has a start time, end time,
-        and a mode.
+        Weekly plans, each with the weekdays it applies to and up to 5 charge
+        and 5 discharge windows ('HH:MM-HH:MM' or 'HHMMSSHHMMSS'; a window
+        ending before it starts runs past midnight). Windows in a plan must
+        not overlap, and each weekday may be in only one plan. The EMA app
+        uses 15-minute steps. The PCS-native form
+        {W: [1..7], valleyTime: [...], peakTime: [...]} is accepted too.
       required: false
       example:
-        - startTime: "00:00"
-          endTime: "06:00"
-          mode: "charge"
+        - weekdays: [mon, tue, wed, thu, fri]
+          charge: ["01:00-05:00"]
+          discharge: ["17:00-21:00"]
+        - weekdays: [sat, sun]
+          charge: ["10:00-14:00"]
       selector:
         object:
-          label_field: startTime
-          description_field: mode
+          label_field: weekdays
           multiple: true
           fields:
-            startTime:
-              label: Start Time
-              selector:
-                time:
-            endTime:
-              label: End Time
-              selector:
-                time:
-            mode:
-              label: Mode
+            weekdays:
+              label: Weekdays
+              required: true
               selector:
                 select:
+                  multiple: true
                   options:
-                    - label: Charge
-                      value: charge
-                    - label: Discharge
-                      value: discharge
+                    - label: Monday
+                      value: mon
+                    - label: Tuesday
+                      value: tue
+                    - label: Wednesday
+                      value: wed
+                    - label: Thursday
+                      value: thu
+                    - label: Friday
+                      value: fri
+                    - label: Saturday
+                      value: sat
+                    - label: Sunday
+                      value: sun
+            charge:
+              label: Charge windows (HH:MM-HH:MM)
+              selector:
+                text:
+                  multiple: true
+            discharge:
+              label: Discharge windows (HH:MM-HH:MM)
+              selector:
+                text:
+                  multiple: true
     peak_time:
       name: Peak Time Ranges
       description: >-

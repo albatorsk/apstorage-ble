@@ -311,14 +311,16 @@ class APstorageCoordinator(DataUpdateCoordinator[PCSData]):
         valley_time: list[str],
         schedule: list[Any] | None = None,
     ) -> None:
-        """Switch to mode 3 with peak/valley windows or a structured schedule."""
+        """Switch to mode 3 with daily peak/valley windows or weekly plans."""
         schedule_items = list(schedule or [])
 
         def mutate(payload: dict[str, Any]) -> None:
             payload["mode"] = "3"
             if schedule_items:
-                payload["peakTime"] = None
-                payload["valleyTime"] = None
+                # Weekly plans [{W, peakTime, valleyTime}]; the app sends the
+                # flat lists as [] alongside them.
+                payload["peakTime"] = []
+                payload["valleyTime"] = []
                 payload["schedule"] = schedule_items
             else:
                 payload["peakTime"] = list(peak_time)
