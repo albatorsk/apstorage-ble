@@ -10,7 +10,10 @@ import re
 from typing import Any
 
 import voluptuous as vol
-from homeassistant.components.bluetooth import async_ble_device_from_address
+from homeassistant.components.bluetooth import (
+    async_ble_device_from_address,
+    async_last_service_info,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS, Platform
 from homeassistant.core import HomeAssistant, ServiceCall, callback
@@ -20,6 +23,7 @@ from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers import device_registry as dr
 
 from .const import (
+    CONF_BLE_NAME,
     CONF_POLL_INTERVAL_SECONDS,
     DOMAIN,
     MANUFACTURER,
@@ -637,6 +641,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "Bluetooth proxy or a local Bluetooth adapter."
         )
 
+    # Record the Bluetooth broadcast name (used to determine the model) if it
+    # was not known when the entry was created, e.g. after manual MAC entry.
+    if not entry.data.get(CONF_BLE_NAME):
+        service_info = async_last_service_info(hass, address, connectable=False)
+        ble_name = (service_info.name if service_info else None) or ble_device.name
+        # Without a known name, bleak may fall back to the address itself.
+        if ble_name and ble_name.upper().startswith("PCS_"):
+            hass.config_entries.async_update_entry(
+                entry, data={**entry.data, CONF_BLE_NAME: ble_name}
+            )
+
     coordinator = APstorageCoordinator(
         hass=hass,
         logger=_LOGGER,
@@ -654,7 +669,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         identifiers={(DOMAIN, address)},
         connections={(dr.CONNECTION_BLUETOOTH, address)},
         manufacturer=MANUFACTURER,
-        model=get_model(address),
+        model=get_model(entry.data.get(CONF_BLE_NAME)),
         name=name,
     )
 

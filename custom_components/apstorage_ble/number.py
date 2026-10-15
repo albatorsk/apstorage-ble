@@ -13,7 +13,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, MANUFACTURER, get_model
+from .const import CONF_BLE_NAME, DOMAIN, MANUFACTURER, get_model
 from .coordinator import APstorageCoordinator
 from .protocol import mode_name, resolve_mode_code, supports_peak_power
 
@@ -114,7 +114,7 @@ class APstoragePeakPowerNumber(
             connections={(dr.CONNECTION_BLUETOOTH, address)},
             name=entry.title,
             manufacturer=MANUFACTURER,
-            model=get_model(address),
+            model=get_model(entry.data.get(CONF_BLE_NAME)),
         )
 
     def _current_mode_code(self) -> str | None:
@@ -195,7 +195,7 @@ class APstorageModbusAddressNumber(
             connections={(dr.CONNECTION_BLUETOOTH, address)},
             name=entry.title,
             manufacturer=MANUFACTURER,
-            model=get_model(address),
+            model=get_model(entry.data.get(CONF_BLE_NAME)),
         )
 
     @property

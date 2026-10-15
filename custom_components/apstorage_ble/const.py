@@ -5,23 +5,23 @@ DOMAIN = "apstorage_ble"
 MANUFACTURER = "APsystems"
 
 
-def get_model(address: str) -> str:
-    """Return the model name based on the device address.
-    
+def get_model(name: str | None) -> str:
+    """Return the model name based on the device's Bluetooth broadcast name.
+
     Args:
-        address: Bluetooth MAC address (format: AA:BB:CC:DD:EE:FF or AABBCCDDEEFF)
-    
+        name: BLE advertised local name (e.g. "PCS_B050XXXXXXXX"), or None if
+            the name is not known.
+
     Returns:
-        Model name string based on the device ID prefix.
+        Model name string based on the broadcast name prefix.
     """
-    # Extract the device prefix from the MAC address (first two bytes after colon removal)
-    mac_clean = address.replace(":", "").upper()
-    
-    if mac_clean.startswith("215"):
+    name_clean = (name or "").strip().upper()
+
+    if name_clean.startswith("PCS_215"):
         return "APstorage ELS-5K"
-    elif mac_clean.startswith("B040"):
+    elif name_clean.startswith("PCS_B040"):
         return "APstorage ELS-11.4"
-    elif mac_clean.startswith("B050"):
+    elif name_clean.startswith("PCS_B050"):
         return "APstorage ELT-12"
     else:
         # Default to ELT-12 for unknown devices
@@ -63,4 +63,6 @@ RESPONSE_TIMEOUT_SECONDS = 10
 # Config-entry keys
 # ---------------------------------------------------------------------------
 CONF_ADDRESS = "address"
+# Bluetooth broadcast (advertised local) name, used to determine the model
+CONF_BLE_NAME = "ble_name"
 CONF_POLL_INTERVAL_SECONDS = "poll_interval_seconds"

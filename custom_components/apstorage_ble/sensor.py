@@ -29,7 +29,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, MANUFACTURER, get_model
+from .const import CONF_BLE_NAME, DOMAIN, MANUFACTURER, get_model
 from .coordinator import APstorageCoordinator
 from .models import PCSData
 from .protocol import MODE_CODE_TO_OPTION
@@ -419,6 +419,7 @@ class APstorageSensor(
         self.entity_description = description
         self._address: str = entry.data[CONF_ADDRESS]
         self._device_name = entry.title
+        self._model = get_model(entry.data.get(CONF_BLE_NAME))
         # Unique ID: domain + MAC + sensor key so entities survive renames.
         self._attr_unique_id = f"{self._address}-{description.key}"
 
@@ -431,7 +432,7 @@ class APstorageSensor(
             connections={(dr.CONNECTION_BLUETOOTH, self._address)},
             name=self._device_name,
             manufacturer=MANUFACTURER,
-            model=get_model(self._address),
+            model=self._model,
             sw_version=(
                 data.pcs_firmware_version
                 if data and data.pcs_firmware_version is not None

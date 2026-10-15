@@ -13,7 +13,7 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, MANUFACTURER, get_model
+from .const import CONF_BLE_NAME, DOMAIN, MANUFACTURER, get_model
 from .coordinator import APstorageCoordinator
 
 
@@ -105,7 +105,7 @@ class APstorageClearBuzzerButton(
             connections={(dr.CONNECTION_BLUETOOTH, address)},
             name=entry.title,
             manufacturer=MANUFACTURER,
-            model=get_model(address),
+            model=get_model(entry.data.get(CONF_BLE_NAME)),
         )
 
     @property
@@ -154,7 +154,7 @@ class APstoragePcsRebootButton(
             connections={(dr.CONNECTION_BLUETOOTH, address)},
             name=entry.title,
             manufacturer=MANUFACTURER,
-            model=get_model(address),
+            model=get_model(entry.data.get(CONF_BLE_NAME)),
         )
 
     @property
@@ -203,7 +203,7 @@ class APstorageReadSystemModePayloadButton(
             connections={(dr.CONNECTION_BLUETOOTH, address)},
             name=entry.title,
             manufacturer=MANUFACTURER,
-            model=get_model(address),
+            model=get_model(entry.data.get(CONF_BLE_NAME)),
         )
 
     @property
@@ -254,7 +254,7 @@ class APstorageReadModbusSettingsButton(
             connections={(dr.CONNECTION_BLUETOOTH, address)},
             name=entry.title,
             manufacturer=MANUFACTURER,
-            model=get_model(address),
+            model=get_model(entry.data.get(CONF_BLE_NAME)),
         )
 
     @property
@@ -305,7 +305,7 @@ class APstorageReadLanNetworkButton(
             connections={(dr.CONNECTION_BLUETOOTH, address)},
             name=entry.title,
             manufacturer=MANUFACTURER,
-            model=get_model(address),
+            model=get_model(entry.data.get(CONF_BLE_NAME)),
         )
 
     @property

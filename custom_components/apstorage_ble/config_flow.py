@@ -23,6 +23,7 @@ from homeassistant.components.bluetooth import (
     BluetoothScanningMode,
     BluetoothServiceInfoBleak,
     async_discovered_service_info,
+    async_last_service_info,
     async_process_advertisements,
 )
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
@@ -31,6 +32,7 @@ from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import callback
 
 from .const import (
+    CONF_BLE_NAME,
     CONF_POLL_INTERVAL_SECONDS,
     DOMAIN,
     MANUFACTURER,
@@ -110,7 +112,10 @@ class APstorageConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             return self.async_create_entry(
                 title=name,
-                data={CONF_ADDRESS: self._discovery_info.address.upper()},
+                data={
+                    CONF_ADDRESS: self._discovery_info.address.upper(),
+                    CONF_BLE_NAME: self._discovery_info.name,
+                },
             )
 
         return self.async_show_form(
@@ -187,7 +192,7 @@ class APstorageConfigFlow(ConfigFlow, domain=DOMAIN):
             self._abort_if_unique_id_configured()
             return self.async_create_entry(
                 title=info.name or address,
-                data={CONF_ADDRESS: address},
+                data={CONF_ADDRESS: address, CONF_BLE_NAME: info.name},
             )
 
         return self.async_show_form(
@@ -217,9 +222,14 @@ class APstorageConfigFlow(ConfigFlow, domain=DOMAIN):
             else:
                 await self.async_set_unique_id(address)
                 self._abort_if_unique_id_configured()
+                # Use the broadcast name if HA has already seen the device.
+                service_info = async_last_service_info(
+                    self.hass, address, connectable=False
+                )
+                ble_name = service_info.name if service_info else None
                 return self.async_create_entry(
-                    title=f"{MANUFACTURER} {get_model(address)} {address}",
-                    data={CONF_ADDRESS: address},
+                    title=f"{MANUFACTURER} {get_model(ble_name)} {address}",
+                    data={CONF_ADDRESS: address, CONF_BLE_NAME: ble_name},
                 )
 
         return self.async_show_form(
