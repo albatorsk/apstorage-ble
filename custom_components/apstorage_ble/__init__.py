@@ -34,11 +34,10 @@ from .coordinator import APstorageCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-# Entity keys that no longer exist (removed Modbus and LAN network features,
-# the fixed 50 Hz grid frequency and diagnostics of the old BLE client);
-# leftover registry entries are deleted on setup so they don't linger as unavailable.
+# Entity keys that no longer exist (removed Modbus and LAN network features
+# and diagnostics of the old BLE client); leftover registry entries are
+# deleted on setup so they don't linger as unavailable.
 _REMOVED_ENTITY_KEYS = {
-    "grid_frequency",
     "ble_connection",
     "ble_write_mode",
     "ble_codec_mtu",

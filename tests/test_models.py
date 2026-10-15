@@ -102,3 +102,34 @@ class TestFirmwareVersionParts:
         assert data.pcs_firmware_version_1 == "1"
         assert data.pcs_firmware_version_2 == "2"
         assert data.pcs_firmware_version_3 is None
+
+
+class TestGridFrequency:
+    """Grid frequency comes from ABD[].GF (per PCS) in getDeviceLastDataLocal."""
+
+    def _parse(self, data: dict) -> "PCSData":
+        parsed = PCSData()
+        parsed.apply_last_data(data)
+        return parsed
+
+    def test_from_abd(self) -> None:
+        assert self._parse({"ABD": [{"ABID": "B05000000000", "GF": "49.970"}]}).grid_frequency == 49.97
+
+    def test_top_level_key(self) -> None:
+        assert self._parse({"GF": "50.02"}).grid_frequency == 50.02
+
+    def test_scaled_values(self) -> None:
+        assert self._parse({"ABD": [{"GF": "4998"}]}).grid_frequency == 49.98
+        assert self._parse({"ABD": [{"GF": "501"}]}).grid_frequency == 50.1
+
+    def test_missing_or_invalid_is_none(self) -> None:
+        # No made-up 50 Hz when the PCS does not report it.
+        assert self._parse({"ABD": [{"ABID": "B05000000000", "GS": "0"}]}).grid_frequency is None
+        assert self._parse({"ABD": [{"GF": "0"}]}).grid_frequency is None
+        assert self._parse({}).grid_frequency is None
+
+    def test_cleared_when_no_longer_reported(self) -> None:
+        parsed = PCSData()
+        parsed.apply_last_data({"ABD": [{"GF": "50.01"}]})
+        parsed.apply_last_data({"ABD": [{"GS": "0"}]})
+        assert parsed.grid_frequency is None

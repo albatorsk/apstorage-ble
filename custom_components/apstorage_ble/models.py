@@ -33,6 +33,7 @@ class PCSData:
     grid_exported_energy: float | None = None    # kWh today (DE4)
     grid_imported_energy: float | None = None    # kWh today (DE5)
     grid_status: str | None = None               # On-grid / Off-grid (ABD.GS)
+    grid_frequency: float | None = None          # Hz (ABD.GF)
     generator_power: float | None = None         # W (P6)
     generator_status: str | None = None          # raw ABD.GES
 
@@ -177,10 +178,13 @@ class PCSData:
         if any(value is not None for value in alarms):
             self.buzzer_alarm = any(str(value) not in ("0", "None") for value in alarms if value is not None)
 
+        frequency = pick("GF", "gridFrequency", "GridFrequency")
         pcs = data.get("ABD")
         if isinstance(pcs, list):
             pcs = next((item for item in pcs if isinstance(item, dict)), None)
         if isinstance(pcs, dict):
+            if pcs.get("GF") not in (None, ""):
+                frequency = pcs["GF"]
             grid = pcs.get("GS")
             if grid not in (None, ""):
                 self.grid_status = "On-grid" if str(grid) == "0" else "Off-grid"
@@ -189,6 +193,8 @@ class PCSData:
             min_soc = _num(pcs.get("SM"))
             if min_soc is not None:
                 self.min_soc = min_soc
+
+        self.grid_frequency = _hz(frequency)
 
         if self.battery_charging_power and self.battery_charging_power > 0:
             self.battery_flow_state = "Charging"
@@ -248,3 +254,14 @@ def _num(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _hz(value: Any) -> float | None:
+    """Grid frequency in Hz; some firmware sends it in 0.1 or 0.01 Hz."""
+    number = _num(value)
+    if number is None:
+        return None
+    for divisor in (1, 10, 100):
+        if 40.0 <= number / divisor <= 70.0:
+            return round(number / divisor, 3)
+    return None  # 0 or out of range, e.g. off-grid

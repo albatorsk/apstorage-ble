@@ -18,6 +18,7 @@ from homeassistant.const import (
     PERCENTAGE,
     SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
     UnitOfEnergy,
+    UnitOfFrequency,
     UnitOfMass,
     UnitOfPower,
 )
@@ -138,6 +139,15 @@ SENSOR_DESCRIPTIONS: tuple[APstorageSensorDescription, ...] = (
     _power("grid_export_power", "Grid Export Power", lambda d: d.grid_export_power),
     _daily_energy("grid_imported_energy", "Daily Grid Import", lambda d: d.grid_imported_energy),
     _daily_energy("grid_exported_energy", "Daily Grid Export", lambda d: d.grid_exported_energy),
+    APstorageSensorDescription(
+        key="grid_frequency",
+        name="Grid Frequency",
+        native_unit_of_measurement=UnitOfFrequency.HERTZ,
+        device_class=SensorDeviceClass.FREQUENCY,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=2,
+        value_fn=lambda d: d.grid_frequency,
+    ),
     APstorageSensorDescription(
         key="grid_status",
         name="Grid Status",
