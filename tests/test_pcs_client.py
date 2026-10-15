@@ -49,7 +49,8 @@ class FakePCS:
         self.ack_before_reply = ack_before_reply
         self.silent = set(silent)
         # getStorageConfigurationInfo reply data; None = firmware without it.
-        self.config_info = {"capacity": "20", "model": "ELT-12", "pcs_num": "1"} if config_info is None else config_info
+        # Default: the real ELT-12 reply (2026-10-15).
+        self.config_info = {"capacity": "20.48", "model": "6"} if config_info is None else config_info
         self.sysmode = {"mode": "6", "backupSOC": "10", "socMin": "10", "peakTime": [], "valleyTime": [],
                         "schedule": [{"peakTime": [], "valleyTime": ["024500121500"], "W": [5]}],
                         "sellingFirst": "0", "peakPower": "1500", "essStatus": "0",
@@ -207,7 +208,7 @@ def test_poll_reads_everything(mtu, ack):
     assert data.pcs_firmware_version_1 == "1.1.8.12" and data.pcs_firmware_version_3 == "1.0.14.9"
     assert data.comm_firmware_version == "0.1.66.0"
     assert data.wifi_rssi == -61 and data.cloud_connected is True
-    assert data.battery_capacity == 20  # from getStorageConfigurationInfo; deviceInfo says 0
+    assert data.battery_capacity == 20.48  # from getStorageConfigurationInfo; deviceInfo says 0
     assert data.total_produced == pytest.approx(8114.21875)
 
 

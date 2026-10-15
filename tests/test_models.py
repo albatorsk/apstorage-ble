@@ -147,7 +147,6 @@ class TestBatteryCapacity:
     def test_config_info_wins(self) -> None:
         data = PCSData()
         data.apply_last_data({"Capacity": "5.8"})
-        data.apply_device_info({"capacity": "0"})
         assert data.battery_capacity == 5.8
         data.apply_config_info({"capacity": "20"})
         assert data.battery_capacity == 20
@@ -161,8 +160,12 @@ class TestBatteryCapacity:
         data.apply_config_info({"pcs_list": [{"battery_capacity": "10"}, {"battery_capacity": "10"}]})
         assert data.battery_capacity == 20
 
-    def test_falls_back_when_config_reports_zero(self) -> None:
+    def test_device_info_capacity_is_ignored(self) -> None:
+        # The ELT-12 reports capacity 0 in deviceInfo; only the storage configuration counts.
         data = PCSData()
         data.apply_device_info({"capacity": "12"})
-        data.apply_config_info({"capacity": "0"})
-        assert data.battery_capacity == 12
+        assert data.battery_capacity is None
+        data.apply_config_info({"capacity": "20.48", "model": "6"})  # real ELT-12 reply
+        assert data.battery_capacity == 20.48
+        data.apply_device_info({"capacity": "0"})
+        assert data.battery_capacity == 20.48

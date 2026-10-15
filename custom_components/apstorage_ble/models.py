@@ -16,7 +16,7 @@ class PCSData:
     battery_soc: float | None = None             # % (SSOC)
     battery_power: float | None = None           # W discharging (P0)
     battery_charging_power: float | None = None  # W charging (P1)
-    battery_capacity: float | None = None        # kWh, see _update_capacity
+    battery_capacity: float | None = None        # kWh, see _set_capacity
     battery_charged_energy: float | None = None      # kWh today (DE1)
     battery_discharged_energy: float | None = None   # kWh today (DE0)
     battery_flow_state: str | None = None        # Charging / Discharging / Holding
@@ -227,7 +227,8 @@ class PCSData:
         self.price_area = str(area) if area else None
 
     # The storage configuration is what the EMA app shows as capacity, so it wins.
-    _CAPACITY_PRIORITY = ("config_info", "live", "device_info")
+    # deviceInfo also has `capacity`, but the ELT-12 reports 0 there; it is not used.
+    _CAPACITY_PRIORITY = ("config_info", "live")
 
     def _set_capacity(self, source: str, value: Any) -> None:
         capacity = _capacity(value)
@@ -271,7 +272,6 @@ class PCSData:
             self.pcs_firmware_version = "_".join(modules)
         if data.get("dcmVer"):
             self.comm_firmware_version = str(data["dcmVer"])
-        self._set_capacity("device_info", data.get("capacity"))
         self.wifi_ssid = data.get("ssid") or None
         self.wifi_rssi = _num(data.get("rssi"))
         self.wifi_ip = data.get("dcmIP") or None
