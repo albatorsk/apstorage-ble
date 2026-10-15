@@ -133,3 +133,36 @@ class TestGridFrequency:
         parsed.apply_last_data({"ABD": [{"GF": "50.01"}]})
         parsed.apply_last_data({"ABD": [{"GS": "0"}]})
         assert parsed.grid_frequency is None
+
+
+class TestBatteryCapacity:
+    """Capacity: storage config info first; 0 means not configured."""
+
+    def test_zero_is_unknown(self) -> None:
+        data = PCSData()
+        data.apply_device_info({"capacity": "0"})
+        data.apply_last_data({"Capacity": "0"})
+        assert data.battery_capacity is None
+
+    def test_config_info_wins(self) -> None:
+        data = PCSData()
+        data.apply_last_data({"Capacity": "5.8"})
+        data.apply_device_info({"capacity": "0"})
+        assert data.battery_capacity == 5.8
+        data.apply_config_info({"capacity": "20"})
+        assert data.battery_capacity == 20
+
+    def test_short_key_and_pcs_list(self) -> None:
+        data = PCSData()
+        data.apply_config_info({"C": "10.24"})
+        assert data.battery_capacity == 10.24
+        data.apply_config_info({"capacity": "0", "pcs_list": {"battery_capacity": "15.36"}})
+        assert data.battery_capacity == 15.36
+        data.apply_config_info({"pcs_list": [{"battery_capacity": "10"}, {"battery_capacity": "10"}]})
+        assert data.battery_capacity == 20
+
+    def test_falls_back_when_config_reports_zero(self) -> None:
+        data = PCSData()
+        data.apply_device_info({"capacity": "12"})
+        data.apply_config_info({"capacity": "0"})
+        assert data.battery_capacity == 12

@@ -44,6 +44,10 @@ MAX_FRAME = 259  # keeps the 1-byte payload length <= 255
 FRAGMENT_DELAY_SECONDS = 0.01
 
 REQUEST_TIMEOUT_SECONDS = 15.0
+# Optional reads that older or newer firmware may not answer.
+OPTIONAL_REQUEST_TIMEOUT_SECONDS = 10.0
+# Storage configuration (capacity, model): older firmware, then newer firmware.
+CONFIG_INFO_IDENTIFIERS = ("getStorageConfigurationInfo", "storageBasicInfo")
 CONNECT_ATTEMPTS = 3
 
 # Fixed envelope values the app sends over BLE (§5.1).
@@ -182,6 +186,8 @@ def make_request(identifier: str, device_id: str, params: dict[str, Any] | None 
     wire = identifier[4:] if identifier.startswith(("get/", "set/")) else identifier
     request_params = dict(params or {})
     request_params.update(_PARAMS)
+    if wire == "getStorageConfigurationInfo":
+        request_params["V"] = "2"  # the one BLE request the app sends with V "2" (§5.1)
     # Same key order as tools/apstorage_ble_soc.py, which is verified on hardware.
     return {
         "company": _ENVELOPE["company"],
@@ -319,6 +325,7 @@ class PCSReadResult:
     device_id: str
     last_data: dict[str, Any]
     device_info: dict[str, Any] | None = None
+    config_info: dict[str, Any] | None = None
     sysmode: dict[str, Any] | None = None
     mtu: int | None = None
 
@@ -331,6 +338,8 @@ class PCSClient:
         # Learned from deviceInfo (`eid`); the advertised name is the fallback.
         self.device_id: str = device_id_from_name(name)
         self.last_mtu: int | None = None
+        # The config-info identifier this PCS answered, once known.
+        self._config_identifier: str | None = None
 
     def set_name(self, name: str | None) -> None:
         """Update the advertised name, e.g. once the device has been seen."""
@@ -388,9 +397,11 @@ class PCSClient:
         """Read live data, plus deviceInfo and getsysmode when asked, in one connection."""
         async with self.connect(ble_device) as conn:
             info: dict[str, Any] | None = None
+            config: dict[str, Any] | None = None
             if device_info:
                 info = await conn.get("deviceInfo")
                 self._learn_device_id(conn, info)
+                config = await self._read_config_info(conn)
             last_data = await conn.get("getDeviceLastDataLocal")
             mode_data: dict[str, Any] | None = None
             if sysmode:
@@ -403,9 +414,30 @@ class PCSClient:
                 device_id=conn.device_id,
                 last_data=last_data,
                 device_info=info,
+                config_info=config,
                 sysmode=mode_data,
                 mtu=conn.mtu,
             )
+
+    async def _read_config_info(self, conn: PCSConnection) -> dict[str, Any] | None:
+        """Storage configuration (capacity, model); None if the PCS answers neither request."""
+        identifiers = (self._config_identifier,) if self._config_identifier else CONFIG_INFO_IDENTIFIERS
+        for identifier in identifiers:
+            try:
+                reply = await conn.call(identifier, timeout=OPTIONAL_REQUEST_TIMEOUT_SECONDS)
+            except PCSError as err:
+                _LOGGER.debug("%s failed: %s", identifier, err)
+                continue
+            if not reply_is_success(reply):
+                _LOGGER.debug("%s: code %s %s", identifier, reply.get("code"), reply.get("message"))
+                continue
+            data = reply_data(reply)
+            if isinstance(data, list):
+                data = next((item for item in data if isinstance(item, dict)), None)
+            if isinstance(data, dict):
+                self._config_identifier = identifier
+                return data
+        return None
 
     async def async_get(self, ble_device: BLEDevice, identifier: str) -> dict[str, Any]:
         """Run one read request and return its data."""

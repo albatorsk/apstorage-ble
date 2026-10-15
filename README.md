@@ -51,7 +51,7 @@ The integration creates the following entities.
 - Daily Charged Energy (`kWh`)
 - Daily Discharged Energy (`kWh`)
 - Battery Flow State (`enum`: Charging, Discharging, Holding)
-- Battery Capacity (`kWh`, diagnostic)
+- Battery Capacity (`kWh`, diagnostic): the configured capacity from the storage configuration, as in the EMA app; unknown if none is set
 - Minimum SOC (`%`, diagnostic)
 - Backup SOC Level (`%`, diagnostic)
 
@@ -278,8 +278,9 @@ The BLE client follows the protocol in `APSTORAGE_BLE_SPEC.md`, verified on an E
 Espressif BluFi custom-data frames on service `0xFFEC` (write `0xFF07`, notify `0xFF06`), without BluFi
 security negotiation, carrying JSON encrypted with the app's static AES-128-CBC key.
 
-Each poll opens one connection, sends `getDeviceLastDataLocal` and `getsysmode` (plus `deviceInfo` on the
-first poll and every 6 hours), and disconnects, so the phone app can connect between polls. A failed poll
+Each poll opens one connection, sends `getDeviceLastDataLocal` and `getsysmode` (plus `deviceInfo` and the
+storage configuration, `getStorageConfigurationInfo` or `storageBasicInfo`, on the first poll and every
+6 hours), and disconnects, so the phone app can connect between polls. A failed poll
 keeps the last values; entities become unavailable after 3 failed polls in a row. Settings changes read
 `getsysmode`, change only the requested fields, write `setsysmode` and read the result back.
 

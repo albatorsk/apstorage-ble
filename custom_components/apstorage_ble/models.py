@@ -16,7 +16,7 @@ class PCSData:
     battery_soc: float | None = None             # % (SSOC)
     battery_power: float | None = None           # W discharging (P0)
     battery_charging_power: float | None = None  # W charging (P1)
-    battery_capacity: float | None = None        # kWh (Capacity, or deviceInfo capacity)
+    battery_capacity: float | None = None        # kWh, see _update_capacity
     battery_charged_energy: float | None = None      # kWh today (DE1)
     battery_discharged_energy: float | None = None   # kWh today (DE0)
     battery_flow_state: str | None = None        # Charging / Discharging / Holding
@@ -68,6 +68,8 @@ class PCSData:
     cloud_connected: bool | None = None          # connetStatus (sic)
     device_time: str | None = None               # deviceTime from the live-data reply
 
+    # Capacity as reported by each source; 0 means "not set" and is ignored.
+    _capacity_by_source: dict[str, float] = field(default_factory=dict, init=False, repr=False)
     _cached_fw_version_source: str | None = field(default=None, init=False, repr=False)
     _cached_fw_version_parts: tuple[str | None, str | None, str | None] = field(
         default=(None, None, None), init=False, repr=False
@@ -144,9 +146,7 @@ class PCSData:
         else:
             self.grid_power = None
 
-        capacity = _num(pick("Capacity"))
-        if capacity is not None:
-            self.battery_capacity = capacity
+        self._set_capacity("live", pick("Capacity"))
 
         # Today's energy, DE0..DE5; older firmware lists it in SD[FL].DE.
         daily = {f"DE{i}": _num(pick(f"DE{i}")) for i in range(6)}
@@ -226,6 +226,39 @@ class PCSData:
         area = data.get("area") or data.get("are")
         self.price_area = str(area) if area else None
 
+    # The storage configuration is what the EMA app shows as capacity, so it wins.
+    _CAPACITY_PRIORITY = ("config_info", "live", "device_info")
+
+    def _set_capacity(self, source: str, value: Any) -> None:
+        capacity = _capacity(value)
+        if capacity is None:
+            self._capacity_by_source.pop(source, None)
+        else:
+            self._capacity_by_source[source] = capacity
+        self.battery_capacity = next(
+            (self._capacity_by_source[key] for key in self._CAPACITY_PRIORITY if key in self._capacity_by_source),
+            None,
+        )
+
+    def apply_config_info(self, data: dict[str, Any]) -> None:
+        """Update from getStorageConfigurationInfo (`capacity`) or storageBasicInfo (`C`)."""
+        value = data.get("capacity")
+        if _capacity(value) is None:
+            value = data.get("C")
+        if _capacity(value) is None:
+            # Fall back to the per-PCS list; over BLE it may be a single object.
+            pcs_list = data.get("pcs_list")
+            if isinstance(pcs_list, dict):
+                pcs_list = [pcs_list]
+            if isinstance(pcs_list, list):
+                total = sum(
+                    _capacity(item.get("battery_capacity")) or 0.0
+                    for item in pcs_list
+                    if isinstance(item, dict)
+                )
+                value = total or None
+        self._set_capacity("config_info", value)
+
     def apply_device_info(self, data: dict[str, Any]) -> None:
         """Update from a deviceInfo `data` dict (§6.2)."""
         device_id = data.get("eid") or data.get("EID") or data.get("deviceId")
@@ -238,14 +271,18 @@ class PCSData:
             self.pcs_firmware_version = "_".join(modules)
         if data.get("dcmVer"):
             self.comm_firmware_version = str(data["dcmVer"])
-        capacity = _num(data.get("capacity"))
-        if capacity is not None and self.battery_capacity is None:
-            self.battery_capacity = capacity
+        self._set_capacity("device_info", data.get("capacity"))
         self.wifi_ssid = data.get("ssid") or None
         self.wifi_rssi = _num(data.get("rssi"))
         self.wifi_ip = data.get("dcmIP") or None
         cloud = data.get("connetStatus", data.get("connectStatus"))
         self.cloud_connected = None if cloud in (None, "") else str(cloud) == "1"
+
+
+def _capacity(value: Any) -> float | None:
+    """Battery capacity in kWh; 0 or less means the PCS has none configured."""
+    number = _num(value)
+    return number if number is not None and number > 0 else None
 
 
 def _num(value: Any) -> float | None:

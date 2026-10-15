@@ -37,17 +37,19 @@ LAST_DATA = {"MODE": "6", "SSOC": "98", "status": 0,
              "ABD": [{"ABID": DEVICE_ID, "GS": "0", "GES": "0", "IMS": "0", "SM": "10"}]}
 DEVICE_INFO = {"deviceId": DEVICE_ID, "eid": DEVICE_ID, "devType": "6", "dcmVer": "0.1.66.0",
                "moduleVer1": "1.1.8.12", "moduleVer2": "1.1.6.2", "moduleVer3": "1.0.14.9",
-               "capacity": "15.36", "ssid": "home", "rssi": "-61", "dcmIP": "192.168.1.40",
+               "capacity": "0", "ssid": "home", "rssi": "-61", "dcmIP": "192.168.1.40",
                "connetStatus": "1"}
 
 
 class FakePCS:
     """Device side: reassembles phone frames, answers like the ELT-12."""
 
-    def __init__(self, mtu=247, ack_before_reply=False, silent=()):
+    def __init__(self, mtu=247, ack_before_reply=False, silent=(), config_info=None):
         self.mtu = mtu
         self.ack_before_reply = ack_before_reply
         self.silent = set(silent)
+        # getStorageConfigurationInfo reply data; None = firmware without it.
+        self.config_info = {"capacity": "20", "model": "ELT-12", "pcs_num": "1"} if config_info is None else config_info
         self.sysmode = {"mode": "6", "backupSOC": "10", "socMin": "10", "peakTime": [], "valleyTime": [],
                         "schedule": [{"peakTime": [], "valleyTime": ["024500121500"], "W": [5]}],
                         "sellingFirst": "0", "peakPower": "1500", "essStatus": "0",
@@ -92,6 +94,8 @@ class FakePCS:
         elif ident == "getDeviceLastDataLocal":
             data = LAST_DATA
             base["deviceTime"] = "20261015002546"
+        elif ident == "getStorageConfigurationInfo" and self.config_info:
+            data = self.config_info
         elif ident == "getsysmode":
             data = self.sysmode
         elif ident == "setsysmode":
@@ -177,8 +181,10 @@ def test_poll_reads_everything(mtu, ack):
     client = pc.PCSClient("PCS_" + DEVICE_ID)
     result, clients = run(pcs, lambda: client.async_read(FakeDevice(), device_info=True, sysmode=True))
     assert len(clients) == 1, "one connection per poll"
-    assert [r["identifier"] for r in pcs.requests] == ["deviceInfo", "getDeviceLastDataLocal", "getsysmode"]
+    assert [r["identifier"] for r in pcs.requests] == [
+        "deviceInfo", "getStorageConfigurationInfo", "getDeviceLastDataLocal", "getsysmode"]
     assert all(r["method"] == "get" and r["deviceId"] == DEVICE_ID for r in pcs.requests)
+    assert pcs.requests[1]["params"]["V"] == "2" and pcs.requests[0]["params"]["V"] == "01"
     assert result.last_data["SSOC"] == "98"
     assert result.device_info["dcmVer"] == "0.1.66.0"
     assert result.sysmode["area"] == "SE4"
@@ -187,6 +193,7 @@ def test_poll_reads_everything(mtu, ack):
     data.apply_last_data(result.last_data)
     data.apply_sysmode(result.sysmode)
     data.apply_device_info(result.device_info)
+    data.apply_config_info(result.config_info)
     assert data.battery_soc == 98
     assert data.battery_power == 885 and data.battery_charging_power == 0
     assert data.signed_battery_power == 885
@@ -199,7 +206,8 @@ def test_poll_reads_everything(mtu, ack):
     assert data.buzzer == 0 and data.buzzer_alarm is False
     assert data.pcs_firmware_version_1 == "1.1.8.12" and data.pcs_firmware_version_3 == "1.0.14.9"
     assert data.comm_firmware_version == "0.1.66.0"
-    assert data.wifi_rssi == -61 and data.cloud_connected is True and data.battery_capacity == 15.36
+    assert data.wifi_rssi == -61 and data.cloud_connected is True
+    assert data.battery_capacity == 20  # from getStorageConfigurationInfo; deviceInfo says 0
     assert data.total_produced == pytest.approx(8114.21875)
 
 
@@ -274,3 +282,34 @@ def test_getsysmode_failure_keeps_live_data():
 
     result, _ = run(pcs, go)
     assert result.sysmode is None and result.last_data["SSOC"] == "98"
+
+
+def test_config_info_falls_back_to_storage_basic_info(monkeypatch):
+    monkeypatch.setattr(pc, "OPTIONAL_REQUEST_TIMEOUT_SECONDS", 0.3)
+    pcs = FakePCS(config_info={})  # answers neither config request with data
+    orig = pcs._answer
+
+    def answer(req):
+        if req["identifier"] == "storageBasicInfo":
+            return pcs._send({"identifier": "storageBasicInfo", "code": 200, "data": {"C": "10.24", "M": "ELT-12"}})
+        return orig(req)
+
+    pcs._answer = answer
+    client = pc.PCSClient("PCS_" + DEVICE_ID)
+    result, _ = run(pcs, lambda: client.async_read(FakeDevice(), device_info=True))
+    assert result.config_info == {"C": "10.24", "M": "ELT-12"}
+    data = models.PCSData()
+    data.apply_config_info(result.config_info)
+    assert data.battery_capacity == 10.24
+    # The answering identifier is remembered; the next read asks only that one.
+    pcs.requests.clear()
+    run(pcs, lambda: client.async_read(FakeDevice(), device_info=True))
+    assert [r["identifier"] for r in pcs.requests][:2] == ["deviceInfo", "storageBasicInfo"]
+
+
+def test_no_config_info_keeps_poll_working(monkeypatch):
+    monkeypatch.setattr(pc, "OPTIONAL_REQUEST_TIMEOUT_SECONDS", 0.2)
+    pcs = FakePCS(config_info={})
+    client = pc.PCSClient("PCS_" + DEVICE_ID)
+    result, _ = run(pcs, lambda: client.async_read(FakeDevice(), device_info=True))
+    assert result.config_info is None and result.last_data["SSOC"] == "98"

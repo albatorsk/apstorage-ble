@@ -163,6 +163,8 @@ class APstorageCoordinator(DataUpdateCoordinator[PCSData]):
         if result.device_info is not None:
             data.apply_device_info(result.device_info)
             self._device_info_read_at = time.monotonic()
+        if result.config_info is not None:
+            data.apply_config_info(result.config_info)
         if not data.device_id:
             data.device_id = result.device_id
 
