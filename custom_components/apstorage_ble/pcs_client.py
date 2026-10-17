@@ -326,6 +326,8 @@ class PCSReadResult:
     last_data: dict[str, Any]
     device_info: dict[str, Any] | None = None
     config_info: dict[str, Any] | None = None
+    firmware: dict[str, Any] | None = None  # pcsVersion: current/latest firmware
+    update_check_sent: bool = False
     sysmode: dict[str, Any] | None = None
     mtu: int | None = None
 
@@ -393,8 +395,15 @@ class PCSClient:
         *,
         device_info: bool = False,
         sysmode: bool = True,
+        firmware: bool = False,
+        request_update_check: bool = False,
     ) -> PCSReadResult:
-        """Read live data, plus deviceInfo and getsysmode when asked, in one connection."""
+        """Read live data, plus deviceInfo, getsysmode and pcsVersion when asked, in one connection.
+
+        `request_update_check` sends set/checkPcsVersion: the PCS then asks the APsystems
+        cloud for newer firmware itself (it needs Wi-Fi); pcsVersion shows the result after
+        about 25 s. Firmware is never installed from here (pcsUpdate is not sent).
+        """
         async with self.connect(ble_device) as conn:
             info: dict[str, Any] | None = None
             config: dict[str, Any] | None = None
@@ -410,31 +419,56 @@ class PCSClient:
                 except PCSError as err:
                     # Live data is what matters; keep it even if this read fails.
                     _LOGGER.debug("getsysmode failed: %s", err)
+            version: dict[str, Any] | None = None
+            if firmware:
+                version = await self._read_optional(conn, "pcsVersion")
+            check_sent = False
+            if request_update_check:
+                check_sent = await self._send_optional(conn, "set/checkPcsVersion")
             return PCSReadResult(
                 device_id=conn.device_id,
                 last_data=last_data,
                 device_info=info,
                 config_info=config,
+                firmware=version,
+                update_check_sent=check_sent,
                 sysmode=mode_data,
                 mtu=conn.mtu,
             )
+
+    async def _read_optional(self, conn: PCSConnection, identifier: str) -> dict[str, Any] | None:
+        """A read that may fail without failing the poll."""
+        try:
+            reply = await conn.call(identifier, timeout=OPTIONAL_REQUEST_TIMEOUT_SECONDS)
+        except PCSError as err:
+            _LOGGER.debug("%s failed: %s", identifier, err)
+            return None
+        if not reply_is_success(reply):
+            _LOGGER.debug("%s: code %s %s", identifier, reply.get("code"), reply.get("message"))
+            return None
+        data = reply_data(reply)
+        if isinstance(data, list):
+            data = next((item for item in data if isinstance(item, dict)), None)
+        return data if isinstance(data, dict) else None
+
+    async def _send_optional(self, conn: PCSConnection, identifier: str) -> bool:
+        """A set command whose failure doesn't fail the poll; True if the PCS accepted it."""
+        try:
+            reply = await conn.call(identifier, timeout=OPTIONAL_REQUEST_TIMEOUT_SECONDS)
+        except PCSError as err:
+            _LOGGER.debug("%s failed: %s", identifier, err)
+            return False
+        ok = reply_is_success(reply)
+        if not ok:
+            _LOGGER.debug("%s: code %s %s", identifier, reply.get("code"), reply.get("message"))
+        return ok
 
     async def _read_config_info(self, conn: PCSConnection) -> dict[str, Any] | None:
         """Storage configuration (capacity, model); None if the PCS answers neither request."""
         identifiers = (self._config_identifier,) if self._config_identifier else CONFIG_INFO_IDENTIFIERS
         for identifier in identifiers:
-            try:
-                reply = await conn.call(identifier, timeout=OPTIONAL_REQUEST_TIMEOUT_SECONDS)
-            except PCSError as err:
-                _LOGGER.debug("%s failed: %s", identifier, err)
-                continue
-            if not reply_is_success(reply):
-                _LOGGER.debug("%s: code %s %s", identifier, reply.get("code"), reply.get("message"))
-                continue
-            data = reply_data(reply)
-            if isinstance(data, list):
-                data = next((item for item in data if isinstance(item, dict)), None)
-            if isinstance(data, dict):
+            data = await self._read_optional(conn, identifier)
+            if data is not None:
                 self._config_identifier = identifier
                 return data
         return None

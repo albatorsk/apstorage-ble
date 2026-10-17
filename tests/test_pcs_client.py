@@ -51,6 +51,9 @@ class FakePCS:
         # getStorageConfigurationInfo reply data; None = firmware without it.
         # Default: the real ELT-12 reply (2026-10-15).
         self.config_info = {"capacity": "20.48", "model": "6"} if config_info is None else config_info
+        # pcsVersion reply data (current/latest firmware); format not yet seen on hardware.
+        self.pcs_version = {"current_version": "1.1.8.12", "latest_version": "1.1.9.0", "status": "0"}
+        self.update_checks = 0
         self.sysmode = {"mode": "6", "backupSOC": "10", "socMin": "10", "peakTime": [], "valleyTime": [],
                         "schedule": [{"peakTime": [], "valleyTime": ["024500121500"], "W": [5]}],
                         "sellingFirst": "0", "peakPower": "1500", "essStatus": "0",
@@ -97,6 +100,11 @@ class FakePCS:
             base["deviceTime"] = "20261015002546"
         elif ident == "getStorageConfigurationInfo" and self.config_info:
             data = self.config_info
+        elif ident == "pcsVersion" and self.pcs_version is not None:
+            data = self.pcs_version
+        elif ident == "checkPcsVersion":
+            self.update_checks += 1
+            data = {}
         elif ident == "getsysmode":
             data = self.sysmode
         elif ident == "setsysmode":
@@ -314,3 +322,25 @@ def test_no_config_info_keeps_poll_working(monkeypatch):
     client = pc.PCSClient("PCS_" + DEVICE_ID)
     result, _ = run(pcs, lambda: client.async_read(FakeDevice(), device_info=True))
     assert result.config_info is None and result.last_data["SSOC"] == "98"
+
+
+def test_firmware_read_and_update_check():
+    pcs = FakePCS()
+    client = pc.PCSClient("PCS_" + DEVICE_ID)
+    result, clients = run(pcs, lambda: client.async_read(
+        FakeDevice(), device_info=True, firmware=True, request_update_check=True))
+    assert len(clients) == 1
+    idents = [(r["identifier"], r["method"]) for r in pcs.requests]
+    assert idents[-2:] == [("pcsVersion", "get"), ("checkPcsVersion", "set")]
+    assert ("pcsUpdate", "set") not in idents  # never installs
+    assert result.firmware["latest_version"] == "1.1.9.0" and result.update_check_sent
+    assert pcs.update_checks == 1
+
+
+def test_firmware_optional(monkeypatch):
+    monkeypatch.setattr(pc, "OPTIONAL_REQUEST_TIMEOUT_SECONDS", 0.2)
+    pcs = FakePCS(silent={"pcsVersion", "checkPcsVersion"})
+    client = pc.PCSClient("PCS_" + DEVICE_ID)
+    result, _ = run(pcs, lambda: client.async_read(FakeDevice(), firmware=True, request_update_check=True))
+    assert result.firmware is None and not result.update_check_sent
+    assert result.last_data["SSOC"] == "98"

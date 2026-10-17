@@ -69,6 +69,7 @@ PLATFORMS: list[Platform] = [
     Platform.BUTTON,
     Platform.SWITCH,
     Platform.NUMBER,
+    Platform.UPDATE,
 ]
 
 SERVICE_SET_SYSTEM_MODE = "set_system_mode"

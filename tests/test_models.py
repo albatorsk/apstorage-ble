@@ -169,3 +169,14 @@ class TestBatteryCapacity:
         assert data.battery_capacity == 20.48
         data.apply_device_info({"capacity": "0"})
         assert data.battery_capacity == 20.48
+
+
+class TestPcsVersion:
+    """pcsVersion: current and latest firmware, long or short keys."""
+
+    def test_long_and_short_keys(self) -> None:
+        data = PCSData()
+        data.apply_pcs_version({"current_version": "1.1.8.12", "latest_version": "1.1.9.0"})
+        assert (data.firmware_installed, data.firmware_latest) == ("1.1.8.12", "1.1.9.0")
+        data.apply_pcs_version({"CV": "2.0", "LV": ""})
+        assert (data.firmware_installed, data.firmware_latest) == ("2.0", None)

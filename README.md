@@ -89,6 +89,13 @@ The integration creates the following entities.
 - System Mode Payload (last `getsysmode` read) and the Read System Mode Payload button (disabled by default)
 - Last Update, Connection Quality, BLE MTU (disabled by default)
 
+#### Firmware (update entity)
+- Firmware (`update` entity): the installed PCS firmware and the latest version the PCS reports.
+    - Shows "Update available" when the PCS has found newer firmware.
+    - Once a day the integration asks the PCS to check the APsystems cloud (`set/checkPcsVersion`;
+      the PCS needs Wi-Fi for this). The integration itself never contacts APsystems.
+    - No Install button: install updates from the EMA app (`pcsUpdate` is never sent).
+
 #### Schedule (calendar)
 - Schedule (`calendar` entity): the charge (valley) and discharge (peak) windows the PCS follows, as calendar events.
     - Shows daily `peakTime`/`valleyTime` windows and weekly plans (`schedule`), including the plan the PCS holds in AI mode.
@@ -278,8 +285,9 @@ Espressif BluFi custom-data frames on service `0xFFEC` (write `0xFF07`, notify `
 security negotiation, carrying JSON encrypted with the app's static AES-128-CBC key.
 
 Each poll opens one connection, sends `getDeviceLastDataLocal` and `getsysmode` (plus `deviceInfo` and the
-storage configuration, `getStorageConfigurationInfo` or `storageBasicInfo`, on the first poll and every
-6 hours), and disconnects, so the phone app can connect between polls. A failed poll
+storage configuration, `getStorageConfigurationInfo` or `storageBasicInfo`, and the firmware versions,
+`pcsVersion`, on the first poll and every 6 hours), and disconnects. Once a day a poll also sends
+`set/checkPcsVersion` so the PCS checks for new firmware; `pcsVersion` is read again a minute later, so the phone app can connect between polls. A failed poll
 keeps the last values; entities become unavailable after 3 failed polls in a row. Settings changes read
 `getsysmode`, change only the requested fields, write `setsysmode` and read the result back.
 
@@ -312,6 +320,7 @@ custom_components/apstorage_ble/
 ├── protocol.py        # Operating-mode helpers
 ├── schedule.py        # Charge/discharge windows from getsysmode
 ├── calendar.py        # Schedule calendar entity
+├── update.py          # Firmware update entity
 ├── sensor.py / select.py / switch.py / number.py / button.py
 ├── strings.json       # UI strings
 ├── services.yaml      # Service definitions

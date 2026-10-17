@@ -29,6 +29,10 @@ _LOGGER = logging.getLogger(__name__)
 _T = TypeVar("_T")
 
 DEVICE_INFO_REFRESH_SECONDS = 6 * 3600
+# How often to ask the PCS to check the APsystems cloud for newer firmware
+# (set/checkPcsVersion), and how long to wait before reading the result.
+FIRMWARE_CHECK_INTERVAL_SECONDS = 24 * 3600
+FIRMWARE_CHECK_RESULT_DELAY_SECONDS = 60
 # Keep showing the last values through this many failed polls in a row.
 MAX_TOLERATED_POLL_FAILURES = 3
 # The PCS restarts after set/pcsReboot and may not answer the request.
@@ -72,6 +76,8 @@ class APstorageCoordinator(DataUpdateCoordinator[PCSData]):
         self._lock = asyncio.Lock()
         self._shutdown = False
         self._device_info_read_at: float | None = None
+        self._firmware_check_sent_at: float | None = None
+        self._firmware_reread_at: float | None = None  # read pcsVersion again after a check
         self._reboot_refresh: asyncio.TimerHandle | None = None
 
         self.total_poll_attempts = 0
@@ -137,14 +143,26 @@ class APstorageCoordinator(DataUpdateCoordinator[PCSData]):
         if self._shutdown:
             raise UpdateFailed("shutting down")
         self.total_poll_attempts += 1
+        now = time.monotonic()
         want_info = (
             self._device_info_read_at is None
-            or time.monotonic() - self._device_info_read_at > DEVICE_INFO_REFRESH_SECONDS
+            or now - self._device_info_read_at > DEVICE_INFO_REFRESH_SECONDS
+        )
+        want_firmware = want_info or (
+            self._firmware_reread_at is not None and now >= self._firmware_reread_at
+        )
+        want_check = (
+            self._firmware_check_sent_at is None
+            or now - self._firmware_check_sent_at > FIRMWARE_CHECK_INTERVAL_SECONDS
         )
         try:
             async with self._lock:
                 result = await self._client.async_read(
-                    self._ble_device(), device_info=want_info, sysmode=True
+                    self._ble_device(),
+                    device_info=want_info,
+                    sysmode=True,
+                    firmware=want_firmware,
+                    request_update_check=want_check,
                 )
         except PCSError as err:
             self.consecutive_poll_failures += 1
@@ -165,6 +183,15 @@ class APstorageCoordinator(DataUpdateCoordinator[PCSData]):
             self._device_info_read_at = time.monotonic()
         if result.config_info is not None:
             data.apply_config_info(result.config_info)
+        if result.firmware is not None:
+            data.apply_pcs_version(result.firmware)
+        if want_firmware:
+            self._firmware_reread_at = None
+        if want_check:
+            # Try again tomorrow even if the PCS refused; it may have no Wi-Fi.
+            self._firmware_check_sent_at = now
+            if result.update_check_sent:
+                self._firmware_reread_at = now + FIRMWARE_CHECK_RESULT_DELAY_SECONDS
         if not data.device_id:
             data.device_id = result.device_id
 

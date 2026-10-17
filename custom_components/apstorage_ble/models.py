@@ -62,6 +62,8 @@ class PCSData:
     device_type: str | None = None               # devType
     pcs_firmware_version: str | None = None      # moduleVer1_moduleVer2_moduleVer3
     comm_firmware_version: str | None = None     # dcmVer
+    firmware_installed: str | None = None        # pcsVersion CV / current_version
+    firmware_latest: str | None = None           # pcsVersion LV / latest_version (as last checked by the PCS)
     wifi_ssid: str | None = None
     wifi_rssi: float | None = None               # dBm
     wifi_ip: str | None = None
@@ -259,6 +261,18 @@ class PCSData:
                 )
                 value = total or None
         self._set_capacity("config_info", value)
+
+    def apply_pcs_version(self, data: dict[str, Any]) -> None:
+        """Update from a pcsVersion `data` dict (current and latest firmware, §8.4)."""
+        def text(*keys: str) -> str | None:
+            for key in keys:
+                value = data.get(key)
+                if value not in (None, "", "null"):
+                    return str(value).strip()
+            return None
+
+        self.firmware_installed = text("CV", "current_version")
+        self.firmware_latest = text("LV", "latest_version")
 
     def apply_device_info(self, data: dict[str, Any]) -> None:
         """Update from a deviceInfo `data` dict (§6.2)."""
