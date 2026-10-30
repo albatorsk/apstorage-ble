@@ -95,6 +95,9 @@ The integration creates the following entities.
     - Once a day the integration asks the PCS to check the APsystems cloud (`set/checkPcsVersion`;
       the PCS needs Wi-Fi for this). The integration itself never contacts APsystems.
     - No Install button: install updates from the EMA app (`pcsUpdate` is never sent).
+    - Only updates the PCS itself reports are shown. Updates that APsystems offers through its cloud
+      (seen in the cloud-connected EMA App, but not over Bluetooth in EMA Manager) don't appear here,
+      because the integration doesn't contact the APsystems cloud.
 
 #### Schedule (calendar)
 - Schedule (`calendar` entity): the charge (valley) and discharge (peak) windows the PCS follows, as calendar events.
