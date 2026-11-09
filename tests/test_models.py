@@ -184,3 +184,21 @@ class TestGridStatusDebounce:
         data.apply_last_data({"ABD": [{"ABID": "B05000000000"}]})  # no GS in this reply
         assert data.grid_status == "On-grid"
         assert self._poll(data, "1") == "Off-grid"
+
+
+class TestSystemModeSource:
+    """System mode comes from getsysmode; the live MODE only stands in before that."""
+
+    def test_live_mode_does_not_override_sysmode(self) -> None:
+        # Real ELT-12 in AI Mode: live MODE "1" while getsysmode says "6".
+        data = PCSData()
+        data.apply_last_data({"MODE": "1"})
+        data.apply_sysmode({"mode": "6"})
+        assert data.system_mode == "6"
+        data.apply_last_data({"MODE": "1"})  # a poll whose getsysmode read failed
+        assert data.system_mode == "6" and data.live_mode == "1"
+
+    def test_live_mode_before_first_sysmode(self) -> None:
+        data = PCSData()
+        data.apply_last_data({"MODE": "3"})
+        assert data.system_mode == "3"

@@ -46,7 +46,8 @@ class PCSData:
     co2_reduction: float | None = None           # kg (CO2)
 
     # --- Operating mode (getsysmode; MODE from live data as fallback) ---
-    system_mode: str | None = None               # mode code "0".."6"
+    system_mode: str | None = None               # mode code "0".."6" (getsysmode)
+    live_mode: str | None = None                 # MODE from live data (what runs right now)
     system_state: str | None = None              # legacy mode label; unused by this firmware
     storage_status: str | None = None            # raw status/STA from live data
     backup_soc: float | None = None              # %
@@ -174,8 +175,12 @@ class PCSData:
         self.co2_reduction = _num(pick("CO2"))
 
         mode = pick("MODE", "MOD")
-        if mode is not None:
-            self.system_mode = str(mode)
+        self.live_mode = None if mode is None else str(mode)
+        # The configured mode comes from getsysmode. The live MODE differs from it (in AI
+        # Mode it reports e.g. "1" while the AI runs self-consumption), so it only stands
+        # in until getsysmode has been read once; a failed getsysmode read keeps the mode.
+        if self.sysmode is None and self.live_mode is not None:
+            self.system_mode = self.live_mode
         status = pick("status", "STA")
         self.storage_status = None if status is None else str(status)
 
