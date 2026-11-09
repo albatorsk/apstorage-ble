@@ -5,6 +5,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+# Off-grid readings in a row needed before Grid Status shows Off-grid.
+OFF_GRID_CONFIRM_POLLS = 2
+
+
 @dataclass
 class PCSData:
     """Values read from the APstorage PCS.
@@ -32,7 +36,7 @@ class PCSData:
     grid_power: float | None = None              # W, > 0 import, < 0 export
     grid_exported_energy: float | None = None    # kWh today (DE4)
     grid_imported_energy: float | None = None    # kWh today (DE5)
-    grid_status: str | None = None               # On-grid / Off-grid (ABD.GS)
+    grid_status: str | None = None               # On-grid / Off-grid (ABD.GS, debounced)
     generator_power: float | None = None         # W (P6)
     generator_status: str | None = None          # raw ABD.GES
 
@@ -71,6 +75,8 @@ class PCSData:
 
     # Capacity as reported by each source; 0 means "not set" and is ignored.
     _capacity_by_source: dict[str, float] = field(default_factory=dict, init=False, repr=False)
+    # Polls in a row in which the PCS reported off-grid (GS other than "0").
+    _off_grid_polls: int = field(default=0, init=False, repr=False)
     _cached_fw_version_source: str | None = field(default=None, init=False, repr=False)
     _cached_fw_version_parts: tuple[str | None, str | None, str | None] = field(
         default=(None, None, None), init=False, repr=False
@@ -185,7 +191,7 @@ class PCSData:
         if isinstance(pcs, dict):
             grid = pcs.get("GS")
             if grid not in (None, ""):
-                self.grid_status = "On-grid" if str(grid) == "0" else "Off-grid"
+                self._apply_grid_flag(str(grid) == "0")
             generator = pcs.get("GES")
             self.generator_status = None if generator in (None, "") else str(generator)
             min_soc = _num(pcs.get("SM"))
@@ -203,6 +209,20 @@ class PCSData:
 
         if device_time not in (None, ""):
             self.device_time = str(device_time)
+
+    def _apply_grid_flag(self, on_grid: bool) -> None:
+        """On-grid at once; Off-grid only after OFF_GRID_CONFIRM_POLLS off-grid polls in a row.
+
+        The PCS sometimes reports off-grid for a single poll while it stays connected; one
+        such reading is ignored. With nothing known yet, the first reading is used as is.
+        """
+        if on_grid:
+            self._off_grid_polls = 0
+            self.grid_status = "On-grid"
+            return
+        self._off_grid_polls += 1
+        if self.grid_status is None or self._off_grid_polls >= OFF_GRID_CONFIRM_POLLS:
+            self.grid_status = "Off-grid"
 
     def apply_sysmode(self, data: dict[str, Any]) -> None:
         """Update from a getsysmode `data` dict (§8.2)."""

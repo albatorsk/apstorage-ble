@@ -65,7 +65,8 @@ The integration creates the following entities.
 - Grid Export Power (`W`)
 - Daily Grid Import (`kWh`)
 - Daily Grid Export (`kWh`)
-- Grid Status (`enum`: On-grid, Off-grid)
+- Grid Status (`enum`: On-grid, Off-grid): Off-grid once the PCS has reported it on 2 polls in a row
+  (about a minute at the default interval; a single off-grid reading is ignored); On-grid at once
 - Generator Power (`W`, disabled by default)
 
 #### Load / Output

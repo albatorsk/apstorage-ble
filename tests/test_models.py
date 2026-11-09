@@ -149,3 +149,38 @@ class TestPcsVersion:
         assert (data.firmware_installed, data.firmware_latest) == ("1.1.8.12", "1.1.9.0")
         data.apply_pcs_version({"CV": "2.0", "LV": ""})
         assert (data.firmware_installed, data.firmware_latest) == ("2.0", None)
+
+
+class TestGridStatusDebounce:
+    """Off-grid only after two off-grid polls in a row; On-grid at once."""
+
+    @staticmethod
+    def _poll(data: "PCSData", gs: str) -> str | None:
+        data.apply_last_data({"ABD": [{"ABID": "B05000000000", "GS": gs}]})
+        return data.grid_status
+
+    def test_single_off_grid_reading_is_ignored(self) -> None:
+        data = PCSData()
+        assert self._poll(data, "0") == "On-grid"
+        assert self._poll(data, "1") == "On-grid"
+        assert self._poll(data, "0") == "On-grid"
+        assert self._poll(data, "1") == "On-grid"  # the count started over
+
+    def test_two_in_a_row_switch_to_off_grid_and_back_at_once(self) -> None:
+        data = PCSData()
+        self._poll(data, "0")
+        self._poll(data, "2")
+        assert self._poll(data, "2") == "Off-grid"
+        assert self._poll(data, "2") == "Off-grid"
+        assert self._poll(data, "0") == "On-grid"
+
+    def test_first_reading_is_used_as_is(self) -> None:
+        assert self._poll(PCSData(), "1") == "Off-grid"
+
+    def test_missing_flag_keeps_the_count(self) -> None:
+        data = PCSData()
+        self._poll(data, "0")
+        self._poll(data, "1")
+        data.apply_last_data({"ABD": [{"ABID": "B05000000000"}]})  # no GS in this reply
+        assert data.grid_status == "On-grid"
+        assert self._poll(data, "1") == "Off-grid"
