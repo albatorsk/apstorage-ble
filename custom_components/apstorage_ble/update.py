@@ -13,7 +13,6 @@ from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -37,7 +36,7 @@ class APstorageFirmwareUpdate(CoordinatorEntity[APstorageCoordinator], UpdateEnt
     _attr_has_entity_name = True
     _attr_name = "Firmware"
     _attr_device_class = UpdateDeviceClass.FIRMWARE
-    _attr_entity_category = EntityCategory.CONFIG
+    # No _attr_entity_category: update entities without Install are Diagnostic by default.
     _attr_title = "PCS firmware"
     _attr_release_summary = "Install firmware updates from the EMA app."
 
@@ -52,6 +51,11 @@ class APstorageFirmwareUpdate(CoordinatorEntity[APstorageCoordinator], UpdateEnt
             manufacturer=MANUFACTURER,
             model=get_model(entry.data.get(CONF_BLE_NAME)),
         )
+
+    @property
+    def entity_picture(self) -> str | None:
+        """No brand picture, so Home Assistant shows its standard update icons."""
+        return None
 
     @property
     def available(self) -> bool:

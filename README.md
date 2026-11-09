@@ -65,7 +65,6 @@ The integration creates the following entities.
 - Grid Export Power (`W`)
 - Daily Grid Import (`kWh`)
 - Daily Grid Export (`kWh`)
-- Grid Frequency (`Hz`, when the PCS reports it)
 - Grid Status (`enum`: On-grid, Off-grid)
 - Generator Power (`W`, disabled by default)
 
@@ -90,7 +89,7 @@ The integration creates the following entities.
 - Last Update, Connection Quality, BLE MTU (disabled by default)
 
 #### Firmware (update entity)
-- Firmware (`update` entity): the installed PCS firmware and the latest version the PCS reports.
+- Firmware (`update` entity, diagnostic): the installed PCS firmware and the latest version the PCS reports.
     - Shows "Update available" when the PCS has found newer firmware.
     - Once a day the integration asks the PCS to check the APsystems cloud (`set/checkPcsVersion`;
       the PCS needs Wi-Fi for this). The integration itself never contacts APsystems.
