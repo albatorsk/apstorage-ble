@@ -17,7 +17,7 @@ from homeassistant.util import dt as dt_util
 from .const import CONF_BLE_NAME, DOMAIN, MANUFACTURER, get_model
 from .coordinator import APstorageCoordinator
 from .protocol import mode_name
-from .schedule import CHARGE, Event, active_windows, expand, format_window
+from .schedule import AI_MODE, CHARGE, Event, active_windows, expand, format_window
 
 # The schedule is what the PCS holds now; showing it far into the past or
 # future would suggest a history or a plan that may not exist.
@@ -104,7 +104,10 @@ class APstorageScheduleCalendar(CoordinatorEntity[APstorageCoordinator], Calenda
         if sysmode is None:
             return None
         windows = active_windows(sysmode)
-        return {
+        attrs: dict[str, Any] = {
             "mode": mode_name(sysmode.get("mode")),
             "windows": [format_window(window) for window in windows],
         }
+        if str(sysmode.get("mode", "")).strip() == AI_MODE:
+            attrs["note"] = "In AI Mode the AI controls charging and discharging from the APsystems cloud; see APEMS for its plan."
+        return attrs

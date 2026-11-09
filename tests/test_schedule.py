@@ -28,7 +28,8 @@ def _week(windows, start=datetime(2026, 10, 12, tzinfo=UTC)):  # a Monday
 
 
 def test_weekly_plan_from_real_reply() -> None:
-    windows = SCHEDULE.active_windows(AI_SYSMODE)
+    # Parsing works whatever the mode; whether it is shown is decided by active_windows.
+    windows = SCHEDULE.schedule_windows(AI_SYSMODE)
     assert len(windows) == 1
     window = windows[0]
     assert window.kind == CHARGE and window.weekdays == {4}  # W 5 = Friday
@@ -67,7 +68,7 @@ def test_end_of_day_as_240000() -> None:
 
 
 def test_no_events_in_modes_without_schedule() -> None:
-    for mode in ("1", "2", "4", "5"):
+    for mode in ("1", "2", "4", "5", "6"):
         assert SCHEDULE.active_windows({**AI_SYSMODE, "mode": mode}) == []
     assert SCHEDULE.active_windows(None) == []
     assert SCHEDULE.active_windows({"mode": "6", "schedule": [], "peakTime": [], "valleyTime": []}) == []
@@ -119,3 +120,18 @@ def test_weekly_plans_as_written_by_set_advanced_schedule() -> None:
         (CHARGE, datetime(2026, 10, 17, 22, tzinfo=UTC), datetime(2026, 10, 18, 6, tzinfo=UTC)),
         (CHARGE, datetime(2026, 10, 18, 22, tzinfo=UTC), datetime(2026, 10, 19, 6, tzinfo=UTC)),
     ]
+
+
+def test_ai_mode_stored_plan_is_not_shown() -> None:
+    # Real ELT-12 reply in AI Mode (2026-11-09): a fixed daily 22:20-22:30 charge window
+    # that APEMS doesn't show, while the PCS discharged at 15:23. The AI controls the
+    # battery from the cloud, so the stored plan is not the schedule.
+    sysmode = {
+        "mode": "6", "backupSOC": "20", "socMin": "10", "peakTime": [], "valleyTime": [],
+        "schedule": [{"peakTime": [], "valleyTime": ["222000223000"], "W": [1, 2, 3, 4, 5, 6, 7]}],
+        "sellingFirst": "0", "peakPower": "1500", "area": "SE4", "income": "0",
+    }
+    assert [(w.start, w.end) for w in SCHEDULE.schedule_windows(sysmode)] == [(time(22, 20), time(22, 30))]
+    assert SCHEDULE.active_windows(sysmode) == []
+    # The same plan in Time-Based Control is the user's schedule and is shown.
+    assert len(_week(SCHEDULE.active_windows({**sysmode, "mode": "3"}))) == 7

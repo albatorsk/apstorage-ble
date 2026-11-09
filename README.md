@@ -101,7 +101,11 @@ The integration creates the following entities.
 
 #### Schedule (calendar)
 - Schedule (`calendar` entity): the charge (valley) and discharge (peak) windows the PCS follows, as calendar events.
-    - Shows daily `peakTime`/`valleyTime` windows and weekly plans (`schedule`), including the plan the PCS holds in AI mode.
+    - Shows daily `peakTime`/`valleyTime` windows and weekly plans (`schedule`) in Peak Valley and
+      Time-Based Control, where the stored schedule is what the PCS follows.
+    - Empty in AI Mode: the AI controls charging and discharging from the APsystems cloud in real time,
+      and the plan stored on the PCS doesn't match what it does (see APEMS for the AI's plan). The
+      `note` attribute says so. The stored plan is still visible in the System Mode Payload sensor.
     - Empty in modes that don't use a schedule (Self-Consumption, Manual Control, Backup Power, Peak Shaving).
     - Covers the coming week (and the past day); the state is `on` during a window.
     - Attribute `windows` lists them, e.g. `Charge 02:45-12:15`.

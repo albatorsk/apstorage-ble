@@ -18,9 +18,12 @@ DISCHARGE = "Discharge"
 
 ALL_DAYS = frozenset(range(7))  # Python weekdays, 0 = Monday
 
-# Modes in which the PCS follows the schedule: 0 Peak Valley, 3 Time-Based Control
-# (mixed), 6 AI (the schedule holds the AI's plan).
-SCHEDULED_MODES = frozenset({"0", "3", "6"})
+# Modes in which the PCS follows the stored schedule: 0 Peak Valley, 3 Time-Based Control.
+# In AI Mode (6) the AI controls the battery from the APsystems cloud in real time; the
+# plan stored on the PCS does not match what it does (seen on an ELT-12: a fixed daily
+# 10-minute charge window that APEMS doesn't show, while the PCS discharged outside it).
+SCHEDULED_MODES = frozenset({"0", "3"})
+AI_MODE = "6"
 
 
 @dataclass(frozen=True)
