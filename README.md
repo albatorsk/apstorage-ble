@@ -259,26 +259,15 @@ Notes:
 
 ## Installation
 
-Requires Home Assistant 2025.3 or newer.
+Requires Home Assistant 2025.3 or newer. The Marketplace is part of Home Assistant 2026.11 and newer.
 
-### Via the Marketplace (Home Assistant 2026.11 and newer, recommended)
+### Via the Marketplace
 
 1. Go to **Settings → Marketplace** and choose **Add from link**.
 2. Enter `albatorsk/apstorage-ble` (or `https://github.com/albatorsk/apstorage-ble`). Adding a custom
    repository needs a GitHub connection; the Marketplace asks you to sign in to GitHub once.
 3. Install "APstorage BLE".
 4. Restart Home Assistant.
-
-If you installed the integration through HACS before 2026.11, it carries over to the Marketplace
-automatically when Home Assistant starts and keeps receiving updates.
-
-### Via HACS (Home Assistant before 2026.11)
-
-[![Open your Home Assistant instance and show the add custom repository dialog with a specific repository URL pre-filled.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=albatorsk&repository=apstorage-ble&category=integration)
-
-1. Add this repository as a custom repository in HACS using the Integration category.
-2. Install "APstorage BLE".
-3. Restart Home Assistant.
 
 ### Manual
 
