@@ -263,6 +263,10 @@ Requires Home Assistant 2025.3 or newer. The Marketplace is part of Home Assista
 
 ### Via the Marketplace
 
+[![Open your Home Assistant instance and open a repository in the Marketplace.](https://my.home-assistant.io/badges/marketplace_repository.svg)](https://my.home-assistant.io/redirect/marketplace_repository/?owner=albatorsk&repository=apstorage-ble&category=integration)
+
+Click the badge to open this repository in your Home Assistant's Marketplace, then continue at step 3. Or add it by hand:
+
 1. Go to **Settings → Marketplace** and choose **Add from link**.
 2. Enter `albatorsk/apstorage-ble` (or `https://github.com/albatorsk/apstorage-ble`). Adding a custom
    repository needs a GitHub connection; the Marketplace asks you to sign in to GitHub once.
